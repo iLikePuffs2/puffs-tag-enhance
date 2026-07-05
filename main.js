@@ -6,6 +6,7 @@ const {
   Plugin,
   PluginSettingTab,
   Setting,
+  Modal,
   TFile,
   Notice,
   getAllTags,
@@ -35,6 +36,114 @@ function normalizeTag(rawTag) {
 
 function isNestedTag(tag) {
   return String(tag || '').includes('/');
+}
+
+function getTagDisplayName(tag) {
+  return String(tag || '').replace(/^#/, '');
+}
+
+function splitUnionSearchTerms(value) {
+  const text = String(value || '');
+  if (!text.includes('|')) return null;
+
+  const terms = text
+    .split('|')
+    .map((term) => term.trim().replace(/^#/, '').toLowerCase())
+    .filter(Boolean);
+
+  return terms.length > 0 ? Array.from(new Set(terms)) : null;
+}
+
+function tagMatchesUnionSearch(tag, terms) {
+  if (!terms) return true;
+
+  const tagName = getTagDisplayName(tag).toLowerCase();
+  const tagText = String(tag || '').toLowerCase();
+  return terms.some((term) => tagName.includes(term) || tagText.includes(term));
+}
+
+function createUnionSearchQuery(query, terms) {
+  return {
+    query,
+    matcher: true,
+    matchContent: (content) => tagMatchesUnionSearch(content, terms),
+  };
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceInlineTagsByCache(content, cache, oldTag, newTag) {
+  const inlineTags = Array.isArray(cache && cache.tags) ? cache.tags : [];
+  const replacements = [];
+
+  for (const tagEntry of inlineTags) {
+    if (normalizeTag(tagEntry && tagEntry.tag) !== oldTag) continue;
+
+    const start = tagEntry.position && tagEntry.position.start && tagEntry.position.start.offset;
+    const end = tagEntry.position && tagEntry.position.end && tagEntry.position.end.offset;
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) continue;
+    if (normalizeTag(content.slice(start, end)) !== oldTag) continue;
+
+    replacements.push({ start, end });
+  }
+
+  if (replacements.length === 0) return content;
+
+  let nextContent = content;
+  replacements.sort((a, b) => b.start - a.start);
+
+  for (const replacement of replacements) {
+    nextContent =
+      nextContent.slice(0, replacement.start) +
+      newTag +
+      nextContent.slice(replacement.end);
+  }
+
+  return nextContent;
+}
+
+function replaceInlineTagsByText(content, oldTag, newTag) {
+  const oldName = escapeRegExp(getTagDisplayName(oldTag));
+  const tagPattern = new RegExp(`(^|[^\\p{L}\\p{N}_/#-])#${oldName}(?![\\p{L}\\p{N}_/-])`, 'gu');
+  return content.replace(tagPattern, (match, prefix) => `${prefix}${newTag}`);
+}
+
+function getFrontmatterTagReplacement(originalValue, newTag) {
+  const text = String(originalValue);
+  return text.trim().startsWith('#') ? newTag : getTagDisplayName(newTag);
+}
+
+function replaceFrontmatterTagString(value, oldTag, newTag) {
+  const parts = String(value).split(/([,\s]+)/);
+  let changed = false;
+
+  const nextParts = parts.map((part) => {
+    if (!part || /^[,\s]+$/.test(part)) return part;
+    if (normalizeTag(part) !== oldTag) return part;
+
+    changed = true;
+    return getFrontmatterTagReplacement(part, newTag);
+  });
+
+  return changed ? nextParts.join('') : value;
+}
+
+function replaceFrontmatterTagValue(value, oldTag, newTag) {
+  if (Array.isArray(value)) {
+    return value.map((item) => replaceFrontmatterTagValue(item, oldTag, newTag));
+  }
+
+  if (typeof value === 'string') {
+    return replaceFrontmatterTagString(value, oldTag, newTag);
+  }
+
+  if (value != null && normalizeTag(value) === oldTag) {
+    return getTagDisplayName(newTag);
+  }
+
+  return value;
 }
 
 function getLeafFilePath(leaf) {
@@ -197,6 +306,44 @@ class PuffsTagEnhancePlugin extends Plugin {
 }
 
 .clickable-icon.nav-action-button.puffs-tag-mode-button {
+}
+
+.modal-container .puffs-tag-rename-modal {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+}
+
+.puffs-tag-rename-modal .modal-close-button,
+.puffs-tag-rename-modal .modal-header {
+  display: none !important;
+}
+
+.puffs-tag-rename-modal .modal-content {
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+
+.puffs-tag-rename-title {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.puffs-tag-rename-input {
+  width: 100%;
+  height: 32px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 24%, transparent);
+  border-radius: 4px;
+  outline: none;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+}
+
+.puffs-tag-rename-input:focus {
+  border-color: var(--interactive-accent);
 }
 `;
     document.head.appendChild(styleEl);
@@ -465,6 +612,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       cleanup: [],
       hotkeyRegistration: null,
       hotkeySignature: '',
+      originalUpdateSearch: null,
     };
 
     const buttonEl = view.useHierarchyEl;
@@ -496,6 +644,8 @@ class PuffsTagEnhancePlugin extends Plugin {
       patch.cleanup.push(() => expandAllEl.removeEventListener('click', onExpandAllClick, true));
     }
 
+    this.patchUnionSearch(view, patch);
+
     const onTagPaneClick = (evt) => {
       if (!this.settings.listModeEnabled) return;
 
@@ -522,6 +672,26 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     view.containerEl.addEventListener('click', onTagPaneClick, true);
     patch.cleanup.push(() => view.containerEl.removeEventListener('click', onTagPaneClick, true));
+
+    const onTagPaneContextMenu = (evt) => {
+      const target = evt.target instanceof Element ? evt.target : null;
+      if (!target || !view.containerEl.contains(target)) return;
+      if (target.closest('.puffs-tag-note-card')) return;
+
+      const tagEl = target.closest('.tag-pane-tag');
+      if (!tagEl) return;
+
+      const tag = this.findTagForElement(view, tagEl);
+      if (!tag) return;
+
+      evt.preventDefault();
+      evt.stopPropagation();
+      evt.stopImmediatePropagation();
+      this.openRenameTagModal(tag);
+    };
+
+    view.containerEl.addEventListener('contextmenu', onTagPaneContextMenu, true);
+    patch.cleanup.push(() => view.containerEl.removeEventListener('contextmenu', onTagPaneContextMenu, true));
     this.registerTagViewHotkey(view, patch);
 
     const observerTarget = view.tagPaneEl || view.containerEl;
@@ -536,6 +706,26 @@ class PuffsTagEnhancePlugin extends Plugin {
     return patch;
   }
 
+  patchUnionSearch(view, patch) {
+    if (typeof view.updateSearch !== 'function' || patch.originalUpdateSearch) return;
+
+    patch.originalUpdateSearch = view.updateSearch;
+    view.updateSearch = () => {
+      const query = this.getTagSearchValue(view);
+      const terms = splitUnionSearchTerms(query);
+
+      if (!terms) {
+        patch.originalUpdateSearch.call(view);
+        this.scheduleSyncView(view);
+        return;
+      }
+
+      view.searchQuery = createUnionSearchQuery(query, terms);
+      if (typeof view.updateTags === 'function') view.updateTags();
+      this.scheduleSyncView(view, 0);
+    };
+  }
+
   cleanupViewPatch(view) {
     const patch = this.viewPatches.get(view);
     if (!patch) return;
@@ -546,6 +736,11 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
 
     this.unregisterTagViewHotkey(view, patch);
+
+    if (patch.originalUpdateSearch && view.updateSearch !== patch.originalUpdateSearch) {
+      view.updateSearch = patch.originalUpdateSearch;
+      patch.originalUpdateSearch = null;
+    }
 
     for (const cleanup of patch.cleanup) {
       cleanup();
@@ -620,6 +815,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
       if (!this.settings.listModeEnabled) {
         this.clearListEnhancements(view);
+        this.renderUnionSearchInNativeMode(view);
 
         if (view.useHierarchy !== true && typeof view.setUseHierarchy === 'function') {
           view.setUseHierarchy(true);
@@ -650,6 +846,21 @@ class PuffsTagEnhancePlugin extends Plugin {
     if (!inputEl || view.isShowingSearch || inputEl.value === '') return;
 
     this.clearTagSearch(view);
+  }
+
+  getTagSearchValue(view) {
+    const inputEl = view.searchComponent && view.searchComponent.inputEl;
+    if (inputEl && typeof inputEl.value === 'string') return inputEl.value;
+
+    if (view.searchComponent && typeof view.searchComponent.getValue === 'function') {
+      return view.searchComponent.getValue();
+    }
+
+    return '';
+  }
+
+  getUnionSearchTerms(view) {
+    return splitUnionSearchTerms(this.getTagSearchValue(view));
   }
 
   updateModeButton(view) {
@@ -685,6 +896,8 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   renderListMode(view) {
+    const unionTerms = this.getUnionSearchTerms(view);
+
     for (const [tag, tagDom] of this.getTagDomEntries(view)) {
       if (!tagDom || !tagDom.el || !tagDom.selfEl) continue;
 
@@ -692,12 +905,27 @@ class PuffsTagEnhancePlugin extends Plugin {
       if (!normalizedTag) continue;
 
       const files = this.tagFileIndex.get(normalizedTag) || [];
-      if (isNestedTag(normalizedTag) || files.length === 0) {
+      if (isNestedTag(normalizedTag) || files.length === 0 || !tagMatchesUnionSearch(normalizedTag, unionTerms)) {
         this.hideTagRow(tagDom);
         continue;
       }
 
       this.renderTagRow(tagDom, normalizedTag, files);
+    }
+  }
+
+  renderUnionSearchInNativeMode(view) {
+    const unionTerms = this.getUnionSearchTerms(view);
+    if (!unionTerms) return;
+
+    for (const [tag, tagDom] of this.getTagDomEntries(view)) {
+      if (!tagDom || !tagDom.el) continue;
+
+      const normalizedTag = normalizeTag(tagDom.tag || tag);
+      tagDom.el.classList.toggle(
+        'puffs-tag-hidden',
+        !normalizedTag || !tagMatchesUnionSearch(normalizedTag, unionTerms)
+      );
     }
   }
 
@@ -845,6 +1073,71 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.scheduleSyncView(view, 0);
   }
 
+  findTagForElement(view, tagEl) {
+    const datasetTag = normalizeTag(tagEl.dataset && tagEl.dataset.puffsTag);
+    if (datasetTag) return datasetTag;
+
+    for (const [tag, tagDom] of this.getTagDomEntries(view)) {
+      if (!tagDom || !tagDom.selfEl) continue;
+      if (tagDom.selfEl !== tagEl && !tagDom.selfEl.contains(tagEl)) continue;
+
+      return normalizeTag(tagDom.tag || tag);
+    }
+
+    return null;
+  }
+
+  openRenameTagModal(tag) {
+    new PuffsTagRenameModal(this.app, this, tag).open();
+  }
+
+  async renameTag(oldTagValue, newTagValue) {
+    const oldTag = normalizeTag(oldTagValue);
+    const newTag = normalizeTag(newTagValue);
+
+    if (!oldTag) throw new Error('原标签无效');
+    if (!newTag) throw new Error('标签名称不能为空');
+    if (/\s/.test(getTagDisplayName(newTag))) throw new Error('标签名称不能包含空格');
+    if (oldTag === newTag) return;
+
+    this.rebuildTagFileIndex();
+    const files = Array.from(new Set(this.tagFileIndex.get(oldTag) || []));
+
+    for (const file of files) {
+      await this.renameTagInFile(file, oldTag, newTag);
+    }
+
+    if (this.expandedTags.delete(oldTag)) {
+      this.expandedTags.add(newTag);
+    }
+
+    this.refreshTagIndexAndViews();
+  }
+
+  async renameTagInFile(file, oldTag, newTag) {
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (!cache) return;
+
+    const hasInlineTag = Array.isArray(cache.tags) && cache.tags.some((tagEntry) => {
+      return normalizeTag(tagEntry && tagEntry.tag) === oldTag;
+    });
+
+    if (hasInlineTag) {
+      await this.app.vault.process(file, (content) => {
+        const nextContent = replaceInlineTagsByCache(content, cache, oldTag, newTag);
+        return nextContent === content ? replaceInlineTagsByText(content, oldTag, newTag) : nextContent;
+      });
+    }
+
+    const frontmatter = cache.frontmatter;
+    if (!frontmatter || !Object.prototype.hasOwnProperty.call(frontmatter, 'tags')) return;
+
+    await this.app.fileManager.processFrontMatter(file, (fm) => {
+      if (!Object.prototype.hasOwnProperty.call(fm, 'tags')) return;
+      fm.tags = replaceFrontmatterTagValue(fm.tags, oldTag, newTag);
+    });
+  }
+
   async openNoteCard(cardEl) {
     const path = cardEl.dataset.path;
     if (!path) return;
@@ -990,6 +1283,59 @@ class PuffsTagEnhancePlugin extends Plugin {
         buttonEl.setAttribute('aria-label', '显示嵌套情况');
       }
     }
+  }
+}
+
+class PuffsTagRenameModal extends Modal {
+  constructor(app, plugin, tag) {
+    super(app);
+    this.plugin = plugin;
+    this.tag = normalizeTag(tag);
+    this.isSubmitting = false;
+  }
+
+  onOpen() {
+    this.modalEl.classList.add('puffs-tag-rename-modal');
+    this.contentEl.empty();
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'puffs-tag-rename-title';
+    titleEl.textContent = '修改标签';
+
+    const inputEl = document.createElement('input');
+    inputEl.className = 'puffs-tag-rename-input';
+    inputEl.type = 'text';
+    inputEl.value = getTagDisplayName(this.tag);
+
+    this.contentEl.appendChild(titleEl);
+    this.contentEl.appendChild(inputEl);
+
+    inputEl.addEventListener('keydown', async (evt) => {
+      if (evt.key !== 'Enter' || this.isSubmitting) return;
+
+      evt.preventDefault();
+      evt.stopPropagation();
+
+      this.isSubmitting = true;
+      try {
+        await this.plugin.renameTag(this.tag, inputEl.value);
+        this.close();
+      } catch (error) {
+        this.isSubmitting = false;
+        new Notice(error && error.message ? error.message : '修改标签失败');
+        inputEl.focus();
+        inputEl.select();
+      }
+    });
+
+    inputEl.addEventListener('blur', () => {
+      if (!this.isSubmitting) this.close();
+    });
+
+    window.setTimeout(() => {
+      inputEl.focus();
+      inputEl.select();
+    }, 0);
   }
 }
 
