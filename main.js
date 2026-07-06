@@ -1134,6 +1134,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     buttonEl.setAttribute('aria-label', '全部展开');
     buttonEl.setAttribute('aria-disabled', 'true');
+    buttonEl.classList.add('puffs-tag-hidden');
   }
 
   getTagDomEntries(view) {
@@ -1247,6 +1248,13 @@ class PuffsTagEnhancePlugin extends Plugin {
 
   clearListEnhancements(view) {
     view.containerEl.classList.remove('puffs-tag-list-mode-enabled');
+
+    const expandAllEl = view.collapseOrExpandAllEl;
+    if (expandAllEl) {
+      expandAllEl.classList.remove('puffs-tag-hidden');
+      expandAllEl.removeAttribute('aria-disabled');
+    }
+
     view.containerEl.querySelectorAll('.puffs-tag-list-container').forEach((el) => el.remove());
     view.containerEl.querySelectorAll('.puffs-tag-note-list').forEach((el) => el.remove());
     view.containerEl.querySelectorAll('.puffs-tag-list-toggle').forEach((el) => el.remove());
