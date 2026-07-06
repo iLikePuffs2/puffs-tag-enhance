@@ -62,6 +62,15 @@ function tagMatchesUnionSearch(tag, terms) {
   return terms.some((term) => tagName.includes(term) || tagText.includes(term));
 }
 
+function tagMatchesSearchText(tag, value) {
+  const term = String(value || '').trim().replace(/^#/, '').toLowerCase();
+  if (!term) return true;
+
+  const tagName = getTagDisplayName(tag).toLowerCase();
+  const tagText = String(tag || '').toLowerCase();
+  return tagName.includes(term) || tagText.includes(term);
+}
+
 function createUnionSearchQuery(query, terms) {
   return {
     query,
@@ -291,6 +300,15 @@ class PuffsTagEnhancePlugin extends Plugin {
   overflow: visible !important;
 }
 
+.workspace-leaf-content.puffs-tag-list-mode-enabled .tag-container > :not(.puffs-tag-list-container) {
+  display: none !important;
+}
+
+.puffs-tag-list-container {
+  min-height: 100%;
+  padding-bottom: 8px;
+}
+
 .puffs-tag-note-card {
   cursor: pointer;
 }
@@ -408,6 +426,9 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', (leaf) => {
         this.rememberMainLeaf(leaf);
+        if (leaf && leaf.view && leaf.view.getViewType() === TAG_VIEW_TYPE) {
+          this.scheduleFocusTagSearch(leaf.view);
+        }
       })
     );
 
@@ -590,6 +611,28 @@ class PuffsTagEnhancePlugin extends Plugin {
       inputEl.value = '';
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
       inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+
+  scheduleFocusTagSearch(view) {
+    window.setTimeout(() => this.focusTagSearch(view), 0);
+    window.setTimeout(() => this.focusTagSearch(view), 80);
+  }
+
+  focusTagSearch(view) {
+    if (!view || !view.containerEl || !view.containerEl.isConnected) return;
+
+    if (!view.isShowingSearch && typeof view.setShowSearch === 'function') {
+      view.setShowSearch(true);
+    }
+
+    const inputEl = view.searchComponent && view.searchComponent.inputEl;
+    if (!inputEl || !inputEl.isConnected) return;
+
+    try {
+      inputEl.focus({ preventScroll: true });
+    } catch (error) {
+      inputEl.focus();
     }
   }
 
@@ -896,22 +939,137 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   renderListMode(view) {
-    const unionTerms = this.getUnionSearchTerms(view);
+    const listEl = this.ensureListModeContainer(view);
+    if (!listEl) return;
+
+    const items = this.getListModeItems(view);
+    const signature = JSON.stringify(
+      items.map((item) => [
+        item.tag,
+        item.files.length,
+        this.expandedTags.has(item.tag),
+        this.expandedTags.has(item.tag) ? item.files.map((file) => file.path).join('\n') : '',
+      ])
+    );
+
+    if (listEl.dataset.puffsSignature === signature) return;
+
+    listEl.dataset.puffsSignature = signature;
+    listEl.empty();
+
+    for (const item of items) {
+      this.renderListModeTagItem(listEl, item.tag, item.files);
+    }
+  }
+
+  ensureListModeContainer(view) {
+    const tagPaneEl = view.tagPaneEl || (view.containerEl && view.containerEl.querySelector('.tag-container'));
+    if (!tagPaneEl) return null;
+
+    view.containerEl.classList.add('puffs-tag-list-mode-enabled');
+
+    let listEl = tagPaneEl.querySelector(':scope > .puffs-tag-list-container');
+    if (!listEl) {
+      listEl = document.createElement('div');
+      listEl.className = 'puffs-tag-list-container';
+      tagPaneEl.appendChild(listEl);
+    }
+
+    return listEl;
+  }
+
+  getListModeItems(view) {
+    const query = this.getTagSearchValue(view);
+    const unionTerms = splitUnionSearchTerms(query);
+    const items = [];
+    const seen = new Set();
+
+    const shouldShowTag = (tag) => {
+      const files = this.tagFileIndex.get(tag) || [];
+      if (isNestedTag(tag) || files.length === 0) return false;
+      return unionTerms ? tagMatchesUnionSearch(tag, unionTerms) : tagMatchesSearchText(tag, query);
+    };
+
+    const pushTag = (tag) => {
+      const normalizedTag = normalizeTag(tag);
+      if (!normalizedTag || seen.has(normalizedTag) || !shouldShowTag(normalizedTag)) return;
+
+      seen.add(normalizedTag);
+      items.push({
+        tag: normalizedTag,
+        files: this.tagFileIndex.get(normalizedTag) || [],
+      });
+    };
 
     for (const [tag, tagDom] of this.getTagDomEntries(view)) {
-      if (!tagDom || !tagDom.el || !tagDom.selfEl) continue;
-
-      const normalizedTag = normalizeTag(tagDom.tag || tag);
-      if (!normalizedTag) continue;
-
-      const files = this.tagFileIndex.get(normalizedTag) || [];
-      if (isNestedTag(normalizedTag) || files.length === 0 || !tagMatchesUnionSearch(normalizedTag, unionTerms)) {
-        this.hideTagRow(tagDom);
-        continue;
-      }
-
-      this.renderTagRow(tagDom, normalizedTag, files);
+      pushTag((tagDom && tagDom.tag) || tag);
     }
+
+    const fallbackTags = Array.from(this.tagFileIndex.keys())
+      .filter((tag) => !seen.has(tag))
+      .sort((a, b) => {
+        const countDiff = (this.tagFileIndex.get(b) || []).length - (this.tagFileIndex.get(a) || []).length;
+        return countDiff || getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN');
+      });
+
+    for (const tag of fallbackTags) {
+      pushTag(tag);
+    }
+
+    items.sort((a, b) => {
+      const countDiff = b.files.length - a.files.length;
+      return countDiff || getTagDisplayName(a.tag).localeCompare(getTagDisplayName(b.tag), 'zh-Hans-CN');
+    });
+
+    return items;
+  }
+
+  renderListModeTagItem(listEl, tag, files) {
+    const isExpanded = this.expandedTags.has(tag);
+    const treeItemEl = document.createElement('div');
+    treeItemEl.className = 'tree-item puffs-tag-list-item';
+    treeItemEl.classList.toggle('puffs-tag-expanded', isExpanded);
+
+    const tagEl = document.createElement('div');
+    tagEl.className = 'tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row';
+    tagEl.dataset.puffsTag = tag;
+    tagEl.style.marginInlineStart = '0px';
+    tagEl.style.setProperty('margin-inline-start', '0px', 'important');
+    tagEl.style.paddingInlineStart = '24px';
+    tagEl.style.setProperty('padding-inline-start', '24px', 'important');
+
+    const toggleEl = document.createElement('div');
+    toggleEl.className = 'tree-item-icon collapse-icon puffs-tag-list-toggle';
+    toggleEl.classList.toggle('is-collapsed', !isExpanded);
+    toggleEl.setAttribute('aria-hidden', 'true');
+    setIcon(toggleEl, 'right-triangle');
+
+    const innerEl = document.createElement('div');
+    innerEl.className = 'tree-item-inner';
+
+    const textEl = document.createElement('div');
+    textEl.className = 'tree-item-inner-text';
+    textEl.textContent = getTagDisplayName(tag);
+
+    const flairOuterEl = document.createElement('div');
+    flairOuterEl.className = 'tree-item-flair-outer';
+
+    const countEl = document.createElement('span');
+    countEl.className = 'tag-pane-tag-count tree-item-flair';
+    countEl.textContent = String(files.length);
+
+    innerEl.appendChild(textEl);
+    flairOuterEl.appendChild(countEl);
+    tagEl.appendChild(toggleEl);
+    tagEl.appendChild(innerEl);
+    tagEl.appendChild(flairOuterEl);
+    treeItemEl.appendChild(tagEl);
+
+    if (isExpanded) {
+      this.renderNoteList(treeItemEl, files);
+    }
+
+    listEl.appendChild(treeItemEl);
   }
 
   renderUnionSearchInNativeMode(view) {
@@ -1047,6 +1205,8 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   clearListEnhancements(view) {
+    view.containerEl.classList.remove('puffs-tag-list-mode-enabled');
+    view.containerEl.querySelectorAll('.puffs-tag-list-container').forEach((el) => el.remove());
     view.containerEl.querySelectorAll('.puffs-tag-note-list').forEach((el) => el.remove());
     view.containerEl.querySelectorAll('.puffs-tag-list-toggle').forEach((el) => el.remove());
     view.containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]').forEach((el) => {
