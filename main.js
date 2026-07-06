@@ -656,6 +656,8 @@ class PuffsTagEnhancePlugin extends Plugin {
       hotkeyRegistration: null,
       hotkeySignature: '',
       originalUpdateSearch: null,
+      autoExpandedTag: null,
+      autoExpandedWasAlreadyExpanded: false,
     };
 
     const buttonEl = view.useHierarchyEl;
@@ -857,6 +859,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       this.registerTagViewHotkey(view, patch);
 
       if (!this.settings.listModeEnabled) {
+        this.clearAutoExpandedTag(patch);
         this.clearListEnhancements(view);
         this.renderUnionSearchInNativeMode(view);
 
@@ -887,6 +890,14 @@ class PuffsTagEnhancePlugin extends Plugin {
   repairHiddenSearchValue(view) {
     const inputEl = view.searchComponent && view.searchComponent.inputEl;
     if (!inputEl || view.isShowingSearch || inputEl.value === '') return;
+
+    const searchContainerEl = inputEl.closest('.search-input-container');
+    const searchContainerStyle = searchContainerEl ? getComputedStyle(searchContainerEl) : null;
+    const isSearchActuallyVisible =
+      searchContainerStyle &&
+      searchContainerStyle.display !== 'none' &&
+      searchContainerStyle.visibility !== 'hidden';
+    if (isSearchActuallyVisible) return;
 
     this.clearTagSearch(view);
   }
@@ -943,6 +954,9 @@ class PuffsTagEnhancePlugin extends Plugin {
     if (!listEl) return;
 
     const items = this.getListModeItems(view);
+    const patch = this.viewPatches.get(view);
+    if (patch) this.syncAutoSingleSearchResult(view, patch, items);
+
     const signature = JSON.stringify(
       items.map((item) => [
         item.tag,
@@ -960,6 +974,33 @@ class PuffsTagEnhancePlugin extends Plugin {
     for (const item of items) {
       this.renderListModeTagItem(listEl, item.tag, item.files);
     }
+  }
+
+  syncAutoSingleSearchResult(view, patch, items) {
+    const query = this.getTagSearchValue(view).trim();
+    if (!query || items.length !== 1) {
+      this.clearAutoExpandedTag(patch);
+      return;
+    }
+
+    const tag = items[0].tag;
+    if (patch.autoExpandedTag === tag) return;
+
+    this.clearAutoExpandedTag(patch);
+    patch.autoExpandedTag = tag;
+    patch.autoExpandedWasAlreadyExpanded = this.expandedTags.has(tag);
+    this.expandedTags.add(tag);
+  }
+
+  clearAutoExpandedTag(patch) {
+    if (!patch.autoExpandedTag) return;
+
+    if (!patch.autoExpandedWasAlreadyExpanded) {
+      this.expandedTags.delete(patch.autoExpandedTag);
+    }
+
+    patch.autoExpandedTag = null;
+    patch.autoExpandedWasAlreadyExpanded = false;
   }
 
   ensureListModeContainer(view) {
