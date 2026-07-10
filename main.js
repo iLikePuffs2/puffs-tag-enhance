@@ -15,6 +15,8 @@ const {
 
 const STYLE_ID = 'puffs-tag-enhance-style';
 const TAG_VIEW_TYPE = 'tag';
+const OUTLINE_VIEW_TYPE = 'outline';
+const MARKDOWN_VIEW_TYPE = 'markdown';
 const VIEW_SYNC_DELAY_MS = 30;
 const DEFAULT_QUICK_SEARCH_HOTKEY = 'Ctrl + F';
 const LIST_MODE_ICON = 'list-tree';
@@ -22,6 +24,8 @@ const INITIAL_TAG_INDEX_REFRESH_DELAYS_MS = [0, 500, 1500, 3000, 6000];
 
 const DEFAULT_SETTINGS = {
   listModeEnabled: false,
+  autoSwitchToOutlineEnabled: true,
+  tagSidebarPreferredFiles: {},
   toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
 };
 
@@ -237,6 +241,9 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.expandedTags = new Set();
     this.viewPatches = new WeakMap();
     this.lastMainLeaf = null;
+    this.currentMainFilePath = null;
+    this.selectedSidebarViewType = null;
+    this.sidebarSwitchGuardUntil = 0;
     this.initialTagIndexRefreshTimers = [];
     this.isUnloaded = false;
   }
@@ -256,9 +263,11 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       if (this.isUnloaded) return;
       this.rememberCurrentMainLeaf();
+      this.captureSelectedSidebarState();
       this.refreshTagIndexAndViews();
       this.refreshTagViews();
       this.queueInitialTagIndexRefreshes();
+      this.applySidebarPreferenceForCurrentFile();
     });
 
     console.log('Puffs 标签增强: 已加载');
@@ -276,6 +285,9 @@ class PuffsTagEnhancePlugin extends Plugin {
     const savedSettings = (await this.loadData()) || {};
     this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
+    if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== 'object') {
+      this.settings.tagSidebarPreferredFiles = {};
+    }
   }
 
   async saveSettings() {
@@ -285,8 +297,15 @@ class PuffsTagEnhancePlugin extends Plugin {
   async updateSettings(newSettings) {
     this.settings = Object.assign({}, this.settings, newSettings);
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
+    if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== 'object') {
+      this.settings.tagSidebarPreferredFiles = {};
+    }
     await this.saveSettings();
     this.refreshTagViewHotkeys();
+
+    if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'autoSwitchToOutlineEnabled')) {
+      this.applySidebarPreferenceForCurrentFile();
+    }
   }
 
   injectStyle() {
@@ -422,10 +441,197 @@ class PuffsTagEnhancePlugin extends Plugin {
     return formatHotkey(this.getQuickSearchHotkey());
   }
 
+  handleActiveLeafChange(leaf) {
+    if (this.isMarkdownMainLeaf(leaf)) {
+      this.rememberMainLeaf(leaf);
+      this.currentMainFilePath = getLeafFilePath(leaf);
+      if (!this.isSidebarAutoSwitchGuarded()) {
+        this.applySidebarPreferenceForCurrentFile();
+      }
+      return;
+    }
+
+    if (this.isManagedSidebarLeaf(leaf)) {
+      this.handleSidebarSelection(leaf.view.getViewType());
+    }
+  }
+
+  isMarkdownMainLeaf(leaf) {
+    return this.isMainWorkspaceLeaf(leaf) && leaf.view && leaf.view.getViewType() === MARKDOWN_VIEW_TYPE;
+  }
+
+  isManagedSidebarLeaf(leaf) {
+    return !!(
+      leaf &&
+      leaf.view &&
+      !this.isMainWorkspaceLeaf(leaf) &&
+      leaf.parent &&
+      leaf.parent.type === 'tabs'
+    );
+  }
+
+  captureSelectedSidebarState() {
+    const leaf = this.getSelectedManagedSidebarLeaf();
+    this.selectedSidebarViewType = leaf && leaf.view ? leaf.view.getViewType() : null;
+  }
+
+  syncSelectedSidebarState() {
+    const leaf = this.getSelectedManagedSidebarLeaf();
+    if (!leaf || !leaf.view) return;
+
+    this.handleSidebarSelection(leaf.view.getViewType());
+  }
+
+  handleSidebarSelection(viewType) {
+    if (!viewType || viewType === this.selectedSidebarViewType) return;
+
+    const previousViewType = this.selectedSidebarViewType;
+    this.selectedSidebarViewType = viewType;
+
+    if (!this.settings.autoSwitchToOutlineEnabled || this.isSidebarAutoSwitchGuarded()) return;
+
+    if (viewType === TAG_VIEW_TYPE) {
+      this.setTagSidebarPreference(this.currentMainFilePath, true);
+    } else if (previousViewType === TAG_VIEW_TYPE) {
+      this.setTagSidebarPreference(this.currentMainFilePath, false);
+    }
+  }
+
+  async setTagSidebarPreference(filePath, enabled) {
+    if (!filePath) return;
+
+    const preferredFiles = this.settings.tagSidebarPreferredFiles || {};
+    const hasPreference = preferredFiles[filePath] === true;
+    if (enabled === hasPreference) return;
+
+    if (enabled) {
+      preferredFiles[filePath] = true;
+    } else {
+      delete preferredFiles[filePath];
+    }
+
+    this.settings.tagSidebarPreferredFiles = preferredFiles;
+    await this.saveSettings();
+  }
+
+  hasTagSidebarPreference(filePath) {
+    return !!(filePath && this.settings.tagSidebarPreferredFiles && this.settings.tagSidebarPreferredFiles[filePath]);
+  }
+
+  applySidebarPreferenceForCurrentFile() {
+    if (!this.settings.autoSwitchToOutlineEnabled || !this.currentMainFilePath) return;
+
+    const targetViewType = this.hasTagSidebarPreference(this.currentMainFilePath)
+      ? TAG_VIEW_TYPE
+      : OUTLINE_VIEW_TYPE;
+    this.switchManagedSidebarTo(targetViewType);
+  }
+
+  async switchManagedSidebarTo(viewType) {
+    const mainLeaf = this.lastMainLeaf;
+    const leaf = await this.getOrCreateManagedSidebarLeaf(viewType);
+    if (!leaf || !leaf.parent || typeof leaf.parent.selectTab !== 'function') return;
+
+    this.withSidebarAutoSwitchGuard(() => {
+      leaf.parent.selectTab(leaf);
+      this.selectedSidebarViewType = viewType;
+
+      if (this.isUsableMainLeaf(mainLeaf)) {
+        this.app.workspace.setActiveLeaf(mainLeaf, { focus: true });
+      }
+    });
+  }
+
+  async getOrCreateManagedSidebarLeaf(viewType) {
+    const existingLeaf = this.findManagedSidebarLeaf(viewType);
+    if (existingLeaf) return existingLeaf;
+
+    const targetGroup = this.findManagedSidebarTabGroup();
+    let leaf = null;
+
+    if (targetGroup && typeof this.app.workspace.createLeafInTabGroup === 'function') {
+      leaf = this.app.workspace.createLeafInTabGroup(targetGroup);
+    } else if (typeof this.app.workspace.getRightLeaf === 'function') {
+      leaf = this.app.workspace.getRightLeaf(false);
+    } else if (typeof this.app.workspace.getLeaf === 'function') {
+      leaf = this.app.workspace.getLeaf(false);
+    }
+
+    if (!leaf || typeof leaf.setViewState !== 'function') return null;
+
+    await leaf.setViewState({ type: viewType, state: {}, active: false });
+    return leaf;
+  }
+
+  findManagedSidebarLeaf(viewType) {
+    return this.app.workspace.getLeavesOfType(viewType).find((leaf) => this.isManagedSidebarLeaf(leaf)) || null;
+  }
+
+  getSelectedManagedSidebarLeaf() {
+    const group = this.findManagedSidebarTabGroup();
+    if (!group || !Array.isArray(group.children) || !Number.isInteger(group.currentTab)) return null;
+
+    const leaf = group.children[group.currentTab];
+    return this.isManagedSidebarLeaf(leaf) ? leaf : null;
+  }
+
+  findManagedSidebarTabGroup() {
+    const tagLeaf = this.findManagedSidebarLeaf(TAG_VIEW_TYPE);
+    if (tagLeaf && tagLeaf.parent) return tagLeaf.parent;
+
+    const outlineLeaf = this.findManagedSidebarLeaf(OUTLINE_VIEW_TYPE);
+    if (outlineLeaf && outlineLeaf.parent) return outlineLeaf.parent;
+
+    return null;
+  }
+
+  withSidebarAutoSwitchGuard(callback) {
+    this.sidebarSwitchGuardUntil = Date.now() + 300;
+    try {
+      callback();
+    } finally {
+      window.setTimeout(() => {
+        if (Date.now() >= this.sidebarSwitchGuardUntil) {
+          this.sidebarSwitchGuardUntil = 0;
+        }
+      }, 320);
+    }
+  }
+
+  isSidebarAutoSwitchGuarded() {
+    return Date.now() < this.sidebarSwitchGuardUntil;
+  }
+
+  handlePreferredFileRename(file, oldPath) {
+    if (!oldPath || !file || !file.path || !this.settings.tagSidebarPreferredFiles) return;
+    if (!this.settings.tagSidebarPreferredFiles[oldPath]) return;
+
+    delete this.settings.tagSidebarPreferredFiles[oldPath];
+    this.settings.tagSidebarPreferredFiles[file.path] = true;
+
+    if (this.currentMainFilePath === oldPath) {
+      this.currentMainFilePath = file.path;
+    }
+
+    this.saveSettings();
+  }
+
+  handlePreferredFileDelete(file) {
+    if (!file || !file.path || !this.settings.tagSidebarPreferredFiles) return;
+    if (!this.settings.tagSidebarPreferredFiles[file.path]) return;
+
+    delete this.settings.tagSidebarPreferredFiles[file.path];
+    if (this.currentMainFilePath === file.path) {
+      this.currentMainFilePath = null;
+    }
+
+    this.saveSettings();
+  }
+
   registerWorkspaceHandlers() {
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', (leaf) => {
-        this.rememberMainLeaf(leaf);
+        this.handleActiveLeafChange(leaf);
         if (leaf && leaf.view && leaf.view.getViewType() === TAG_VIEW_TYPE) {
           this.scheduleFocusTagSearch(leaf.view);
         }
@@ -434,6 +640,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     this.registerEvent(
       this.app.workspace.on('layout-change', () => {
+        this.syncSelectedSidebarState();
         this.refreshTagViews();
       })
     );
@@ -444,8 +651,14 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     this.registerEvent(this.app.metadataCache.on('changed', scheduleRefresh));
     this.registerEvent(this.app.metadataCache.on('deleted', scheduleRefresh));
-    this.registerEvent(this.app.vault.on('rename', scheduleRefresh));
-    this.registerEvent(this.app.vault.on('delete', scheduleRefresh));
+    this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+      this.handlePreferredFileRename(file, oldPath);
+      scheduleRefresh();
+    }));
+    this.registerEvent(this.app.vault.on('delete', (file) => {
+      this.handlePreferredFileDelete(file);
+      scheduleRefresh();
+    }));
   }
 
   registerInitialMetadataRefresh() {
@@ -1598,6 +1811,16 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
           .setPlaceholder(DEFAULT_QUICK_SEARCH_HOTKEY)
           .onChange(async (value) => {
             await this.plugin.updateSettings({ toggleSearchHotkey: value });
+          });
+      });
+
+    new Setting(containerEl)
+      .setName('自动切到大纲标签页')
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.autoSwitchToOutlineEnabled)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ autoSwitchToOutlineEnabled: value });
           });
       });
   }
