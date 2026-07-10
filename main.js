@@ -1816,6 +1816,7 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('自动切到大纲标签页')
+      .setDesc('开启后，插件会按当前笔记的侧边栏偏好在标签列表和大纲之间自动切换')
       .addToggle((toggle) => {
         toggle
           .setValue(this.plugin.settings.autoSwitchToOutlineEnabled)
