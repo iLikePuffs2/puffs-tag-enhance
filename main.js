@@ -683,6 +683,7 @@ class PuffsTagEnhancePlugin extends Plugin {
         evt.preventDefault();
         evt.stopPropagation();
         evt.stopImmediatePropagation();
+        this.toggleAllListModeTags(view);
       };
 
       expandAllEl.addEventListener('click', onExpandAllClick, true);
@@ -878,7 +879,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       }
 
       this.renderListMode(view);
-      this.disableListModeExpandAllButton(view);
+      this.updateListModeExpandAllButton(view);
     } finally {
       const observerTarget = view.tagPaneEl || view.containerEl;
       if (patch.observer && observerTarget && observerTarget.isConnected) {
@@ -1128,13 +1129,17 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
   }
 
-  disableListModeExpandAllButton(view) {
+  updateListModeExpandAllButton(view) {
     const buttonEl = view.collapseOrExpandAllEl;
     if (!buttonEl) return;
 
-    buttonEl.setAttribute('aria-label', '全部展开');
-    buttonEl.setAttribute('aria-disabled', 'true');
-    buttonEl.classList.add('puffs-tag-hidden');
+    const items = this.getListModeItems(view);
+    const shouldExpand = this.shouldExpandAllListModeTags(view, items);
+
+    setIcon(buttonEl, shouldExpand ? 'chevrons-up-down' : 'chevrons-down-up');
+    buttonEl.setAttribute('aria-label', shouldExpand ? '全部展开' : '全部收起');
+    buttonEl.removeAttribute('aria-disabled');
+    buttonEl.classList.remove('puffs-tag-hidden');
   }
 
   getTagDomEntries(view) {
@@ -1280,6 +1285,33 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
 
     this.scheduleSyncView(view, 0);
+  }
+
+  toggleAllListModeTags(view) {
+    const items = this.getListModeItems(view);
+    if (items.length === 0) return;
+
+    const shouldExpand = this.shouldExpandAllListModeTags(view, items);
+    for (const item of items) {
+      if (shouldExpand) {
+        this.expandedTags.add(item.tag);
+      } else {
+        this.expandedTags.delete(item.tag);
+      }
+    }
+
+    this.scheduleSyncView(view, 0);
+  }
+
+  shouldExpandAllListModeTags(view, items = this.getListModeItems(view)) {
+    if (items.length === 0) return true;
+
+    const query = this.getTagSearchValue(view).trim();
+    if (!query) {
+      return !items.some((item) => this.expandedTags.has(item.tag));
+    }
+
+    return items.some((item) => !this.expandedTags.has(item.tag));
   }
 
   findTagForElement(view, tagEl) {
