@@ -46,19 +46,35 @@ function getTagDisplayName(tag) {
   return String(tag || '').replace(/^#/, '');
 }
 
+function normalizeSearchTerm(value) {
+  return String(value || '').trim().replace(/^#/, '').toLowerCase();
+}
+
 function splitUnionSearchTerms(value) {
   const text = String(value || '');
-  if (!text.includes('|')) return null;
+  if (!text.includes('|') || text.includes('&')) return null;
 
   const terms = text
     .split('|')
-    .map((term) => term.trim().replace(/^#/, '').toLowerCase())
+    .map(normalizeSearchTerm)
     .filter(Boolean);
 
   return terms.length > 0 ? Array.from(new Set(terms)) : null;
 }
 
-function tagMatchesUnionSearch(tag, terms) {
+function splitIntersectionSearchTerms(value) {
+  const text = String(value || '');
+  if (!text.includes('&') || text.includes('|')) return null;
+
+  const terms = text
+    .split('&')
+    .map(normalizeSearchTerm)
+    .filter(Boolean);
+
+  return terms.length >= 2 ? terms : null;
+}
+
+function tagMatchesAnySearchTerm(tag, terms) {
   if (!terms) return true;
 
   const tagName = getTagDisplayName(tag).toLowerCase();
@@ -75,11 +91,11 @@ function tagMatchesSearchText(tag, value) {
   return tagName.includes(term) || tagText.includes(term);
 }
 
-function createUnionSearchQuery(query, terms) {
+function createMultiTagSearchQuery(query, terms) {
   return {
     query,
     matcher: true,
-    matchContent: (content) => tagMatchesUnionSearch(content, terms),
+    matchContent: (content) => tagMatchesAnySearchTerm(content, terms),
   };
 }
 
@@ -760,7 +776,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
   reconcileExpandedTags() {
     for (const tag of Array.from(this.expandedTags)) {
-      if (!this.tagFileIndex.has(tag)) {
+      if (!String(tag).startsWith('intersection:') && !this.tagFileIndex.has(tag)) {
         this.expandedTags.delete(tag);
       }
     }
@@ -891,7 +907,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     const expandAllEl = view.collapseOrExpandAllEl;
     if (expandAllEl) {
       const onExpandAllClick = (evt) => {
-        if (!this.settings.listModeEnabled || evt.button !== 0) return;
+        if (!this.shouldRenderCustomTagList(view) || evt.button !== 0) return;
 
         evt.preventDefault();
         evt.stopPropagation();
@@ -903,10 +919,10 @@ class PuffsTagEnhancePlugin extends Plugin {
       patch.cleanup.push(() => expandAllEl.removeEventListener('click', onExpandAllClick, true));
     }
 
-    this.patchUnionSearch(view, patch);
+    this.patchMultiTagSearch(view, patch);
 
     const onTagPaneClick = (evt) => {
-      if (!this.settings.listModeEnabled) return;
+      if (!this.shouldRenderCustomTagList(view)) return;
 
       const target = evt.target instanceof Element ? evt.target : null;
       if (!target || !view.containerEl.contains(target)) return;
@@ -939,6 +955,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
       const tagEl = target.closest('.tag-pane-tag');
       if (!tagEl) return;
+      if (tagEl.dataset.puffsVirtualTag === 'true') return;
 
       const tag = this.findTagForElement(view, tagEl);
       if (!tag) return;
@@ -965,21 +982,22 @@ class PuffsTagEnhancePlugin extends Plugin {
     return patch;
   }
 
-  patchUnionSearch(view, patch) {
+  patchMultiTagSearch(view, patch) {
     if (typeof view.updateSearch !== 'function' || patch.originalUpdateSearch) return;
 
     patch.originalUpdateSearch = view.updateSearch;
     view.updateSearch = () => {
       const query = this.getTagSearchValue(view);
-      const terms = splitUnionSearchTerms(query);
+      const unionTerms = splitUnionSearchTerms(query);
+      const intersectionTerms = splitIntersectionSearchTerms(query);
 
-      if (!terms) {
+      if (!unionTerms && !intersectionTerms) {
         patch.originalUpdateSearch.call(view);
         this.scheduleSyncView(view);
         return;
       }
 
-      view.searchQuery = createUnionSearchQuery(query, terms);
+      view.searchQuery = createMultiTagSearchQuery(query, unionTerms || intersectionTerms);
       if (typeof view.updateTags === 'function') view.updateTags();
       this.scheduleSyncView(view, 0);
     };
@@ -1072,7 +1090,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       this.updateModeButton(view);
       this.registerTagViewHotkey(view, patch);
 
-      if (!this.settings.listModeEnabled) {
+      if (!this.shouldRenderCustomTagList(view)) {
         this.clearAutoExpandedTag(patch);
         this.clearListEnhancements(view);
         this.renderUnionSearchInNativeMode(view);
@@ -1131,6 +1149,14 @@ class PuffsTagEnhancePlugin extends Plugin {
     return splitUnionSearchTerms(this.getTagSearchValue(view));
   }
 
+  getIntersectionSearchTerms(view) {
+    return splitIntersectionSearchTerms(this.getTagSearchValue(view));
+  }
+
+  shouldRenderCustomTagList(view) {
+    return this.settings.listModeEnabled || !!this.getIntersectionSearchTerms(view);
+  }
+
   updateModeButton(view) {
     const buttonEl = view.useHierarchyEl;
     if (!buttonEl) return;
@@ -1170,10 +1196,13 @@ class PuffsTagEnhancePlugin extends Plugin {
     const items = this.getListModeItems(view);
     const patch = this.viewPatches.get(view);
     if (patch) this.syncAutoSingleSearchResult(view, patch, items);
+    this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
 
     const signature = JSON.stringify(
       items.map((item) => [
         item.tag,
+        item.displayName,
+        item.isVirtual,
         item.files.length,
         this.expandedTags.has(item.tag),
         this.expandedTags.has(item.tag) ? item.files.map((file) => file.path).join('\n') : '',
@@ -1186,7 +1215,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     listEl.empty();
 
     for (const item of items) {
-      this.renderListModeTagItem(listEl, item.tag, item.files);
+      this.renderListModeTagItem(listEl, item);
     }
   }
 
@@ -1217,6 +1246,14 @@ class PuffsTagEnhancePlugin extends Plugin {
     patch.autoExpandedWasAlreadyExpanded = false;
   }
 
+  clearStaleVirtualExpandedTags(validTags = new Set()) {
+    for (const tag of Array.from(this.expandedTags)) {
+      if (String(tag).startsWith('intersection:') && !validTags.has(tag)) {
+        this.expandedTags.delete(tag);
+      }
+    }
+  }
+
   ensureListModeContainer(view) {
     const tagPaneEl = view.tagPaneEl || (view.containerEl && view.containerEl.querySelector('.tag-container'));
     if (!tagPaneEl) return null;
@@ -1235,6 +1272,9 @@ class PuffsTagEnhancePlugin extends Plugin {
 
   getListModeItems(view) {
     const query = this.getTagSearchValue(view);
+    const intersectionTerms = splitIntersectionSearchTerms(query);
+    if (intersectionTerms) return this.getIntersectionSearchItems(intersectionTerms);
+
     const unionTerms = splitUnionSearchTerms(query);
     const items = [];
     const seen = new Set();
@@ -1242,7 +1282,9 @@ class PuffsTagEnhancePlugin extends Plugin {
     const shouldShowTag = (tag) => {
       const files = this.tagFileIndex.get(tag) || [];
       if (isNestedTag(tag) || files.length === 0) return false;
-      return unionTerms ? tagMatchesUnionSearch(tag, unionTerms) : tagMatchesSearchText(tag, query);
+      return unionTerms
+        ? tagMatchesAnySearchTerm(tag, unionTerms)
+        : tagMatchesSearchText(tag, query);
     };
 
     const pushTag = (tag) => {
@@ -1252,6 +1294,8 @@ class PuffsTagEnhancePlugin extends Plugin {
       seen.add(normalizedTag);
       items.push({
         tag: normalizedTag,
+        displayName: getTagDisplayName(normalizedTag),
+        isVirtual: false,
         files: this.tagFileIndex.get(normalizedTag) || [],
       });
     };
@@ -1273,13 +1317,70 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     items.sort((a, b) => {
       const countDiff = b.files.length - a.files.length;
-      return countDiff || getTagDisplayName(a.tag).localeCompare(getTagDisplayName(b.tag), 'zh-Hans-CN');
+      return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
     });
 
     return items;
   }
 
-  renderListModeTagItem(listEl, tag, files) {
+  getIntersectionSearchItems(terms) {
+    const tags = Array.from(this.tagFileIndex.keys())
+      .filter((tag) => !isNestedTag(tag) && (this.tagFileIndex.get(tag) || []).length > 0)
+      .sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN'));
+    const candidateGroups = terms.map((term) =>
+      tags.filter((tag) => tagMatchesAnySearchTerm(tag, [term]))
+    );
+    if (candidateGroups.some((candidates) => candidates.length === 0)) return [];
+
+    const items = [];
+    const seenCombinations = new Set();
+    const visitCombinations = (groupIndex, selectedTags) => {
+      if (groupIndex < candidateGroups.length) {
+        for (const tag of candidateGroups[groupIndex]) {
+          if (selectedTags.includes(tag)) continue;
+          visitCombinations(groupIndex + 1, [...selectedTags, tag]);
+        }
+        return;
+      }
+
+      const canonicalTags = [...selectedTags].sort();
+      const combinationId = canonicalTags.join('&');
+      if (seenCombinations.has(combinationId)) return;
+      seenCombinations.add(combinationId);
+
+      const files = this.getFilesWithAllTags(selectedTags);
+      if (files.length === 0) return;
+
+      items.push({
+        tag: `intersection:${combinationId}`,
+        displayName: selectedTags.map(getTagDisplayName).join(' & '),
+        isVirtual: true,
+        sourceTags: selectedTags,
+        files,
+      });
+    };
+
+    visitCombinations(0, []);
+    items.sort((a, b) => {
+      const countDiff = b.files.length - a.files.length;
+      return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
+    });
+    return items;
+  }
+
+  getFilesWithAllTags(tags) {
+    if (tags.length === 0) return [];
+
+    const remainingPaths = tags.slice(1).map((tag) =>
+      new Set((this.tagFileIndex.get(tag) || []).map((file) => file.path))
+    );
+    return (this.tagFileIndex.get(tags[0]) || []).filter((file) =>
+      remainingPaths.every((paths) => paths.has(file.path))
+    );
+  }
+
+  renderListModeTagItem(listEl, item) {
+    const { tag, displayName, files, isVirtual } = item;
     const isExpanded = this.expandedTags.has(tag);
     const treeItemEl = document.createElement('div');
     treeItemEl.className = 'tree-item puffs-tag-list-item';
@@ -1288,6 +1389,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     const tagEl = document.createElement('div');
     tagEl.className = 'tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row';
     tagEl.dataset.puffsTag = tag;
+    if (isVirtual) tagEl.dataset.puffsVirtualTag = 'true';
     tagEl.style.marginInlineStart = '0px';
     tagEl.style.setProperty('margin-inline-start', '0px', 'important');
     tagEl.style.paddingInlineStart = '24px';
@@ -1304,7 +1406,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     const textEl = document.createElement('div');
     textEl.className = 'tree-item-inner-text';
-    textEl.textContent = getTagDisplayName(tag);
+    textEl.textContent = displayName;
 
     const flairOuterEl = document.createElement('div');
     flairOuterEl.className = 'tree-item-flair-outer';
@@ -1337,7 +1439,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       const normalizedTag = normalizeTag(tagDom.tag || tag);
       tagDom.el.classList.toggle(
         'puffs-tag-hidden',
-        !normalizedTag || !tagMatchesUnionSearch(normalizedTag, unionTerms)
+        !normalizedTag || !tagMatchesAnySearchTerm(normalizedTag, unionTerms)
       );
     }
   }
@@ -1465,6 +1567,7 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   clearListEnhancements(view) {
+    this.clearStaleVirtualExpandedTags();
     view.containerEl.classList.remove('puffs-tag-list-mode-enabled');
 
     const expandAllEl = view.collapseOrExpandAllEl;
