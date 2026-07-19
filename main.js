@@ -459,9 +459,11 @@ class PuffsTagEnhancePlugin extends Plugin {
 
   handleActiveLeafChange(leaf) {
     if (this.isMarkdownMainLeaf(leaf)) {
+      const filePath = getLeafFilePath(leaf);
+      const filePathChanged = filePath !== this.currentMainFilePath;
       this.rememberMainLeaf(leaf);
-      this.currentMainFilePath = getLeafFilePath(leaf);
-      if (!this.isSidebarAutoSwitchGuarded()) {
+      this.currentMainFilePath = filePath;
+      if (filePathChanged && !this.isSidebarAutoSwitchGuarded()) {
         this.applySidebarPreferenceForCurrentFile();
       }
       return;
@@ -1815,7 +1817,13 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   rememberCurrentMainLeaf() {
-    this.rememberMainLeaf(this.app.workspace.activeLeaf);
+    const activeLeaf = this.app.workspace.activeLeaf;
+    const editorLeaf = this.app.workspace.activeEditor?.leaf;
+    const leaf = this.isMarkdownMainLeaf(activeLeaf) ? activeLeaf : editorLeaf;
+    this.rememberMainLeaf(leaf);
+    if (this.isMarkdownMainLeaf(leaf)) {
+      this.currentMainFilePath = getLeafFilePath(leaf);
+    }
   }
 
   rememberMainLeaf(leaf) {
