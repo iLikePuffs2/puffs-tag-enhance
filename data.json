@@ -1,6 +1,8 @@
 {
   "listModeEnabled": true,
   "autoSwitchToOutlineEnabled": true,
-  "tagSidebarPreferredFiles": {},
+  "tagSidebarPreferredFiles": {
+    "小说/情节/情节-总结.md": true
+  },
   "toggleSearchHotkey": "Ctrl + F"
 }

@@ -66,11 +66,11 @@ function splitIntersectionSearchTerms(value) {
   const text = String(value || '');
   if (!text.includes('&') || text.includes('|')) return null;
 
-  const terms = text
-    .split('&')
-    .map(normalizeSearchTerm)
-    .filter(Boolean);
+  const parts = text.split('&').map(normalizeSearchTerm);
+  const isTrailingSuggestionSearch = parts.length === 2 && parts[0] && !parts[1];
+  if (isTrailingSuggestionSearch) return [parts[0]];
 
+  const terms = parts.filter(Boolean);
   return terms.length >= 2 ? terms : null;
 }
 
@@ -1329,22 +1329,9 @@ class PuffsTagEnhancePlugin extends Plugin {
     const tags = Array.from(this.tagFileIndex.keys())
       .filter((tag) => !isNestedTag(tag) && (this.tagFileIndex.get(tag) || []).length > 0)
       .sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN'));
-    const candidateGroups = terms.map((term) =>
-      tags.filter((tag) => tagMatchesAnySearchTerm(tag, [term]))
-    );
-    if (candidateGroups.some((candidates) => candidates.length === 0)) return [];
-
     const items = [];
     const seenCombinations = new Set();
-    const visitCombinations = (groupIndex, selectedTags) => {
-      if (groupIndex < candidateGroups.length) {
-        for (const tag of candidateGroups[groupIndex]) {
-          if (selectedTags.includes(tag)) continue;
-          visitCombinations(groupIndex + 1, [...selectedTags, tag]);
-        }
-        return;
-      }
-
+    const pushCombination = (selectedTags) => {
       const canonicalTags = [...selectedTags].sort();
       const combinationId = canonicalTags.join('&');
       if (seenCombinations.has(combinationId)) return;
@@ -1362,7 +1349,35 @@ class PuffsTagEnhancePlugin extends Plugin {
       });
     };
 
-    visitCombinations(0, []);
+    if (terms.length === 1) {
+      const baseTags = tags.filter((tag) => tagMatchesAnySearchTerm(tag, terms));
+      for (const baseTag of baseTags) {
+        for (const relatedTag of tags) {
+          if (relatedTag === baseTag) continue;
+          pushCombination([baseTag, relatedTag]);
+        }
+      }
+    } else {
+      const candidateGroups = terms.map((term) =>
+        tags.filter((tag) => tagMatchesAnySearchTerm(tag, [term]))
+      );
+      if (candidateGroups.some((candidates) => candidates.length === 0)) return [];
+
+      const visitCombinations = (groupIndex, selectedTags) => {
+        if (groupIndex < candidateGroups.length) {
+          for (const tag of candidateGroups[groupIndex]) {
+            if (selectedTags.includes(tag)) continue;
+            visitCombinations(groupIndex + 1, [...selectedTags, tag]);
+          }
+          return;
+        }
+
+        pushCombination(selectedTags);
+      };
+
+      visitCombinations(0, []);
+    }
+
     items.sort((a, b) => {
       const countDiff = b.files.length - a.files.length;
       return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
