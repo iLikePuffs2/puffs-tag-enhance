@@ -26,11 +26,10 @@ const DEFAULT_QUICK_SEARCH_HOTKEY = 'Ctrl + F';
 const DEFAULT_MOVE_NOTE_UP_HOTKEY = 'Alt + Shift + ↑';
 const DEFAULT_MOVE_NOTE_DOWN_HOTKEY = 'Alt + Shift + ↓';
 const LIST_MODE_ICON = 'list-tree';
-const TAG_SYSTEM_ICON = 'library-big';
+const TAG_SYSTEM_ICON = LIST_MODE_ICON;
 const INITIAL_TAG_INDEX_REFRESH_DELAYS_MS = [0, 500, 1500, 3000, 6000];
 
 const DEFAULT_SETTINGS = {
-  listModeEnabled: false,
   autoSwitchToOutlineEnabled: true,
   tagSidebarPreferredFiles: {},
   noteOrderByTag: {},
@@ -721,6 +720,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
   }
 
@@ -1051,9 +1051,6 @@ class PuffsTagEnhancePlugin extends Plugin {
 
 .puffs-tag-hidden {
   display: none !important;
-}
-
-.clickable-icon.nav-action-button.puffs-tag-mode-button {
 }
 
 .modal-container .puffs-tag-rename-modal {
@@ -1928,25 +1925,10 @@ class PuffsTagEnhancePlugin extends Plugin {
       autoExpandedWasAlreadyExpanded: false,
     };
 
-    const buttonEl = view.useHierarchyEl;
-    if (buttonEl) {
-      const onModeButtonClick = (evt) => {
-        if (evt.button !== 0) return;
-
-        evt.preventDefault();
-        evt.stopPropagation();
-        evt.stopImmediatePropagation();
-        this.setListModeEnabled(!this.settings.listModeEnabled);
-      };
-
-      buttonEl.addEventListener('click', onModeButtonClick, true);
-      patch.cleanup.push(() => buttonEl.removeEventListener('click', onModeButtonClick, true));
-    }
-
     const expandAllEl = view.collapseOrExpandAllEl;
     if (expandAllEl) {
       const onExpandAllClick = (evt) => {
-        if (!this.shouldRenderCustomTagList(view) || evt.button !== 0) return;
+        if (evt.button !== 0) return;
 
         evt.preventDefault();
         evt.stopPropagation();
@@ -1984,8 +1966,6 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.patchMultiTagSearch(view, patch);
 
     const onTagPaneClick = (evt) => {
-      if (!this.shouldRenderCustomTagList(view)) return;
-
       const target = evt.target instanceof Element ? evt.target : null;
       if (!target || !view.containerEl.contains(target)) return;
 
@@ -2162,21 +2142,8 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     try {
       this.repairHiddenSearchValue(view);
-      this.updateModeButton(view);
+      this.hideHierarchyButton(view);
       this.registerTagViewHotkey(view, patch);
-
-      if (!this.shouldRenderCustomTagList(view)) {
-        this.clearAutoExpandedTag(patch);
-        this.clearListEnhancements(view);
-        this.renderUnionSearchInNativeMode(view);
-
-        if (view.useHierarchy !== true && typeof view.setUseHierarchy === 'function') {
-          view.setUseHierarchy(true);
-          this.scheduleSyncView(view);
-        }
-
-        return;
-      }
 
       if (view.useHierarchy !== false && typeof view.setUseHierarchy === 'function') {
         view.setUseHierarchy(false);
@@ -2228,40 +2195,12 @@ class PuffsTagEnhancePlugin extends Plugin {
     return splitIntersectionSearchTerms(this.getTagSearchValue(view));
   }
 
-  shouldRenderCustomTagList(view) {
-    return this.settings.listModeEnabled || !!this.getIntersectionSearchTerms(view);
-  }
-
-  updateModeButton(view) {
+  hideHierarchyButton(view) {
     const buttonEl = view.useHierarchyEl;
     if (!buttonEl) return;
 
-    buttonEl.classList.add('puffs-tag-mode-button');
-    buttonEl.classList.add('is-active');
-
-    if (this.settings.listModeEnabled) {
-      setIcon(buttonEl, LIST_MODE_ICON);
-      buttonEl.setAttribute('aria-label', '当前：列表模式');
-      return;
-    }
-
-    setIcon(buttonEl, 'folder-tree');
-    buttonEl.setAttribute('aria-label', '当前：嵌套模式');
-  }
-
-  async setListModeEnabled(enabled) {
-    if (this.settings.listModeEnabled === enabled) return;
-
-    this.settings.listModeEnabled = enabled;
-    await this.saveSettings();
-
-    if (!enabled) {
-      this.expandedTags.clear();
-    } else {
-      this.rebuildTagFileIndex();
-    }
-
-    this.refreshTagViews();
+    buttonEl.classList.add('puffs-tag-hidden');
+    buttonEl.setAttribute('aria-hidden', 'true');
   }
 
   renderListMode(view) {
@@ -2517,21 +2456,6 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
 
     listEl.appendChild(treeItemEl);
-  }
-
-  renderUnionSearchInNativeMode(view) {
-    const unionTerms = this.getUnionSearchTerms(view);
-    if (!unionTerms) return;
-
-    for (const [tag, tagDom] of this.getTagDomEntries(view)) {
-      if (!tagDom || !tagDom.el) continue;
-
-      const normalizedTag = normalizeTag(tagDom.tag || tag);
-      tagDom.el.classList.toggle(
-        'puffs-tag-hidden',
-        !normalizedTag || !tagMatchesAnySearchTerm(normalizedTag, unionTerms)
-      );
-    }
   }
 
   updateListModeExpandAllButton(view) {
@@ -2960,7 +2884,8 @@ class PuffsTagEnhancePlugin extends Plugin {
 
       const buttonEl = leaf.view.useHierarchyEl;
       if (buttonEl) {
-        buttonEl.classList.remove('puffs-tag-mode-button');
+        buttonEl.classList.remove('puffs-tag-hidden');
+        buttonEl.removeAttribute('aria-hidden');
         setIcon(buttonEl, 'folder-tree');
         buttonEl.setAttribute('aria-label', '显示嵌套情况');
       }
