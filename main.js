@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
   autoSwitchToOutlineEnabled: true,
   tagSidebarPreferredFiles: {},
   noteOrderByTag: {},
+  newNotePosition: 'end',
   toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
   moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,
   moveNoteDownHotkey: DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
@@ -46,6 +47,10 @@ function normalizeTag(rawTag) {
   if (!tag) return null;
 
   return tag.startsWith('#') ? tag : `#${tag}`;
+}
+
+function normalizeNewNotePosition(value) {
+  return value === 'start' ? 'start' : 'end';
 }
 
 function isNestedTag(tag) {
@@ -653,6 +658,8 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.selectedSidebarViewType = null;
     this.sidebarSwitchGuardUntil = 0;
     this.initialTagIndexRefreshTimers = [];
+    this.noteOrderTrackingReady = false;
+    this.settingsSavePromise = Promise.resolve();
     this.isUnloaded = false;
   }
 
@@ -679,7 +686,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       if (this.isUnloaded) return;
       this.rememberCurrentMainLeaf();
       this.captureSelectedSidebarState();
-      this.refreshTagIndexAndViews();
+      this.refreshTagIndexAndViews(null, true);
       this.refreshTagViews();
       this.queueInitialTagIndexRefreshes();
       this.applySidebarPreferenceForCurrentFile();
@@ -712,12 +719,16 @@ class PuffsTagEnhancePlugin extends Plugin {
     if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== 'object') {
       this.settings.tagSidebarPreferredFiles = {};
     }
+    this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     delete this.settings.tagOrder;
   }
 
   async saveSettings() {
-    await this.saveData(this.settings);
+    this.settingsSavePromise = this.settingsSavePromise
+      .catch(() => {})
+      .then(() => this.saveData(this.settings));
+    await this.settingsSavePromise;
   }
 
   async updateSettings(newSettings) {
@@ -734,6 +745,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== 'object') {
       this.settings.tagSidebarPreferredFiles = {};
     }
+    this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     delete this.settings.tagOrder;
     await this.saveSettings();
@@ -759,7 +771,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     const result = {};
     for (const [rawTag, rawPaths] of Object.entries(value)) {
       const tag = normalizeTag(rawTag);
-      if (!tag || isNestedTag(tag) || !Array.isArray(rawPaths)) continue;
+      if (!tag || !Array.isArray(rawPaths)) continue;
 
       const seen = new Set();
       const paths = [];
@@ -1621,19 +1633,20 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   registerMetadataHandlers() {
-    const scheduleRefresh = () => this.scheduleMetadataRefresh();
+    const scheduleRefresh = (file) => this.scheduleMetadataRefresh(file);
 
     this.registerEvent(this.app.metadataCache.on('changed', scheduleRefresh));
     this.registerEvent(this.app.metadataCache.on('deleted', scheduleRefresh));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       this.handlePreferredFileRename(file, oldPath);
       this.handleNoteOrderFileRename(file, oldPath);
-      scheduleRefresh();
+      this.refreshTagViews();
+      this.refreshTagShelfViews();
     }));
     this.registerEvent(this.app.vault.on('delete', (file) => {
       this.handlePreferredFileDelete(file);
       this.handleNoteOrderFileDelete(file);
-      scheduleRefresh();
+      scheduleRefresh(file);
     }));
   }
 
@@ -1644,19 +1657,25 @@ class PuffsTagEnhancePlugin extends Plugin {
     metadataCache.onCleanCache(() => {
       if (this.isUnloaded) return;
 
-      this.refreshTagIndexAndViews();
+      this.refreshTagIndexAndViews(null, true);
       this.queueInitialTagIndexRefreshes();
     });
   }
 
-  scheduleMetadataRefresh() {
-    this.refreshTagIndexAndViews();
+  scheduleMetadataRefresh(file) {
+    const changedPath = file instanceof TFile && file.extension === 'md' ? file.path : null;
+    this.refreshTagIndexAndViews(changedPath);
   }
 
-  refreshTagIndexAndViews() {
+  refreshTagIndexAndViews(changedPath = null, initializeNoteOrders = false) {
     if (this.isUnloaded) return;
 
-    this.rebuildTagFileIndex();
+    const noteOrderChanged = this.rebuildTagFileIndex(changedPath, initializeNoteOrders);
+    if (noteOrderChanged) {
+      this.saveSettings().catch((error) => {
+        console.error('[Puffs Tag Enhance] Failed to persist note order:', error);
+      });
+    }
     this.refreshTagViews();
     this.refreshTagShelfViews();
   }
@@ -1682,7 +1701,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.initialTagIndexRefreshTimers = [];
   }
 
-  rebuildTagFileIndex() {
+  rebuildTagFileIndex(changedPath = null, initializeNoteOrders = false) {
     const nextIndex = new Map();
 
     for (const file of this.app.vault.getMarkdownFiles()) {
@@ -1701,8 +1720,67 @@ class PuffsTagEnhancePlugin extends Plugin {
       });
     }
 
+    let noteOrderChanged = false;
+    if (initializeNoteOrders && !this.noteOrderTrackingReady) {
+      noteOrderChanged = this.initializeNoteOrders(nextIndex);
+      this.noteOrderTrackingReady = true;
+    } else if (this.noteOrderTrackingReady) {
+      noteOrderChanged = this.reconcileNoteOrders(nextIndex, changedPath);
+    }
+
     this.tagFileIndex = nextIndex;
     this.reconcileExpandedTags();
+    return noteOrderChanged;
+  }
+
+  initializeNoteOrders(nextIndex) {
+    const nextOrders = {};
+
+    for (const [tag, files] of nextIndex.entries()) {
+      const currentPaths = files.map((file) => file.path);
+      const currentPathSet = new Set(currentPaths);
+      const savedOrder = Array.isArray(this.settings.noteOrderByTag[tag])
+        ? this.settings.noteOrderByTag[tag]
+        : [];
+      const retainedPaths = savedOrder.filter((path) => currentPathSet.has(path));
+      const retainedPathSet = new Set(retainedPaths);
+      const remainingPaths = currentPaths.filter((path) => !retainedPathSet.has(path));
+      const order = retainedPaths.concat(remainingPaths);
+      if (order.length > 0) nextOrders[tag] = order;
+    }
+
+    const changed = JSON.stringify(nextOrders) !== JSON.stringify(this.settings.noteOrderByTag);
+    if (changed) this.settings.noteOrderByTag = nextOrders;
+    return changed;
+  }
+
+  reconcileNoteOrders(nextIndex, changedPath = null) {
+    const nextOrders = {};
+
+    for (const [tag, files] of nextIndex.entries()) {
+      const currentPaths = files.map((file) => file.path);
+      const currentPathSet = new Set(currentPaths);
+      const savedOrder = Array.isArray(this.settings.noteOrderByTag[tag])
+        ? this.settings.noteOrderByTag[tag]
+        : [];
+      const retainedPaths = savedOrder.filter((path) => currentPathSet.has(path));
+      const savedPathSet = new Set(savedOrder);
+      const addedPaths = currentPaths.filter((path) => !savedPathSet.has(path));
+
+      if (changedPath && addedPaths.includes(changedPath)) {
+        addedPaths.splice(addedPaths.indexOf(changedPath), 1);
+        addedPaths.push(changedPath);
+      }
+
+      const order = this.settings.newNotePosition === 'start'
+        ? addedPaths.reverse().concat(retainedPaths)
+        : retainedPaths.concat(addedPaths);
+      if (order.length > 0) nextOrders[tag] = order;
+    }
+
+    const changed = JSON.stringify(nextOrders) !== JSON.stringify(this.settings.noteOrderByTag);
+    if (changed) this.settings.noteOrderByTag = nextOrders;
+    return changed;
   }
 
   getExactTagsForFile(file) {
@@ -2985,6 +3063,19 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
           .setPlaceholder(DEFAULT_MOVE_NOTE_DOWN_HOTKEY)
           .onChange(async (value) => {
             await this.plugin.updateSettings({ moveNoteDownHotkey: value });
+          });
+      });
+
+    new Setting(containerEl)
+      .setName('新笔记卡片位置')
+      .setDesc('只决定之后新加入标签的笔记卡片位置，不会重排现有卡片')
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption('end', '放在最后')
+          .addOption('start', '放在最前')
+          .setValue(this.plugin.settings.newNotePosition)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ newNotePosition: value });
           });
       });
 
