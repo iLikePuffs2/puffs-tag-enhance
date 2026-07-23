@@ -6,6 +6,9 @@ const {
   Plugin,
   PluginSettingTab,
   Setting,
+  ItemView,
+  SearchComponent,
+  Scope,
   Modal,
   TFile,
   Notice,
@@ -15,18 +18,25 @@ const {
 
 const STYLE_ID = 'puffs-tag-enhance-style';
 const TAG_VIEW_TYPE = 'tag';
+const TAG_SHELF_VIEW_TYPE = 'puffs-tag-shelf-view';
 const OUTLINE_VIEW_TYPE = 'outline';
 const MARKDOWN_VIEW_TYPE = 'markdown';
 const VIEW_SYNC_DELAY_MS = 30;
 const DEFAULT_QUICK_SEARCH_HOTKEY = 'Ctrl + F';
+const DEFAULT_MOVE_NOTE_UP_HOTKEY = 'Alt + Shift + ↑';
+const DEFAULT_MOVE_NOTE_DOWN_HOTKEY = 'Alt + Shift + ↓';
 const LIST_MODE_ICON = 'list-tree';
+const TAG_SYSTEM_ICON = 'library-big';
 const INITIAL_TAG_INDEX_REFRESH_DELAYS_MS = [0, 500, 1500, 3000, 6000];
 
 const DEFAULT_SETTINGS = {
   listModeEnabled: false,
   autoSwitchToOutlineEnabled: true,
   tagSidebarPreferredFiles: {},
+  noteOrderByTag: {},
   toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
+  moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,
+  moveNoteDownHotkey: DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
 };
 
 function normalizeTag(rawTag) {
@@ -207,10 +217,24 @@ function flattenFrontmatterTags(value, output = []) {
   return output;
 }
 
-function parseHotkeyText(value) {
-  const text = String(value || DEFAULT_QUICK_SEARCH_HOTKEY).trim();
+function normalizeHotkeyKey(value) {
+  const key = String(value || '').trim();
+  const normalized = key.toLowerCase();
+  if (key === '↑' || normalized === 'arrowup' || normalized === 'up') return 'ArrowUp';
+  if (key === '↓' || normalized === 'arrowdown' || normalized === 'down') return 'ArrowDown';
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+function formatHotkeyKey(key) {
+  if (key === 'ArrowUp') return '↑';
+  if (key === 'ArrowDown') return '↓';
+  return key;
+}
+
+function parseHotkeyText(value, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
+  const text = String(value || fallback).trim();
   const parts = text.split('+').map((part) => part.trim()).filter(Boolean);
-  if (parts.length === 0) return parseHotkeyText(DEFAULT_QUICK_SEARCH_HOTKEY);
+  if (parts.length === 0) return parseHotkeyText(fallback, fallback);
 
   const key = parts.pop();
   const modifiers = [];
@@ -231,21 +255,387 @@ function parseHotkeyText(value) {
     }
   }
 
-  if (!key) return parseHotkeyText(DEFAULT_QUICK_SEARCH_HOTKEY);
+  if (!key) return parseHotkeyText(fallback, fallback);
 
-  const normalizedKey = key.length === 1 ? key.toUpperCase() : key;
   return {
     modifiers: Array.from(new Set(modifiers)),
-    key: normalizedKey,
+    key: normalizeHotkeyKey(key),
   };
 }
 
 function formatHotkey(parsedHotkey) {
-  return [...parsedHotkey.modifiers, parsedHotkey.key].join(' + ');
+  return [...parsedHotkey.modifiers, formatHotkeyKey(parsedHotkey.key)].join(' + ');
 }
 
-function normalizeHotkeyText(value) {
-  return formatHotkey(parseHotkeyText(value));
+function normalizeHotkeyText(value, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
+  return formatHotkey(parseHotkeyText(value, fallback));
+}
+
+class PuffsTagShelfView extends ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.searchQuery = '';
+    this.expandedTags = new Set();
+    this.autoExpandedTag = null;
+    this.autoExpandedWasAlreadyExpanded = false;
+    this.searchComponent = null;
+    this.isShowingSearch = true;
+    this.searchHotkeyHandler = null;
+    this.listEl = null;
+    this.summaryTagCountEl = null;
+    this.summaryNoteCountEl = null;
+  }
+
+  getViewType() {
+    return TAG_SHELF_VIEW_TYPE;
+  }
+
+  getDisplayText() {
+    return '标签系统';
+  }
+
+  getIcon() {
+    return TAG_SYSTEM_ICON;
+  }
+
+  async onOpen() {
+    this.searchHotkeyHandler = (event) => this.handleSearchHotkey(event);
+    window.addEventListener('keydown', this.searchHotkeyHandler, true);
+    document.addEventListener('keydown', this.searchHotkeyHandler, true);
+    this.render();
+  }
+
+  async onClose() {
+    if (this.searchHotkeyHandler) {
+      window.removeEventListener('keydown', this.searchHotkeyHandler, true);
+      document.removeEventListener('keydown', this.searchHotkeyHandler, true);
+      this.searchHotkeyHandler = null;
+    }
+    this.searchComponent = null;
+  }
+
+  refresh() {
+    const scrollTop = this.contentEl.scrollTop;
+    this.render();
+    window.requestAnimationFrame(() => {
+      this.contentEl.scrollTop = scrollTop;
+    });
+  }
+
+  toggleSearch() {
+    const inputEl = this.searchComponent && this.searchComponent.inputEl;
+    if (!inputEl) return;
+
+    if (this.isShowingSearch) {
+      this.searchComponent.setValue('');
+      if (inputEl.value !== '') {
+        inputEl.value = '';
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      } else if (this.searchQuery !== '') {
+        this.searchQuery = '';
+        this.renderTagList();
+      }
+      this.isShowingSearch = false;
+    } else {
+      this.isShowingSearch = true;
+    }
+
+    window.setTimeout(() => inputEl.focus(), 0);
+  }
+
+  handleSearchHotkey(event) {
+    if (!this.plugin.isQuickSearchHotkey(event) || !this.isActiveView()) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    this.toggleSearch();
+  }
+
+  isActiveView() {
+    return (
+      this.app.workspace.activeLeaf === this.leaf ||
+      !!this.contentEl.closest('.workspace-leaf.mod-active') ||
+      this.contentEl.contains(document.activeElement)
+    );
+  }
+
+  render() {
+    this.contentEl.empty();
+    this.contentEl.classList.add('puffs-tag-shelf-view');
+
+    const pageEl = document.createElement('div');
+    pageEl.className = 'puffs-tag-shelf-page';
+    this.syncSidebarTreeStyles(pageEl);
+
+    const headerEl = document.createElement('div');
+    headerEl.className = 'puffs-tag-shelf-header';
+
+    const titleEl = document.createElement('h3');
+    titleEl.className = 'puffs-tag-shelf-title';
+    titleEl.textContent = '标签系统';
+
+    headerEl.appendChild(titleEl);
+    pageEl.appendChild(headerEl);
+
+    const summaryEl = document.createElement('div');
+    summaryEl.className = 'puffs-tag-shelf-summary';
+    const tagSummary = this.createSummaryCard('标签数量', '0 个');
+    const noteSummary = this.createSummaryCard('笔记数量', '0 篇');
+    this.summaryTagCountEl = tagSummary.valueEl;
+    this.summaryNoteCountEl = noteSummary.valueEl;
+    summaryEl.appendChild(tagSummary.cardEl);
+    summaryEl.appendChild(noteSummary.cardEl);
+    pageEl.appendChild(summaryEl);
+
+    const sectionHeaderEl = document.createElement('div');
+    sectionHeaderEl.className = 'puffs-tag-shelf-section-header';
+
+    const sectionTitleEl = document.createElement('h3');
+    sectionTitleEl.className = 'puffs-tag-shelf-section-title';
+    sectionTitleEl.textContent = '标签列表';
+
+    const searchHostEl = document.createElement('div');
+    searchHostEl.className = 'puffs-tag-shelf-search-host';
+    this.searchComponent = new SearchComponent(searchHostEl);
+    this.searchComponent.containerEl.classList.add('puffs-tag-shelf-search-container');
+    this.searchComponent.inputEl.classList.add('puffs-tag-shelf-search-input');
+    this.searchComponent.setPlaceholder('搜索标签');
+    this.searchComponent.setValue(this.searchQuery);
+    this.searchComponent.onChange((value) => {
+      this.searchQuery = value;
+      this.renderTagList();
+    });
+
+    sectionHeaderEl.appendChild(sectionTitleEl);
+    sectionHeaderEl.appendChild(searchHostEl);
+    pageEl.appendChild(sectionHeaderEl);
+
+    this.listEl = document.createElement('div');
+    this.listEl.className = 'puffs-tag-shelf-list';
+    pageEl.appendChild(this.listEl);
+
+    this.contentEl.appendChild(pageEl);
+    this.renderTagList();
+  }
+
+  syncSidebarTreeStyles(pageEl) {
+    const sidebarRowEl = document.querySelector(
+      '.workspace-leaf-content[data-type="tag"] .tag-pane-tag'
+    );
+    if (!sidebarRowEl) return;
+
+    const innerEl = sidebarRowEl.querySelector('.tree-item-inner');
+    const flairEl = sidebarRowEl.querySelector('.tree-item-flair');
+    const rowStyle = window.getComputedStyle(sidebarRowEl);
+    pageEl.style.setProperty('--puffs-tag-shelf-row-align-items', rowStyle.alignItems);
+
+    if (innerEl) {
+      const innerStyle = window.getComputedStyle(innerEl);
+      pageEl.style.setProperty('--puffs-tag-shelf-tree-font-size', innerStyle.fontSize);
+      pageEl.style.setProperty('--puffs-tag-shelf-tree-line-height', innerStyle.lineHeight);
+      pageEl.style.setProperty('--puffs-tag-shelf-tree-font-weight', innerStyle.fontWeight);
+      pageEl.style.setProperty('--puffs-tag-shelf-tree-letter-spacing', innerStyle.letterSpacing);
+    }
+
+    if (flairEl) {
+      const flairStyle = window.getComputedStyle(flairEl);
+      pageEl.style.setProperty('--puffs-tag-shelf-flair-display', flairStyle.display);
+      pageEl.style.setProperty('--puffs-tag-shelf-flair-align-items', flairStyle.alignItems);
+      pageEl.style.setProperty('--puffs-tag-shelf-flair-font-size', flairStyle.fontSize);
+      pageEl.style.setProperty('--puffs-tag-shelf-flair-line-height', flairStyle.lineHeight);
+    }
+  }
+
+  createSummaryCard(label, value) {
+    const cardEl = document.createElement('div');
+    cardEl.className = 'puffs-tag-shelf-summary-card';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'puffs-tag-shelf-summary-label';
+    labelEl.textContent = label;
+
+    const valueEl = document.createElement('div');
+    valueEl.className = 'puffs-tag-shelf-summary-value';
+    valueEl.textContent = value;
+
+    cardEl.appendChild(labelEl);
+    cardEl.appendChild(valueEl);
+    return { cardEl, valueEl };
+  }
+
+  renderTagList() {
+    if (!this.listEl || !this.summaryTagCountEl || !this.summaryNoteCountEl) return;
+
+    const query = this.searchQuery.trim();
+    const items = this.plugin.getTagShelfItems(query);
+    this.syncAutoSingleSearchResult(query, items);
+    this.updateSummary(items);
+    this.listEl.empty();
+
+    if (items.length === 0) {
+      const emptyEl = document.createElement('div');
+      emptyEl.className = 'puffs-tag-shelf-empty';
+      emptyEl.textContent = query ? '没有匹配的标签。' : '暂无可展示的标签。';
+      this.listEl.appendChild(emptyEl);
+      return;
+    }
+
+    for (const item of items) {
+      this.renderTagCard(item);
+    }
+  }
+
+  updateSummary(items) {
+    const uniqueNotePaths = new Set();
+    for (const item of items) {
+      for (const file of item.files) uniqueNotePaths.add(file.path);
+    }
+
+    this.summaryTagCountEl.textContent = `${items.length} 个`;
+    this.summaryNoteCountEl.textContent = `${uniqueNotePaths.size} 篇`;
+  }
+
+  syncAutoSingleSearchResult(query, items) {
+    if (!query || items.length !== 1) {
+      this.clearAutoExpandedTag();
+      return;
+    }
+
+    const tag = items[0].tag;
+    if (this.autoExpandedTag === tag) return;
+
+    this.clearAutoExpandedTag();
+    this.autoExpandedTag = tag;
+    this.autoExpandedWasAlreadyExpanded = this.expandedTags.has(tag);
+    this.expandedTags.add(tag);
+  }
+
+  clearAutoExpandedTag() {
+    if (!this.autoExpandedTag) return;
+
+    if (!this.autoExpandedWasAlreadyExpanded) {
+      this.expandedTags.delete(this.autoExpandedTag);
+    }
+
+    this.autoExpandedTag = null;
+    this.autoExpandedWasAlreadyExpanded = false;
+  }
+
+  renderTagCard(item) {
+    const { tag, displayName, files, isVirtual } = item;
+    const isExpanded = this.expandedTags.has(tag);
+    const treeItemEl = document.createElement('div');
+    treeItemEl.className = 'tree-item puffs-tag-list-item puffs-tag-shelf-card';
+    treeItemEl.classList.toggle('puffs-tag-expanded', isExpanded);
+    treeItemEl.classList.toggle('puffs-tag-shelf-virtual', !!isVirtual);
+
+    const tagEl = document.createElement('div');
+    tagEl.className =
+      'tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row puffs-tag-shelf-tag-row';
+    tagEl.dataset.puffsTag = tag;
+    if (isVirtual) tagEl.dataset.puffsVirtualTag = 'true';
+
+    const toggleEl = document.createElement('div');
+    toggleEl.className = 'tree-item-icon collapse-icon puffs-tag-list-toggle';
+    toggleEl.classList.toggle('is-collapsed', !isExpanded);
+    toggleEl.setAttribute('aria-hidden', 'true');
+    setIcon(toggleEl, 'right-triangle');
+
+    const innerEl = document.createElement('div');
+    innerEl.className = 'tree-item-inner';
+
+    const textEl = document.createElement('div');
+    textEl.className = 'tree-item-inner-text';
+    textEl.textContent = displayName;
+
+    const flairOuterEl = document.createElement('div');
+    flairOuterEl.className = 'tree-item-flair-outer';
+
+    const countEl = document.createElement('span');
+    countEl.className = 'tag-pane-tag-count tree-item-flair';
+    countEl.textContent = String(files.length);
+
+    innerEl.appendChild(textEl);
+    flairOuterEl.appendChild(countEl);
+    tagEl.appendChild(toggleEl);
+    tagEl.appendChild(innerEl);
+    tagEl.appendChild(flairOuterEl);
+    treeItemEl.appendChild(tagEl);
+
+    tagEl.addEventListener('click', () => {
+      if (this.expandedTags.has(tag)) this.expandedTags.delete(tag);
+      else this.expandedTags.add(tag);
+      this.renderTagList();
+    });
+
+    tagEl.addEventListener('contextmenu', (event) => {
+      if (isVirtual) return;
+      event.preventDefault();
+      this.plugin.openRenameTagModal(tag);
+    });
+
+    if (isExpanded) {
+      const notesEl = document.createElement('div');
+      notesEl.className = 'tree-item-children puffs-tag-note-list puffs-tag-shelf-notes';
+
+      for (const file of files) {
+        const noteItemEl = document.createElement('div');
+        noteItemEl.className = 'tree-item puffs-tag-note-item puffs-tag-shelf-note-item';
+        noteItemEl.dataset.path = file.path;
+        noteItemEl.classList.toggle(
+          'is-order-selected',
+          this.plugin.isNoteOrderTargetSelected(tag, file.path)
+        );
+
+        const noteCardEl = document.createElement('div');
+        noteCardEl.className = 'tree-item-self puffs-tag-note-card is-clickable puffs-tag-shelf-note-card';
+        noteCardEl.dataset.path = file.path;
+
+        if (!isVirtual) {
+          const orderButtonEl = document.createElement('button');
+          orderButtonEl.type = 'button';
+          orderButtonEl.className = 'clickable-icon puffs-tag-note-order-button';
+          orderButtonEl.dataset.puffsTag = tag;
+          orderButtonEl.dataset.path = file.path;
+          orderButtonEl.dataset.puffsSurface = 'shelf';
+          orderButtonEl.setAttribute('aria-label', '选中笔记并使用快捷键调整顺序');
+          setIcon(orderButtonEl, 'list-todo');
+          this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
+          orderButtonEl.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.plugin.toggleNoteOrderTarget(tag, file.path, 'shelf');
+          });
+          noteCardEl.appendChild(orderButtonEl);
+        }
+
+        const noteInnerEl = document.createElement('div');
+        noteInnerEl.className = 'tree-item-inner';
+
+        const noteTextEl = document.createElement('div');
+        noteTextEl.className = 'tree-item-inner-text';
+        noteTextEl.textContent = file.basename;
+
+        noteInnerEl.appendChild(noteTextEl);
+        noteCardEl.appendChild(noteInnerEl);
+        noteCardEl.addEventListener('click', () => {
+          this.plugin.openNoteCard(noteCardEl).catch((error) => {
+            console.error('[Puffs Tag Enhance] Failed to open note:', error);
+            new Notice('打开笔记失败');
+          });
+        });
+        noteItemEl.appendChild(noteCardEl);
+        notesEl.appendChild(noteItemEl);
+      }
+
+      treeItemEl.appendChild(notesEl);
+    }
+
+    this.listEl.appendChild(treeItemEl);
+  }
 }
 
 class PuffsTagEnhancePlugin extends Plugin {
@@ -255,6 +645,8 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.settings = { ...DEFAULT_SETTINGS };
     this.tagFileIndex = new Map();
     this.expandedTags = new Set();
+    this.selectedNoteOrderTarget = null;
+    this.noteOrderHotkeyScope = null;
     this.viewPatches = new WeakMap();
     this.lastMainLeaf = null;
     this.currentMainFilePath = null;
@@ -268,6 +660,13 @@ class PuffsTagEnhancePlugin extends Plugin {
     await this.loadSettings();
 
     this.isUnloaded = false;
+    this.registerView(TAG_SHELF_VIEW_TYPE, (leaf) => new PuffsTagShelfView(leaf, this));
+    this.addCommand({
+      id: 'open-tag-shelf',
+      name: '打开标签系统',
+      callback: () => this.openTagShelf(),
+    });
+    this.addRibbonIcon(TAG_SYSTEM_ICON, '打开标签系统', () => this.openTagShelf());
     this.injectStyle();
     this.refreshTagIndexAndViews();
     this.registerKeyboardHandler();
@@ -291,6 +690,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
   onunload() {
     this.isUnloaded = true;
+    this.deactivateNoteOrderHotkeyScope();
     this.clearInitialTagIndexRefreshTimers();
     this.restoreAllTagViews();
     this.removeStyle();
@@ -301,9 +701,19 @@ class PuffsTagEnhancePlugin extends Plugin {
     const savedSettings = (await this.loadData()) || {};
     this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
+    this.settings.moveNoteUpHotkey = normalizeHotkeyText(
+      this.settings.moveNoteUpHotkey,
+      DEFAULT_MOVE_NOTE_UP_HOTKEY
+    );
+    this.settings.moveNoteDownHotkey = normalizeHotkeyText(
+      this.settings.moveNoteDownHotkey,
+      DEFAULT_MOVE_NOTE_DOWN_HOTKEY
+    );
     if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== 'object') {
       this.settings.tagSidebarPreferredFiles = {};
     }
+    this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    delete this.settings.tagOrder;
   }
 
   async saveSettings() {
@@ -313,14 +723,280 @@ class PuffsTagEnhancePlugin extends Plugin {
   async updateSettings(newSettings) {
     this.settings = Object.assign({}, this.settings, newSettings);
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
+    this.settings.moveNoteUpHotkey = normalizeHotkeyText(
+      this.settings.moveNoteUpHotkey,
+      DEFAULT_MOVE_NOTE_UP_HOTKEY
+    );
+    this.settings.moveNoteDownHotkey = normalizeHotkeyText(
+      this.settings.moveNoteDownHotkey,
+      DEFAULT_MOVE_NOTE_DOWN_HOTKEY
+    );
     if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== 'object') {
       this.settings.tagSidebarPreferredFiles = {};
     }
+    this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    delete this.settings.tagOrder;
     await this.saveSettings();
     this.refreshTagViewHotkeys();
+    if (
+      newSettings &&
+      (
+        Object.prototype.hasOwnProperty.call(newSettings, 'moveNoteUpHotkey') ||
+        Object.prototype.hasOwnProperty.call(newSettings, 'moveNoteDownHotkey')
+      )
+    ) {
+      this.refreshNoteOrderHotkeyScope();
+    }
 
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'autoSwitchToOutlineEnabled')) {
       this.applySidebarPreferenceForCurrentFile();
+    }
+  }
+
+  normalizeNoteOrderByTag(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+
+    const result = {};
+    for (const [rawTag, rawPaths] of Object.entries(value)) {
+      const tag = normalizeTag(rawTag);
+      if (!tag || isNestedTag(tag) || !Array.isArray(rawPaths)) continue;
+
+      const seen = new Set();
+      const paths = [];
+      for (const rawPath of rawPaths) {
+        const path = typeof rawPath === 'string' ? rawPath.trim() : '';
+        if (!path || seen.has(path)) continue;
+        seen.add(path);
+        paths.push(path);
+      }
+
+      if (paths.length > 0) result[tag] = paths;
+    }
+
+    return result;
+  }
+
+  getOrderedFilesForTag(tagValue, files) {
+    const tag = normalizeTag(tagValue);
+    const savedOrder = tag && this.settings.noteOrderByTag[tag];
+    if (!Array.isArray(savedOrder) || savedOrder.length === 0) return files;
+
+    const rank = new Map(savedOrder.map((path, index) => [path, index]));
+    return files
+      .map((file, index) => ({ file, index }))
+      .sort((a, b) => {
+        const aRank = rank.get(a.file.path);
+        const bRank = rank.get(b.file.path);
+        const aIsRanked = Number.isInteger(aRank);
+        const bIsRanked = Number.isInteger(bRank);
+
+        if (aIsRanked && bIsRanked) return aRank - bRank;
+        if (aIsRanked) return -1;
+        if (bIsRanked) return 1;
+        return a.index - b.index;
+      })
+      .map(({ file }) => file);
+  }
+
+  getTagShelfItems(query = '') {
+    const intersectionTerms = splitIntersectionSearchTerms(query);
+    if (intersectionTerms) return this.getIntersectionSearchItems(intersectionTerms);
+
+    const unionTerms = splitUnionSearchTerms(query);
+    const items = Array.from(this.tagFileIndex.entries())
+      .filter(([tag, files]) => !isNestedTag(tag) && files.length > 0)
+      .map(([tag, files]) => ({
+        tag,
+        displayName: getTagDisplayName(tag),
+        isVirtual: false,
+        files: this.getOrderedFilesForTag(tag, files),
+      }))
+      .sort((a, b) => {
+        const countDiff = b.files.length - a.files.length;
+        return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
+      });
+
+    if (unionTerms) return items.filter((item) => tagMatchesAnySearchTerm(item.tag, unionTerms));
+    return items.filter((item) => tagMatchesSearchText(item.tag, query));
+  }
+
+  isNoteOrderTargetSelected(tag, path) {
+    return !!(
+      this.selectedNoteOrderTarget &&
+      this.selectedNoteOrderTarget.tag === tag &&
+      this.selectedNoteOrderTarget.path === path
+    );
+  }
+
+  syncNoteOrderButtonSelection(buttonEl) {
+    if (!buttonEl) return;
+    const isSelected = this.isNoteOrderTargetSelected(
+      buttonEl.dataset.puffsTag,
+      buttonEl.dataset.path
+    );
+    buttonEl.classList.toggle('is-selected', isSelected);
+    buttonEl.setAttribute('aria-pressed', String(isSelected));
+    const noteItemEl = buttonEl.closest('.puffs-tag-note-item');
+    if (noteItemEl) noteItemEl.classList.toggle('is-order-selected', isSelected);
+  }
+
+  refreshNoteOrderSelectionState() {
+    document.querySelectorAll('.puffs-tag-note-order-button').forEach((buttonEl) => {
+      this.syncNoteOrderButtonSelection(buttonEl);
+    });
+  }
+
+  activateNoteOrderHotkeyScope() {
+    if (this.noteOrderHotkeyScope || !this.selectedNoteOrderTarget) return;
+
+    const scope = new Scope();
+    const registerMoveHotkey = (settingValue, fallback, direction) => {
+      const hotkey = parseHotkeyText(settingValue, fallback);
+      scope.register(hotkey.modifiers, hotkey.key, (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        this.moveSelectedNote(direction).catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to move selected note:', error);
+          new Notice('调整笔记顺序失败');
+        });
+        return false;
+      });
+    };
+
+    registerMoveHotkey(
+      this.settings.moveNoteUpHotkey,
+      DEFAULT_MOVE_NOTE_UP_HOTKEY,
+      -1
+    );
+    registerMoveHotkey(
+      this.settings.moveNoteDownHotkey,
+      DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
+      1
+    );
+    this.app.keymap.pushScope(scope);
+    this.noteOrderHotkeyScope = scope;
+  }
+
+  deactivateNoteOrderHotkeyScope() {
+    if (!this.noteOrderHotkeyScope) return;
+    this.app.keymap.popScope(this.noteOrderHotkeyScope);
+    this.noteOrderHotkeyScope = null;
+  }
+
+  refreshNoteOrderHotkeyScope() {
+    const shouldReactivate = !!this.selectedNoteOrderTarget;
+    this.deactivateNoteOrderHotkeyScope();
+    if (shouldReactivate) this.activateNoteOrderHotkeyScope();
+  }
+
+  toggleNoteOrderTarget(tagValue, path, surface = '') {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !path) return;
+
+    if (this.isNoteOrderTargetSelected(tag, path)) {
+      this.selectedNoteOrderTarget = null;
+      this.deactivateNoteOrderHotkeyScope();
+    } else {
+      this.selectedNoteOrderTarget = { tag, path, surface };
+      this.refreshNoteOrderHotkeyScope();
+    }
+    this.refreshNoteOrderSelectionState();
+  }
+
+  clearNoteOrderTarget() {
+    if (!this.selectedNoteOrderTarget) return;
+    this.selectedNoteOrderTarget = null;
+    this.deactivateNoteOrderHotkeyScope();
+    this.refreshNoteOrderSelectionState();
+  }
+
+  focusSelectedNoteOrderButton() {
+    if (!this.selectedNoteOrderTarget) return;
+    const { tag, path, surface } = this.selectedNoteOrderTarget;
+    const buttons = Array.from(document.querySelectorAll('.puffs-tag-note-order-button'));
+    const buttonEl =
+      buttons.find((button) =>
+        button.dataset.puffsTag === tag &&
+        button.dataset.path === path &&
+        button.dataset.puffsSurface === surface &&
+        button.offsetParent !== null
+      ) ||
+      buttons.find((button) =>
+        button.dataset.puffsTag === tag &&
+        button.dataset.path === path &&
+        button.offsetParent !== null
+      );
+    if (buttonEl) buttonEl.focus({ preventScroll: true });
+  }
+
+  async moveSelectedNote(direction) {
+    const target = this.selectedNoteOrderTarget;
+    if (!target || (direction !== -1 && direction !== 1)) return false;
+
+    const files = this.getOrderedFilesForTag(target.tag, this.tagFileIndex.get(target.tag) || []);
+    const currentIndex = files.findIndex((file) => file.path === target.path);
+    if (currentIndex < 0) {
+      this.clearNoteOrderTarget();
+      return false;
+    }
+
+    const nextIndex = currentIndex + direction;
+    if (nextIndex < 0 || nextIndex >= files.length) return false;
+
+    const neighborPath = files[nextIndex].path;
+    await this.reorderNote(
+      target.tag,
+      target.path,
+      neighborPath,
+      direction < 0 ? 'before' : 'after'
+    );
+    window.setTimeout(() => {
+      this.refreshNoteOrderSelectionState();
+      this.focusSelectedNoteOrderButton();
+    }, 0);
+    return true;
+  }
+
+  async reorderNote(tagValue, movingPath, targetPath, placement) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || isNestedTag(tag) || !movingPath || !targetPath || movingPath === targetPath) return;
+
+    const order = this.getOrderedFilesForTag(tag, this.tagFileIndex.get(tag) || []).map((file) => file.path);
+    const movingIndex = order.indexOf(movingPath);
+    const targetIndex = order.indexOf(targetPath);
+    if (movingIndex < 0 || targetIndex < 0) return;
+
+    order.splice(movingIndex, 1);
+    const nextTargetIndex = order.indexOf(targetPath);
+    const insertIndex = placement === 'after' ? nextTargetIndex + 1 : nextTargetIndex;
+    order.splice(insertIndex, 0, movingPath);
+
+    this.settings.noteOrderByTag[tag] = order;
+    await this.saveSettings();
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+
+  refreshTagShelfViews() {
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)) {
+      if (leaf.view && typeof leaf.view.refresh === 'function') {
+        leaf.view.refresh();
+      }
+    }
+  }
+
+  async openTagShelf() {
+    this.rememberCurrentMainLeaf();
+
+    const existing = this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)[0];
+    const leaf = existing || this.app.workspace.getLeaf('tab');
+    if (!existing) {
+      await leaf.setViewState({ type: TAG_SHELF_VIEW_TYPE, state: {} });
+    }
+
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    if (leaf.view && typeof leaf.view.refresh === 'function') {
+      leaf.view.refresh();
     }
   }
 
@@ -345,7 +1021,14 @@ class PuffsTagEnhancePlugin extends Plugin {
 }
 
 .puffs-tag-note-card {
+  display: flex;
+  align-items: center;
   cursor: pointer;
+}
+
+.puffs-tag-note-card .tree-item-inner {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .puffs-tag-note-card .tree-item-inner-text {
@@ -398,6 +1081,215 @@ class PuffsTagEnhancePlugin extends Plugin {
 .puffs-tag-rename-input:focus {
   border-color: var(--interactive-accent);
 }
+
+.puffs-tag-shelf-view {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0 !important;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  background: var(--background-primary);
+}
+
+.puffs-tag-shelf-page {
+  box-sizing: border-box;
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  padding: 18px 20px 28px;
+}
+
+.puffs-tag-shelf-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 14px;
+}
+
+.puffs-tag-shelf-title {
+  margin: 0;
+  color: var(--text-normal);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.puffs-tag-shelf-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 20%);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.puffs-tag-shelf-summary-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 16%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-muted) 5%, transparent);
+}
+
+.puffs-tag-shelf-summary-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.puffs-tag-shelf-summary-value {
+  margin-top: 4px;
+  color: var(--text-normal);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.puffs-tag-shelf-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  margin: 18px 0;
+}
+
+.puffs-tag-shelf-section-title {
+  margin: 0;
+  color: var(--text-normal);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.puffs-tag-shelf-search-host,
+.puffs-tag-shelf-search-container {
+  width: min(210px, 26vw);
+  min-width: 110px;
+}
+
+.puffs-tag-shelf-search-container input {
+  width: 100%;
+}
+
+.puffs-tag-shelf-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+}
+
+.puffs-tag-shelf-card {
+  position: relative;
+  width: 100%;
+}
+
+.puffs-tag-shelf-card .tree-item-self.is-clickable .tree-item-inner {
+  font-size: var(--puffs-tag-shelf-tree-font-size) !important;
+  line-height: var(--puffs-tag-shelf-tree-line-height) !important;
+  font-weight: var(--puffs-tag-shelf-tree-font-weight) !important;
+  letter-spacing: var(--puffs-tag-shelf-tree-letter-spacing) !important;
+}
+
+.puffs-tag-shelf-tag-row {
+  align-items: var(--puffs-tag-shelf-row-align-items, center) !important;
+  min-height: 30px;
+  margin-inline-start: 0 !important;
+  padding-inline-start: 24px !important;
+}
+
+.puffs-tag-shelf-tag-row .tree-item-flair {
+  display: var(--puffs-tag-shelf-flair-display, flex) !important;
+  align-items: var(--puffs-tag-shelf-flair-align-items, center) !important;
+  font-size: var(--puffs-tag-shelf-flair-font-size, 16px) !important;
+  line-height: var(--puffs-tag-shelf-flair-line-height, 1) !important;
+}
+
+.puffs-tag-shelf-notes {
+  display: block;
+}
+
+.puffs-tag-note-list,
+.puffs-tag-note-item {
+  position: relative;
+}
+
+.puffs-tag-shelf-note-card {
+  width: auto;
+  min-height: 28px;
+  margin-inline-start: -17px !important;
+  padding-inline-start: 17px !important;
+}
+
+.puffs-tag-shelf-virtual .puffs-tag-shelf-note-card {
+  padding-inline-start: 41px !important;
+}
+
+.puffs-tag-note-order-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.puffs-tag-note-order-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.puffs-tag-note-order-button.is-selected {
+  background: color-mix(in srgb, var(--interactive-accent) 16%, transparent);
+  color: var(--interactive-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+}
+
+.puffs-tag-note-order-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.puffs-tag-note-item.is-order-selected > .puffs-tag-note-card {
+  background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
+}
+
+.puffs-tag-shelf-empty {
+  padding: 30px 18px;
+  border: 1px dashed color-mix(in srgb, var(--text-muted) 20%, transparent);
+  border-radius: 8px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  .puffs-tag-shelf-page {
+    padding: 16px 14px 24px;
+  }
+
+  .puffs-tag-shelf-summary {
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  }
+
+  .puffs-tag-shelf-section-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .puffs-tag-shelf-search-host,
+  .puffs-tag-shelf-search-container {
+    width: 100%;
+    min-width: 0;
+  }
+}
 `;
     document.head.appendChild(styleEl);
   }
@@ -421,14 +1313,22 @@ class PuffsTagEnhancePlugin extends Plugin {
     };
 
     document.addEventListener('keydown', this.keydownHandler, true);
+    this.pointerdownHandler = (evt) => {
+      if (!this.selectedNoteOrderTarget) return;
+      const target = evt.target instanceof Element ? evt.target : null;
+      if (target && target.closest('.puffs-tag-note-order-button')) return;
+      this.clearNoteOrderTarget();
+    };
+    document.addEventListener('pointerdown', this.pointerdownHandler, true);
     this.register(() => {
       document.removeEventListener('keydown', this.keydownHandler, true);
+      document.removeEventListener('pointerdown', this.pointerdownHandler, true);
       this.keydownHandler = null;
+      this.pointerdownHandler = null;
     });
   }
 
-  isQuickSearchHotkey(evt) {
-    const hotkey = this.getQuickSearchHotkey();
+  eventMatchesHotkey(evt, hotkey) {
     const keyMatches = evt.key && evt.key.toLowerCase() === hotkey.key.toLowerCase();
     if (!keyMatches) return false;
 
@@ -449,12 +1349,28 @@ class PuffsTagEnhancePlugin extends Plugin {
     );
   }
 
+  isQuickSearchHotkey(evt) {
+    return this.eventMatchesHotkey(evt, this.getQuickSearchHotkey());
+  }
+
   getQuickSearchHotkey() {
     return parseHotkeyText(this.settings.toggleSearchHotkey);
   }
 
   getQuickSearchHotkeyDisplay() {
     return formatHotkey(this.getQuickSearchHotkey());
+  }
+
+  getMoveNoteUpHotkeyDisplay() {
+    return formatHotkey(
+      parseHotkeyText(this.settings.moveNoteUpHotkey, DEFAULT_MOVE_NOTE_UP_HOTKEY)
+    );
+  }
+
+  getMoveNoteDownHotkeyDisplay() {
+    return formatHotkey(
+      parseHotkeyText(this.settings.moveNoteDownHotkey, DEFAULT_MOVE_NOTE_DOWN_HOTKEY)
+    );
   }
 
   handleActiveLeafChange(leaf) {
@@ -646,6 +1562,46 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.saveSettings();
   }
 
+  handleNoteOrderFileRename(file, oldPath) {
+    if (!(file instanceof TFile) || file.extension !== 'md' || !oldPath || !file.path) return;
+
+    let changed = false;
+    for (const [tag, paths] of Object.entries(this.settings.noteOrderByTag)) {
+      if (!Array.isArray(paths) || !paths.includes(oldPath)) continue;
+
+      this.settings.noteOrderByTag[tag] = Array.from(
+        new Set(paths.map((path) => (path === oldPath ? file.path : path)))
+      );
+      changed = true;
+    }
+
+    if (changed) {
+      this.saveSettings().catch((error) => {
+        console.error('[Puffs Tag Enhance] Failed to update note order after rename:', error);
+      });
+    }
+  }
+
+  handleNoteOrderFileDelete(file) {
+    if (!(file instanceof TFile) || file.extension !== 'md' || !file.path) return;
+
+    let changed = false;
+    for (const [tag, paths] of Object.entries(this.settings.noteOrderByTag)) {
+      if (!Array.isArray(paths) || !paths.includes(file.path)) continue;
+
+      const nextPaths = paths.filter((path) => path !== file.path);
+      if (nextPaths.length > 0) this.settings.noteOrderByTag[tag] = nextPaths;
+      else delete this.settings.noteOrderByTag[tag];
+      changed = true;
+    }
+
+    if (changed) {
+      this.saveSettings().catch((error) => {
+        console.error('[Puffs Tag Enhance] Failed to update note order after delete:', error);
+      });
+    }
+  }
+
   registerWorkspaceHandlers() {
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', (leaf) => {
@@ -671,10 +1627,12 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.registerEvent(this.app.metadataCache.on('deleted', scheduleRefresh));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       this.handlePreferredFileRename(file, oldPath);
+      this.handleNoteOrderFileRename(file, oldPath);
       scheduleRefresh();
     }));
     this.registerEvent(this.app.vault.on('delete', (file) => {
       this.handlePreferredFileDelete(file);
+      this.handleNoteOrderFileDelete(file);
       scheduleRefresh();
     }));
   }
@@ -700,6 +1658,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     this.rebuildTagFileIndex();
     this.refreshTagViews();
+    this.refreshTagShelfViews();
   }
 
   queueInitialTagIndexRefreshes() {
@@ -919,6 +1878,29 @@ class PuffsTagEnhancePlugin extends Plugin {
 
       expandAllEl.addEventListener('click', onExpandAllClick, true);
       patch.cleanup.push(() => expandAllEl.removeEventListener('click', onExpandAllClick, true));
+
+      const tagSystemButtonEl = document.createElement('div');
+      tagSystemButtonEl.className = 'clickable-icon nav-action-button puffs-tag-system-button';
+      tagSystemButtonEl.setAttribute('aria-label', '打开标签系统');
+      setIcon(tagSystemButtonEl, TAG_SYSTEM_ICON);
+      expandAllEl.insertAdjacentElement('afterend', tagSystemButtonEl);
+
+      const onTagSystemButtonClick = (evt) => {
+        if (evt.button !== 0) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        this.openTagShelf().catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to open tag system:', error);
+          new Notice('打开标签系统失败');
+        });
+      };
+
+      tagSystemButtonEl.addEventListener('click', onTagSystemButtonClick, true);
+      patch.cleanup.push(() => {
+        tagSystemButtonEl.removeEventListener('click', onTagSystemButtonClick, true);
+        tagSystemButtonEl.remove();
+      });
     }
 
     this.patchMultiTagSearch(view, patch);
@@ -928,6 +1910,19 @@ class PuffsTagEnhancePlugin extends Plugin {
 
       const target = evt.target instanceof Element ? evt.target : null;
       if (!target || !view.containerEl.contains(target)) return;
+
+      const orderButtonEl = target.closest('.puffs-tag-note-order-button');
+      if (orderButtonEl) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        this.toggleNoteOrderTarget(
+          orderButtonEl.dataset.puffsTag,
+          orderButtonEl.dataset.path,
+          'sidebar'
+        );
+        return;
+      }
 
       const noteCardEl = target.closest('.puffs-tag-note-card');
       if (noteCardEl) {
@@ -1298,7 +2293,7 @@ class PuffsTagEnhancePlugin extends Plugin {
         tag: normalizedTag,
         displayName: getTagDisplayName(normalizedTag),
         isVirtual: false,
-        files: this.tagFileIndex.get(normalizedTag) || [],
+        files: this.getOrderedFilesForTag(normalizedTag, this.tagFileIndex.get(normalizedTag) || []),
       });
     };
 
@@ -1440,7 +2435,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     treeItemEl.appendChild(tagEl);
 
     if (isExpanded) {
-      this.renderNoteList(treeItemEl, files);
+      this.renderNoteList(treeItemEl, files, tag, isVirtual);
     }
 
     listEl.appendChild(treeItemEl);
@@ -1518,7 +2513,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     toggleEl.setAttribute('aria-hidden', 'true');
 
     if (isExpanded) {
-      this.renderNoteList(treeItemEl, files);
+      this.renderNoteList(treeItemEl, files, tag, false);
     } else {
       this.removeNoteList(treeItemEl);
     }
@@ -1535,7 +2530,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
   }
 
-  renderNoteList(treeItemEl, files) {
+  renderNoteList(treeItemEl, files, tagValue, isVirtual = false) {
     let listEl = Array.from(treeItemEl.children).find((el) =>
       el.classList.contains('puffs-tag-note-list')
     );
@@ -1549,18 +2544,37 @@ class PuffsTagEnhancePlugin extends Plugin {
     listEl.className = 'tree-item-children puffs-tag-note-list';
     listEl.empty();
 
+    const tag = normalizeTag(tagValue);
+    const canReorder = !!tag && !isVirtual && !isNestedTag(tag);
     for (const file of files) {
       const itemEl = document.createElement('div');
       itemEl.className = 'tree-item puffs-tag-note-item';
+      itemEl.dataset.path = file.path;
+      itemEl.classList.toggle(
+        'is-order-selected',
+        this.isNoteOrderTargetSelected(tag, file.path)
+      );
 
       const cardEl = document.createElement('div');
       cardEl.className = 'tree-item-self puffs-tag-note-card is-clickable';
       cardEl.dataset.path = file.path;
-      cardEl.title = file.path;
       cardEl.style.marginInlineStart = '-17px';
       cardEl.style.setProperty('margin-inline-start', '-17px', 'important');
-      cardEl.style.paddingInlineStart = '41px';
-      cardEl.style.setProperty('padding-inline-start', '41px', 'important');
+      cardEl.style.paddingInlineStart = canReorder ? '17px' : '41px';
+      cardEl.style.setProperty('padding-inline-start', canReorder ? '17px' : '41px', 'important');
+
+      if (canReorder) {
+        const orderButtonEl = document.createElement('button');
+        orderButtonEl.type = 'button';
+        orderButtonEl.className = 'clickable-icon puffs-tag-note-order-button';
+        orderButtonEl.dataset.puffsTag = tag;
+        orderButtonEl.dataset.path = file.path;
+        orderButtonEl.dataset.puffsSurface = 'sidebar';
+        orderButtonEl.setAttribute('aria-label', '选中笔记并使用快捷键调整顺序');
+        setIcon(orderButtonEl, 'list-todo');
+        this.syncNoteOrderButtonSelection(orderButtonEl);
+        cardEl.appendChild(orderButtonEl);
+      }
 
       const innerEl = document.createElement('div');
       innerEl.className = 'tree-item-inner';
@@ -1685,6 +2699,15 @@ class PuffsTagEnhancePlugin extends Plugin {
       this.expandedTags.add(newTag);
     }
 
+    const oldNoteOrder = this.settings.noteOrderByTag[oldTag];
+    if (Array.isArray(oldNoteOrder)) {
+      const existingOrder = this.settings.noteOrderByTag[newTag] || [];
+      this.settings.noteOrderByTag[newTag] = Array.from(new Set([...oldNoteOrder, ...existingOrder]));
+      delete this.settings.noteOrderByTag[oldTag];
+      this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+      await this.saveSettings();
+    }
+
     this.refreshTagIndexAndViews();
   }
 
@@ -1783,7 +2806,8 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   isUsableMainLeaf(leaf) {
-    return this.isMainWorkspaceLeaf(leaf);
+    if (!this.isMainWorkspaceLeaf(leaf)) return false;
+    return !leaf.view || leaf.view.getViewType() !== TAG_SHELF_VIEW_TYPE;
   }
 
   isMainWorkspaceLeaf(leaf) {
@@ -1937,6 +2961,30 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
           .setPlaceholder(DEFAULT_QUICK_SEARCH_HOTKEY)
           .onChange(async (value) => {
             await this.plugin.updateSettings({ toggleSearchHotkey: value });
+          });
+      });
+
+    new Setting(containerEl)
+      .setName('选中笔记上移快捷键')
+      .setDesc('点击笔记左侧的任务列表按钮后，使用该快捷键将笔记上移一格')
+      .addText((text) => {
+        text
+          .setValue(this.plugin.getMoveNoteUpHotkeyDisplay())
+          .setPlaceholder(DEFAULT_MOVE_NOTE_UP_HOTKEY)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ moveNoteUpHotkey: value });
+          });
+      });
+
+    new Setting(containerEl)
+      .setName('选中笔记下移快捷键')
+      .setDesc('点击笔记左侧的任务列表按钮后，使用该快捷键将笔记下移一格')
+      .addText((text) => {
+        text
+          .setValue(this.plugin.getMoveNoteDownHotkeyDisplay())
+          .setPlaceholder(DEFAULT_MOVE_NOTE_DOWN_HOTKEY)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ moveNoteDownHotkey: value });
           });
       });
 
