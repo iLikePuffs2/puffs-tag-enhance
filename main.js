@@ -659,6 +659,8 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.initialTagIndexRefreshTimers = [];
     this.noteOrderTrackingReady = false;
     this.settingsSavePromise = Promise.resolve();
+    this.activeTagRename = null;
+    this.tagRenameProtectionTimer = null;
     this.isUnloaded = false;
   }
 
@@ -698,6 +700,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.isUnloaded = true;
     this.deactivateNoteOrderHotkeyScope();
     this.clearInitialTagIndexRefreshTimers();
+    this.clearTagRenameProtectionTimer();
     this.restoreAllTagViews();
     this.removeStyle();
     console.log('Puffs 标签增强: 已卸载');
@@ -1662,6 +1665,7 @@ class PuffsTagEnhancePlugin extends Plugin {
   scheduleMetadataRefresh(file) {
     const changedPath = file instanceof TFile && file.extension === 'md' ? file.path : null;
     this.refreshTagIndexAndViews(changedPath);
+    this.finishTagRenameProtectionIfSettled();
   }
 
   refreshTagIndexAndViews(changedPath = null, initializeNoteOrders = false) {
@@ -1698,6 +1702,41 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.initialTagIndexRefreshTimers = [];
   }
 
+  clearTagRenameProtectionTimer() {
+    if (!this.tagRenameProtectionTimer) return;
+    window.clearTimeout(this.tagRenameProtectionTimer);
+    this.tagRenameProtectionTimer = null;
+  }
+
+  isTagRenameMetadataSettled(migration = this.activeTagRename) {
+    if (!migration || !migration.committed) return false;
+
+    const oldPaths = new Set((this.tagFileIndex.get(migration.oldTag) || []).map((file) => file.path));
+    const newPaths = new Set((this.tagFileIndex.get(migration.newTag) || []).map((file) => file.path));
+    return Array.from(migration.affectedPaths).every((path) => !oldPaths.has(path) && newPaths.has(path));
+  }
+
+  finishTagRenameProtectionIfSettled() {
+    const migration = this.activeTagRename;
+    if (!this.isTagRenameMetadataSettled(migration)) return false;
+
+    this.clearTagRenameProtectionTimer();
+    this.activeTagRename = null;
+    this.refreshTagIndexAndViews();
+    return true;
+  }
+
+  scheduleTagRenameProtectionFallback(migration) {
+    this.clearTagRenameProtectionTimer();
+    this.tagRenameProtectionTimer = window.setTimeout(() => {
+      this.tagRenameProtectionTimer = null;
+      if (this.activeTagRename !== migration) return;
+
+      this.activeTagRename = null;
+      this.refreshTagIndexAndViews();
+    }, 5000);
+  }
+
   rebuildTagFileIndex(changedPath = null, initializeNoteOrders = false) {
     const nextIndex = new Map();
 
@@ -1721,7 +1760,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     if (initializeNoteOrders && !this.noteOrderTrackingReady) {
       noteOrderChanged = this.initializeNoteOrders(nextIndex);
       this.noteOrderTrackingReady = true;
-    } else if (this.noteOrderTrackingReady) {
+    } else if (this.noteOrderTrackingReady && !this.activeTagRename) {
       noteOrderChanged = this.reconcileNoteOrders(nextIndex, changedPath);
     }
 
@@ -2689,28 +2728,54 @@ class PuffsTagEnhancePlugin extends Plugin {
     if (!newTag) throw new Error('标签名称不能为空');
     if (/\s/.test(getTagDisplayName(newTag))) throw new Error('标签名称不能包含空格');
     if (oldTag === newTag) return;
+    if (this.activeTagRename) throw new Error('上一次标签修改仍在同步，请稍后再试');
 
     this.rebuildTagFileIndex();
     const files = Array.from(new Set(this.tagFileIndex.get(oldTag) || []));
+    const oldNoteOrder = this.getOrderedFilesForTag(oldTag, files).map((file) => file.path);
+    const existingNewFiles = Array.from(new Set(this.tagFileIndex.get(newTag) || []));
+    const existingNewOrder = this.getOrderedFilesForTag(newTag, existingNewFiles).map((file) => file.path);
+    const migratedOrder = Array.from(new Set([...oldNoteOrder, ...existingNewOrder]));
+    const migration = {
+      oldTag,
+      newTag,
+      affectedPaths: new Set(files.map((file) => file.path)),
+      committed: false,
+    };
 
-    for (const file of files) {
-      await this.renameTagInFile(file, oldTag, newTag);
-    }
+    this.activeTagRename = migration;
 
-    if (this.expandedTags.delete(oldTag)) {
-      this.expandedTags.add(newTag);
-    }
+    try {
+      for (const file of files) {
+        await this.renameTagInFile(file, oldTag, newTag);
+      }
 
-    const oldNoteOrder = this.settings.noteOrderByTag[oldTag];
-    if (Array.isArray(oldNoteOrder)) {
-      const existingOrder = this.settings.noteOrderByTag[newTag] || [];
-      this.settings.noteOrderByTag[newTag] = Array.from(new Set([...oldNoteOrder, ...existingOrder]));
+      if (this.expandedTags.delete(oldTag)) {
+        this.expandedTags.add(newTag);
+      }
+
+      if (migratedOrder.length > 0) {
+        this.settings.noteOrderByTag[newTag] = migratedOrder;
+      } else {
+        delete this.settings.noteOrderByTag[newTag];
+      }
       delete this.settings.noteOrderByTag[oldTag];
       this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
       await this.saveSettings();
-    }
 
-    this.refreshTagIndexAndViews();
+      migration.committed = true;
+      this.refreshTagIndexAndViews();
+      if (!this.finishTagRenameProtectionIfSettled()) {
+        this.scheduleTagRenameProtectionFallback(migration);
+      }
+    } catch (error) {
+      if (this.activeTagRename === migration) {
+        this.activeTagRename = null;
+        this.clearTagRenameProtectionTimer();
+        this.refreshTagIndexAndViews();
+      }
+      throw error;
+    }
   }
 
   async renameTagInFile(file, oldTag, newTag) {
