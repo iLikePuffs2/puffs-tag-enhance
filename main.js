@@ -64,6 +64,34 @@ function normalizeSearchTerm(value) {
   return String(value || '').trim().replace(/^#/, '').toLowerCase();
 }
 
+function parseNoteCardSearch(value) {
+  const text = String(value || '');
+  const firstDelimiter = text.indexOf('*');
+  if (firstDelimiter < 0) return null;
+
+  const tagQuery = text.slice(0, firstDelimiter).trim();
+  const noteQuery = text.slice(firstDelimiter + 1).trim();
+  const hasSingleDelimiter = firstDelimiter === text.lastIndexOf('*');
+  const mixesTagOperators = tagQuery.includes('|') && tagQuery.includes('&');
+
+  return {
+    tagQuery,
+    noteQuery,
+    isValid: !!tagQuery && !!noteQuery && hasSingleDelimiter && !mixesTagOperators,
+    isTagOnly: !!tagQuery && !noteQuery && hasSingleDelimiter && !mixesTagOperators,
+  };
+}
+
+function getTagFilterQuery(value) {
+  const noteCardSearch = parseNoteCardSearch(value);
+  return noteCardSearch ? noteCardSearch.tagQuery : String(value || '');
+}
+
+function fileMatchesNoteSearch(file, value) {
+  const term = String(value || '').trim().toLowerCase();
+  return !!term && String((file && file.basename) || '').toLowerCase().includes(term);
+}
+
 function splitUnionSearchTerms(value) {
   const text = String(value || '');
   if (!text.includes('|') || text.includes('&')) return null;
@@ -110,6 +138,38 @@ function createMultiTagSearchQuery(query, terms) {
     query,
     matcher: true,
     matchContent: (content) => tagMatchesAnySearchTerm(content, terms),
+  };
+}
+
+function createTagFilterSearchQuery(query, tagQuery) {
+  const unionTerms = splitUnionSearchTerms(tagQuery);
+  const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
+  const mixesTagOperators = tagQuery.includes('|') && tagQuery.includes('&');
+
+  return {
+    query,
+    matcher: true,
+    matchContent: (content) => {
+      if (mixesTagOperators) return false;
+      if (unionTerms || intersectionTerms) {
+        return tagMatchesAnySearchTerm(content, unionTerms || intersectionTerms);
+      }
+      return tagMatchesSearchText(content, tagQuery);
+    },
+  };
+}
+
+function createNoteCardSearchState() {
+  return {
+    query: '',
+    matches: [],
+    activeIndex: -1,
+    target: null,
+    autoExpandedTag: null,
+    autoExpandedWasAlreadyExpanded: false,
+    lastScrolledKey: '',
+    pendingScrollKey: '',
+    effectTimer: null,
   };
 }
 
@@ -286,6 +346,7 @@ class PuffsTagShelfView extends ItemView {
     this.searchComponent = null;
     this.isShowingSearch = true;
     this.searchHotkeyHandler = null;
+    this.noteCardSearchState = createNoteCardSearchState();
     this.listEl = null;
     this.summaryTagCountEl = null;
     this.summaryNoteCountEl = null;
@@ -316,6 +377,7 @@ class PuffsTagShelfView extends ItemView {
       document.removeEventListener('keydown', this.searchHotkeyHandler, true);
       this.searchHotkeyHandler = null;
     }
+    this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
     this.searchComponent = null;
   }
 
@@ -412,6 +474,15 @@ class PuffsTagShelfView extends ItemView {
       this.searchQuery = value;
       this.renderTagList();
     });
+    this.searchComponent.inputEl.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.isComposing) return;
+      if (!this.plugin.advanceNoteCardSearchState(this.noteCardSearchState, this.expandedTags)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.renderTagList();
+    });
 
     sectionHeaderEl.appendChild(sectionTitleEl);
     sectionHeaderEl.appendChild(searchHostEl);
@@ -475,7 +546,18 @@ class PuffsTagShelfView extends ItemView {
 
     const query = this.searchQuery.trim();
     const items = this.plugin.getTagShelfItems(query);
-    this.syncAutoSingleSearchResult(query, items);
+    const noteCardSearch = parseNoteCardSearch(query);
+    if (noteCardSearch && noteCardSearch.isValid) {
+      this.clearAutoExpandedTag();
+      this.plugin.syncNoteCardSearchState(this.noteCardSearchState, query, items, this.expandedTags);
+    } else {
+      this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
+      if (!noteCardSearch || noteCardSearch.isTagOnly) {
+        this.syncAutoSingleSearchResult(noteCardSearch ? noteCardSearch.tagQuery : query, items);
+      } else {
+        this.clearAutoExpandedTag();
+      }
+    }
     this.updateSummary(items);
     this.listEl.empty();
 
@@ -484,12 +566,22 @@ class PuffsTagShelfView extends ItemView {
       emptyEl.className = 'puffs-tag-shelf-empty';
       emptyEl.textContent = query ? '没有匹配的标签。' : '暂无可展示的标签。';
       this.listEl.appendChild(emptyEl);
+      this.plugin.scheduleNoteCardSearchEffect(
+        this.listEl,
+        this.searchComponent && this.searchComponent.inputEl,
+        this.noteCardSearchState
+      );
       return;
     }
 
     for (const item of items) {
       this.renderTagCard(item);
     }
+    this.plugin.scheduleNoteCardSearchEffect(
+      this.listEl,
+      this.searchComponent && this.searchComponent.inputEl,
+      this.noteCardSearchState
+    );
   }
 
   updateSummary(items) {
@@ -814,10 +906,11 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   getTagShelfItems(query = '') {
-    const intersectionTerms = splitIntersectionSearchTerms(query);
+    const tagQuery = getTagFilterQuery(query);
+    const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
     if (intersectionTerms) return this.getIntersectionSearchItems(intersectionTerms);
 
-    const unionTerms = splitUnionSearchTerms(query);
+    const unionTerms = splitUnionSearchTerms(tagQuery);
     const items = Array.from(this.tagFileIndex.entries())
       .filter(([tag, files]) => !isNestedTag(tag) && files.length > 0)
       .map(([tag, files]) => ({
@@ -832,7 +925,143 @@ class PuffsTagEnhancePlugin extends Plugin {
       });
 
     if (unionTerms) return items.filter((item) => tagMatchesAnySearchTerm(item.tag, unionTerms));
-    return items.filter((item) => tagMatchesSearchText(item.tag, query));
+    return items.filter((item) => tagMatchesSearchText(item.tag, tagQuery));
+  }
+
+  getNoteCardSearchMatches(query, items) {
+    const noteCardSearch = parseNoteCardSearch(query);
+    if (!noteCardSearch || !noteCardSearch.isValid) return [];
+
+    const matches = [];
+    for (const item of items) {
+      for (const file of item.files) {
+        if (!fileMatchesNoteSearch(file, noteCardSearch.noteQuery)) continue;
+        matches.push({
+          tag: item.tag,
+          path: file.path,
+          key: `${String(query)}\u0000${item.tag}\u0000${file.path}`,
+        });
+      }
+    }
+
+    return matches;
+  }
+
+  syncNoteCardSearchState(state, query, items, expandedTags = this.expandedTags) {
+    const matches = this.getNoteCardSearchMatches(query, items);
+    if (matches.length === 0) {
+      this.clearNoteCardSearchState(state, expandedTags);
+      return null;
+    }
+
+    const queryChanged = state.query !== String(query);
+    let activeIndex = queryChanged
+      ? 0
+      : matches.findIndex(
+          (match) =>
+            state.target &&
+            match.tag === state.target.tag &&
+            match.path === state.target.path
+        );
+    if (activeIndex < 0) activeIndex = 0;
+
+    state.query = String(query);
+    state.matches = matches;
+    state.activeIndex = activeIndex;
+    return this.activateNoteCardSearchTarget(state, matches[activeIndex], expandedTags);
+  }
+
+  activateNoteCardSearchTarget(state, target, expandedTags = this.expandedTags) {
+    if (!state || !target) return null;
+    if (state.autoExpandedTag && state.autoExpandedTag !== target.tag) {
+      this.clearNoteCardSearchAutoExpansion(state, expandedTags);
+    }
+    if (!state.autoExpandedTag) {
+      state.autoExpandedTag = target.tag;
+      state.autoExpandedWasAlreadyExpanded = expandedTags.has(target.tag);
+    }
+
+    expandedTags.add(target.tag);
+    state.target = target;
+    if (state.lastScrolledKey !== target.key) {
+      state.pendingScrollKey = target.key;
+    }
+    return target;
+  }
+
+  advanceNoteCardSearchState(state, expandedTags = this.expandedTags) {
+    if (!state || state.matches.length <= 1 || state.activeIndex < 0) return false;
+    state.activeIndex = (state.activeIndex + 1) % state.matches.length;
+    this.activateNoteCardSearchTarget(state, state.matches[state.activeIndex], expandedTags);
+    return true;
+  }
+
+  clearNoteCardSearchAutoExpansion(state, expandedTags = this.expandedTags) {
+    if (!state || !state.autoExpandedTag) return;
+    if (!state.autoExpandedWasAlreadyExpanded) {
+      expandedTags.delete(state.autoExpandedTag);
+    }
+    state.autoExpandedTag = null;
+    state.autoExpandedWasAlreadyExpanded = false;
+  }
+
+  clearNoteCardSearchState(state, expandedTags = this.expandedTags) {
+    if (!state) return;
+    this.clearNoteCardSearchAutoExpansion(state, expandedTags);
+    if (state.effectTimer !== null) {
+      window.clearTimeout(state.effectTimer);
+      state.effectTimer = null;
+    }
+    state.query = '';
+    state.matches = [];
+    state.activeIndex = -1;
+    state.target = null;
+    state.lastScrolledKey = '';
+    state.pendingScrollKey = '';
+  }
+
+  scheduleNoteCardSearchEffect(containerEl, inputEl, state) {
+    if (!containerEl || !state) return;
+    containerEl.querySelectorAll('.puffs-tag-note-card.is-note-search-match').forEach((cardEl) => {
+      cardEl.classList.remove('is-note-search-match');
+    });
+
+    if (state.effectTimer !== null) {
+      window.clearTimeout(state.effectTimer);
+      state.effectTimer = null;
+    }
+    if (!state.target) return;
+
+    const shouldRestoreInputFocus = document.activeElement === inputEl;
+    state.effectTimer = window.setTimeout(() => {
+      state.effectTimer = null;
+      if (!state.target) return;
+
+      const tagRowEl = Array.from(
+        containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
+      ).find((rowEl) => rowEl.dataset.puffsTag === state.target.tag);
+      const tagItemEl = tagRowEl && tagRowEl.closest('.puffs-tag-list-item');
+      const cardEl =
+        tagItemEl &&
+        Array.from(tagItemEl.querySelectorAll('.puffs-tag-note-card[data-path]')).find(
+          (candidate) => candidate.dataset.path === state.target.path
+        );
+      if (!cardEl) return;
+
+      cardEl.classList.add('is-note-search-match');
+      if (state.pendingScrollKey === state.target.key) {
+        cardEl.scrollIntoView({ block: 'center', inline: 'nearest' });
+        state.lastScrolledKey = state.target.key;
+        state.pendingScrollKey = '';
+        if (shouldRestoreInputFocus && inputEl && inputEl.isConnected) {
+          try {
+            inputEl.focus({ preventScroll: true });
+          } catch (_) {
+            inputEl.focus();
+          }
+        }
+      }
+    }, 0);
   }
 
   isNoteOrderTargetSelected(tag, path) {
@@ -1050,6 +1279,11 @@ class PuffsTagEnhancePlugin extends Plugin {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.puffs-tag-note-card.is-note-search-match {
+  background: color-mix(in srgb, var(--interactive-accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 55%, transparent);
 }
 
 .puffs-tag-hidden {
@@ -1962,7 +2196,24 @@ class PuffsTagEnhancePlugin extends Plugin {
       originalUpdateSearch: null,
       autoExpandedTag: null,
       autoExpandedWasAlreadyExpanded: false,
+      noteCardSearchState: createNoteCardSearchState(),
     };
+
+    const searchInputEl = view.searchComponent && view.searchComponent.inputEl;
+    if (searchInputEl) {
+      const onNoteSearchEnter = (event) => {
+        if (event.key !== 'Enter' || event.isComposing) return;
+        if (!this.advanceNoteCardSearchState(patch.noteCardSearchState)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        this.scheduleSyncView(view, 0);
+      };
+      searchInputEl.addEventListener('keydown', onNoteSearchEnter, true);
+      patch.cleanup.push(() =>
+        searchInputEl.removeEventListener('keydown', onNoteSearchEnter, true)
+      );
+    }
 
     const expandAllEl = view.collapseOrExpandAllEl;
     if (expandAllEl) {
@@ -2082,16 +2333,20 @@ class PuffsTagEnhancePlugin extends Plugin {
     patch.originalUpdateSearch = view.updateSearch;
     view.updateSearch = () => {
       const query = this.getTagSearchValue(view);
-      const unionTerms = splitUnionSearchTerms(query);
-      const intersectionTerms = splitIntersectionSearchTerms(query);
+      const noteCardSearch = parseNoteCardSearch(query);
+      const tagQuery = noteCardSearch ? noteCardSearch.tagQuery : query;
+      const unionTerms = splitUnionSearchTerms(tagQuery);
+      const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
 
-      if (!unionTerms && !intersectionTerms) {
+      if (!noteCardSearch && !unionTerms && !intersectionTerms) {
         patch.originalUpdateSearch.call(view);
         this.scheduleSyncView(view);
         return;
       }
 
-      view.searchQuery = createMultiTagSearchQuery(query, unionTerms || intersectionTerms);
+      view.searchQuery = noteCardSearch
+        ? createTagFilterSearchQuery(query, tagQuery)
+        : createMultiTagSearchQuery(query, unionTerms || intersectionTerms);
       if (typeof view.updateTags === 'function') view.updateTags();
       this.scheduleSyncView(view, 0);
     };
@@ -2113,6 +2368,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       patch.originalUpdateSearch = null;
     }
 
+    this.clearNoteCardSearchState(patch.noteCardSearchState);
     for (const cleanup of patch.cleanup) {
       cleanup();
     }
@@ -2248,7 +2504,21 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     const items = this.getListModeItems(view);
     const patch = this.viewPatches.get(view);
-    if (patch) this.syncAutoSingleSearchResult(view, patch, items);
+    const query = this.getTagSearchValue(view);
+    const noteCardSearch = parseNoteCardSearch(query);
+    if (patch) {
+      if (noteCardSearch && noteCardSearch.isValid) {
+        this.clearAutoExpandedTag(patch);
+        this.syncNoteCardSearchState(patch.noteCardSearchState, query, items);
+      } else {
+        this.clearNoteCardSearchState(patch.noteCardSearchState);
+        if (!noteCardSearch || noteCardSearch.isTagOnly) {
+          this.syncAutoSingleSearchResult(view, patch, items);
+        } else {
+          this.clearAutoExpandedTag(patch);
+        }
+      }
+    }
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
 
     const signature = JSON.stringify(
@@ -2262,13 +2532,20 @@ class PuffsTagEnhancePlugin extends Plugin {
       ])
     );
 
-    if (listEl.dataset.puffsSignature === signature) return;
+    if (listEl.dataset.puffsSignature !== signature) {
+      listEl.dataset.puffsSignature = signature;
+      listEl.empty();
 
-    listEl.dataset.puffsSignature = signature;
-    listEl.empty();
-
-    for (const item of items) {
-      this.renderListModeTagItem(listEl, item);
+      for (const item of items) {
+        this.renderListModeTagItem(listEl, item);
+      }
+    }
+    if (patch) {
+      this.scheduleNoteCardSearchEffect(
+        listEl,
+        view.searchComponent && view.searchComponent.inputEl,
+        patch.noteCardSearchState
+      );
     }
   }
 
@@ -2324,7 +2601,7 @@ class PuffsTagEnhancePlugin extends Plugin {
   }
 
   getListModeItems(view) {
-    const query = this.getTagSearchValue(view);
+    const query = getTagFilterQuery(this.getTagSearchValue(view));
     const intersectionTerms = splitIntersectionSearchTerms(query);
     if (intersectionTerms) return this.getIntersectionSearchItems(intersectionTerms);
 
