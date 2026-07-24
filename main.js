@@ -29,7 +29,7 @@ const DEFAULT_MOVE_NOTE_DOWN_HOTKEY = 'Alt + Shift + ↓';
 const LIST_MODE_ICON = 'list-tree';
 const TAG_SYSTEM_ICON = LIST_MODE_ICON;
 const INITIAL_TAG_INDEX_REFRESH_DELAYS_MS = [0, 500, 1500, 3000, 6000];
-const BACKUP_FILE_NAME = 'tag-data.json';
+const BACKUP_FILE_NAME = 'tag-data.md';
 const MAX_BACKUP_INTERVAL_MINUTES = Math.floor(0x7fffffff / 60000);
 
 const DEFAULT_SETTINGS = {
@@ -810,7 +810,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       if (this.isUnloaded) return;
       this.rememberCurrentMainLeaf();
       this.captureSelectedSidebarState();
-      this.refreshTagIndexAndViews(null, true);
+      this.refreshTagIndexAndViews();
       this.refreshTagViews();
       this.queueInitialTagIndexRefreshes();
       this.applySidebarPreferenceForCurrentFile();
@@ -2015,7 +2015,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     metadataCache.onCleanCache(() => {
       if (this.isUnloaded) return;
 
-      this.refreshTagIndexAndViews(null, true);
+      this.refreshTagIndexAndViews();
       this.queueInitialTagIndexRefreshes();
     });
   }
@@ -2026,10 +2026,10 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.finishTagRenameProtectionIfSettled();
   }
 
-  refreshTagIndexAndViews(changedPath = null, initializeNoteOrders = false) {
+  refreshTagIndexAndViews(changedPath = null) {
     if (this.isUnloaded) return;
 
-    const noteOrderChanged = this.rebuildTagFileIndex(changedPath, initializeNoteOrders);
+    const noteOrderChanged = this.rebuildTagFileIndex(changedPath);
     if (noteOrderChanged) {
       this.saveSettings().catch((error) => {
         console.error('[Puffs Tag Enhance] Failed to persist note order:', error);
@@ -2110,7 +2110,17 @@ class PuffsTagEnhancePlugin extends Plugin {
     }, 5000);
   }
 
-  rebuildTagFileIndex(changedPath = null, initializeNoteOrders = false) {
+  isMetadataCacheReadyForNoteOrderTracking() {
+    const metadataCache = this.app.metadataCache;
+    if (!metadataCache || metadataCache.initialized !== true) return false;
+    if (metadataCache.inProgressTaskCount !== 0) return false;
+
+    return this.app.vault.getMarkdownFiles().every((file) => {
+      return metadataCache.getFileCache(file) != null;
+    });
+  }
+
+  rebuildTagFileIndex(changedPath = null) {
     const nextIndex = new Map();
 
     for (const file of this.app.vault.getMarkdownFiles()) {
@@ -2130,9 +2140,11 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
 
     let noteOrderChanged = false;
-    if (initializeNoteOrders && !this.noteOrderTrackingReady) {
-      noteOrderChanged = this.initializeNoteOrders(nextIndex);
-      this.noteOrderTrackingReady = true;
+    if (!this.noteOrderTrackingReady) {
+      if (this.isMetadataCacheReadyForNoteOrderTracking()) {
+        noteOrderChanged = this.initializeNoteOrders(nextIndex);
+        this.noteOrderTrackingReady = true;
+      }
     } else if (this.noteOrderTrackingReady && !this.activeTagRename) {
       noteOrderChanged = this.reconcileNoteOrders(nextIndex, changedPath);
     }
