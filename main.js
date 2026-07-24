@@ -13,6 +13,7 @@ const {
   TFile,
   Notice,
   getAllTags,
+  normalizePath,
   setIcon,
 } = obsidian;
 
@@ -28,6 +29,8 @@ const DEFAULT_MOVE_NOTE_DOWN_HOTKEY = 'Alt + Shift + ↓';
 const LIST_MODE_ICON = 'list-tree';
 const TAG_SYSTEM_ICON = LIST_MODE_ICON;
 const INITIAL_TAG_INDEX_REFRESH_DELAYS_MS = [0, 500, 1500, 3000, 6000];
+const BACKUP_FILE_NAME = 'tag-data.json';
+const MAX_BACKUP_INTERVAL_MINUTES = Math.floor(0x7fffffff / 60000);
 
 const DEFAULT_SETTINGS = {
   autoSwitchToOutlineEnabled: true,
@@ -37,6 +40,8 @@ const DEFAULT_SETTINGS = {
   toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
   moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,
   moveNoteDownHotkey: DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
+  backupIntervalMinutes: 0,
+  backupFolderPath: '',
 };
 
 function normalizeTag(rawTag) {
@@ -50,6 +55,24 @@ function normalizeTag(rawTag) {
 
 function normalizeNewNotePosition(value) {
   return value === 'start' ? 'start' : 'end';
+}
+
+function normalizeBackupInterval(value) {
+  const minutes = Math.floor(Number(value));
+  if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+  return Math.min(minutes, MAX_BACKUP_INTERVAL_MINUTES);
+}
+
+function normalizeBackupFolderPath(value) {
+  const text = String(value || '').trim().replace(/\\/g, '/');
+  if (!text) return '';
+
+  const segments = text
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment && segment !== '.');
+  if (segments.some((segment) => segment === '..' || segment.includes(':'))) return '';
+  return normalizePath(segments.join('/'));
 }
 
 function isNestedTag(tag) {
@@ -279,6 +302,12 @@ function flattenFrontmatterTags(value, output = []) {
 
   output.push(String(value));
   return output;
+}
+
+function frontmatterTagValueHasTag(value, tagValue) {
+  const tag = normalizeTag(tagValue);
+  if (!tag) return false;
+  return flattenFrontmatterTags(value).some((item) => normalizeTag(item) === tag);
 }
 
 function normalizeHotkeyKey(value) {
@@ -751,6 +780,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.initialTagIndexRefreshTimers = [];
     this.noteOrderTrackingReady = false;
     this.settingsSavePromise = Promise.resolve();
+    this.backupTimer = null;
     this.activeTagRename = null;
     this.tagRenameProtectionTimer = null;
     this.isUnloaded = false;
@@ -760,6 +790,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     await this.loadSettings();
 
     this.isUnloaded = false;
+    this.restartBackupTimer();
     this.registerView(TAG_SHELF_VIEW_TYPE, (leaf) => new PuffsTagShelfView(leaf, this));
     this.addCommand({
       id: 'open-tag-shelf',
@@ -791,6 +822,7 @@ class PuffsTagEnhancePlugin extends Plugin {
   onunload() {
     this.isUnloaded = true;
     this.deactivateNoteOrderHotkeyScope();
+    this.clearBackupTimer();
     this.clearInitialTagIndexRefreshTimers();
     this.clearTagRenameProtectionTimer();
     this.restoreAllTagViews();
@@ -815,6 +847,8 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
+    this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
   }
@@ -842,8 +876,19 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
+    this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
     delete this.settings.tagOrder;
     await this.saveSettings();
+    if (
+      newSettings &&
+      (
+        Object.prototype.hasOwnProperty.call(newSettings, 'backupIntervalMinutes') ||
+        Object.prototype.hasOwnProperty.call(newSettings, 'backupFolderPath')
+      )
+    ) {
+      this.restartBackupTimer();
+    }
     this.refreshTagViewHotkeys();
     if (
       newSettings &&
@@ -858,6 +903,50 @@ class PuffsTagEnhancePlugin extends Plugin {
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'autoSwitchToOutlineEnabled')) {
       this.applySidebarPreferenceForCurrentFile();
     }
+  }
+
+  clearBackupTimer() {
+    if (this.backupTimer === null) return;
+    window.clearInterval(this.backupTimer);
+    this.backupTimer = null;
+  }
+
+  restartBackupTimer() {
+    this.clearBackupTimer();
+    const intervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
+    if (intervalMinutes <= 0) return;
+
+    this.backupTimer = window.setInterval(() => {
+      this.writeDataBackup().catch((error) => {
+        console.error('[Puffs Tag Enhance] 备份插件数据失败:', error);
+      });
+    }, intervalMinutes * 60 * 1000);
+  }
+
+  async ensureBackupFolder(folderPath) {
+    if (!folderPath) return;
+
+    const adapter = this.app.vault.adapter;
+    let currentPath = '';
+    for (const segment of folderPath.split('/')) {
+      currentPath = normalizePath(currentPath ? `${currentPath}/${segment}` : segment);
+      if (!(await adapter.exists(currentPath))) {
+        await adapter.mkdir(currentPath);
+      }
+    }
+  }
+
+  async writeDataBackup() {
+    await this.settingsSavePromise.catch(() => {});
+
+    const folderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    await this.ensureBackupFolder(folderPath);
+    const backupPath = normalizePath(
+      folderPath ? `${folderPath}/${BACKUP_FILE_NAME}` : BACKUP_FILE_NAME
+    );
+    const data = (await this.loadData()) || this.settings;
+    await this.app.vault.adapter.write(backupPath, `${JSON.stringify(data, null, 2)}\n`);
+    return backupPath;
   }
 
   normalizeNoteOrderByTag(value) {
@@ -1305,11 +1394,46 @@ class PuffsTagEnhancePlugin extends Plugin {
   margin-top: 0 !important;
 }
 
-.puffs-tag-rename-title {
+.puffs-tag-rename-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0 0 12px;
+}
+
+.puffs-tag-rename-title {
+  margin: 0;
   font-size: 20px;
   font-weight: 600;
+  line-height: 28px;
   color: var(--text-normal);
+}
+
+.puffs-tag-rename-mode-button {
+  display: inline-flex;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 5px;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.puffs-tag-rename-mode-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.puffs-tag-rename-mode-button svg {
+  width: 18px;
+  height: 18px;
 }
 
 .puffs-tag-rename-input {
@@ -1944,6 +2068,21 @@ class PuffsTagEnhancePlugin extends Plugin {
 
   isTagRenameMetadataSettled(migration = this.activeTagRename) {
     if (!migration || !migration.committed) return false;
+
+    if (migration.mode === 'add' || migration.mode === 'delete') {
+      const shouldHaveTag = migration.mode === 'add';
+      return Array.from(migration.affectedPaths).every((path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) return false;
+
+        const cache = this.app.metadataCache.getFileCache(file);
+        const hasTag = frontmatterTagValueHasTag(
+          cache && cache.frontmatter && cache.frontmatter.tags,
+          migration.targetTag
+        );
+        return hasTag === shouldHaveTag;
+      });
+    }
 
     const oldPaths = new Set((this.tagFileIndex.get(migration.oldTag) || []).map((file) => file.path));
     const newPaths = new Set((this.tagFileIndex.get(migration.newTag) || []).map((file) => file.path));
@@ -3014,6 +3153,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     const existingNewOrder = this.getOrderedFilesForTag(newTag, existingNewFiles).map((file) => file.path);
     const migratedOrder = Array.from(new Set([...oldNoteOrder, ...existingNewOrder]));
     const migration = {
+      mode: 'rename',
       oldTag,
       newTag,
       affectedPaths: new Set(files.map((file) => file.path)),
@@ -3037,6 +3177,119 @@ class PuffsTagEnhancePlugin extends Plugin {
         delete this.settings.noteOrderByTag[newTag];
       }
       delete this.settings.noteOrderByTag[oldTag];
+      this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+      await this.saveSettings();
+
+      migration.committed = true;
+      this.refreshTagIndexAndViews();
+      if (!this.finishTagRenameProtectionIfSettled()) {
+        this.scheduleTagRenameProtectionFallback(migration);
+      }
+    } catch (error) {
+      if (this.activeTagRename === migration) {
+        this.activeTagRename = null;
+        this.clearTagRenameProtectionTimer();
+        this.refreshTagIndexAndViews();
+      }
+      throw error;
+    }
+  }
+
+  fileHasFrontmatterTag(file, tagValue) {
+    const cache = this.app.metadataCache.getFileCache(file);
+    return frontmatterTagValueHasTag(
+      cache && cache.frontmatter && cache.frontmatter.tags,
+      tagValue
+    );
+  }
+
+  fileHasInlineTag(file, tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag) return false;
+
+    const cache = this.app.metadataCache.getFileCache(file);
+    return Array.isArray(cache && cache.tags) && cache.tags.some((tagEntry) => {
+      return normalizeTag(tagEntry && tagEntry.tag) === tag;
+    });
+  }
+
+  async addTagToTaggedNotes(sourceTagValue, newTagValue) {
+    await this.updateTagPropertiesForTaggedNotes('add', sourceTagValue, newTagValue);
+  }
+
+  async deleteTagFromTaggedNotes(sourceTagValue, targetTagValue) {
+    await this.updateTagPropertiesForTaggedNotes('delete', sourceTagValue, targetTagValue);
+  }
+
+  async updateTagPropertiesForTaggedNotes(mode, sourceTagValue, targetTagValue) {
+    const sourceTag = normalizeTag(sourceTagValue);
+    const targetTag = normalizeTag(targetTagValue);
+
+    if (!sourceTag) throw new Error('原标签无效');
+    if (!targetTag) throw new Error('标签名称不能为空');
+    if (/\s/.test(getTagDisplayName(targetTag))) throw new Error('标签名称不能包含空格');
+    if (mode !== 'add' && mode !== 'delete') throw new Error('不支持的标签操作');
+    if (this.activeTagRename) throw new Error('上一次标签修改仍在同步，请稍后再试');
+
+    this.rebuildTagFileIndex();
+    const sourceFiles = Array.from(new Set(this.tagFileIndex.get(sourceTag) || []));
+    const orderedSourceFiles = this.getOrderedFilesForTag(sourceTag, sourceFiles);
+    const files = orderedSourceFiles.filter((file) => {
+      const hasTag = this.fileHasFrontmatterTag(file, targetTag);
+      return mode === 'add' ? !hasTag : hasTag;
+    });
+    if (files.length === 0) return;
+
+    const existingTargetFiles = Array.from(new Set(this.tagFileIndex.get(targetTag) || []));
+    const existingTargetOrder = this.getOrderedFilesForTag(targetTag, existingTargetFiles)
+      .map((file) => file.path);
+    const existingTargetPaths = new Set(existingTargetFiles.map((file) => file.path));
+    const affectedPaths = new Set(files.map((file) => file.path));
+    const migration = {
+      mode,
+      targetTag,
+      affectedPaths,
+      committed: false,
+    };
+
+    this.activeTagRename = migration;
+
+    try {
+      for (const file of files) {
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+          const tags = flattenFrontmatterTags(fm.tags);
+
+          if (mode === 'add') {
+            if (tags.some((item) => normalizeTag(item) === targetTag)) return;
+            fm.tags = tags.concat(getTagDisplayName(targetTag));
+            return;
+          }
+
+          const remainingTags = tags.filter((item) => normalizeTag(item) !== targetTag);
+          if (remainingTags.length > 0) fm.tags = remainingTags;
+          else delete fm.tags;
+        });
+      }
+
+      if (mode === 'add') {
+        const newlyAddedPaths = files
+          .map((file) => file.path)
+          .filter((path) => !existingTargetPaths.has(path));
+        const nextOrder = this.settings.newNotePosition === 'start'
+          ? newlyAddedPaths.concat(existingTargetOrder)
+          : existingTargetOrder.concat(newlyAddedPaths);
+        if (nextOrder.length > 0) this.settings.noteOrderByTag[targetTag] = Array.from(new Set(nextOrder));
+      } else {
+        const removedPaths = new Set(
+          files
+            .filter((file) => !this.fileHasInlineTag(file, targetTag))
+            .map((file) => file.path)
+        );
+        const nextOrder = existingTargetOrder.filter((path) => !removedPaths.has(path));
+        if (nextOrder.length > 0) this.settings.noteOrderByTag[targetTag] = nextOrder;
+        else delete this.settings.noteOrderByTag[targetTag];
+      }
+
       this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
       await this.saveSettings();
 
@@ -3240,6 +3493,7 @@ class PuffsTagRenameModal extends Modal {
     super(app);
     this.plugin = plugin;
     this.tag = normalizeTag(tag);
+    this.mode = 'rename';
     this.isSubmitting = false;
   }
 
@@ -3247,17 +3501,62 @@ class PuffsTagRenameModal extends Modal {
     this.modalEl.classList.add('puffs-tag-rename-modal');
     this.contentEl.empty();
 
+    const headingEl = document.createElement('div');
+    headingEl.className = 'puffs-tag-rename-heading';
+
     const titleEl = document.createElement('div');
     titleEl.className = 'puffs-tag-rename-title';
-    titleEl.textContent = '修改标签';
+
+    const addButtonEl = document.createElement('button');
+    addButtonEl.className = 'puffs-tag-rename-mode-button';
+    addButtonEl.type = 'button';
+
+    const deleteButtonEl = document.createElement('button');
+    deleteButtonEl.className = 'puffs-tag-rename-mode-button';
+    deleteButtonEl.type = 'button';
 
     const inputEl = document.createElement('input');
     inputEl.className = 'puffs-tag-rename-input';
     inputEl.type = 'text';
-    inputEl.value = getTagDisplayName(this.tag);
 
-    this.contentEl.appendChild(titleEl);
+    headingEl.appendChild(titleEl);
+    headingEl.appendChild(addButtonEl);
+    headingEl.appendChild(deleteButtonEl);
+    this.contentEl.appendChild(headingEl);
     this.contentEl.appendChild(inputEl);
+
+    const focusInput = (select = false) => {
+      window.setTimeout(() => {
+        inputEl.focus();
+        if (select) inputEl.select();
+      }, 0);
+    };
+
+    const renderMode = (mode) => {
+      this.mode = mode;
+      titleEl.textContent = mode === 'add'
+        ? '批量新增标签'
+        : mode === 'delete'
+          ? '批量删除标签'
+          : '修改标签名称';
+      setIcon(addButtonEl, mode === 'add' ? 'pencil' : 'plus');
+      setIcon(deleteButtonEl, mode === 'delete' ? 'pencil' : 'minus');
+      inputEl.value = mode === 'rename' ? getTagDisplayName(this.tag) : '';
+      focusInput(mode === 'rename');
+    };
+
+    const keepInputFocused = (evt) => {
+      evt.preventDefault();
+    };
+    addButtonEl.addEventListener('mousedown', keepInputFocused);
+    deleteButtonEl.addEventListener('mousedown', keepInputFocused);
+
+    addButtonEl.addEventListener('click', () => {
+      renderMode(this.mode === 'add' ? 'rename' : 'add');
+    });
+    deleteButtonEl.addEventListener('click', () => {
+      renderMode(this.mode === 'delete' ? 'rename' : 'delete');
+    });
 
     inputEl.addEventListener('keydown', async (evt) => {
       if (evt.key !== 'Enter' || this.isSubmitting) return;
@@ -3267,11 +3566,22 @@ class PuffsTagRenameModal extends Modal {
 
       this.isSubmitting = true;
       try {
-        await this.plugin.renameTag(this.tag, inputEl.value);
+        if (this.mode === 'add') {
+          await this.plugin.addTagToTaggedNotes(this.tag, inputEl.value);
+        } else if (this.mode === 'delete') {
+          await this.plugin.deleteTagFromTaggedNotes(this.tag, inputEl.value);
+        } else {
+          await this.plugin.renameTag(this.tag, inputEl.value);
+        }
         this.close();
       } catch (error) {
         this.isSubmitting = false;
-        new Notice(error && error.message ? error.message : '修改标签失败');
+        const fallbackMessage = this.mode === 'add'
+          ? '批量新增标签失败'
+          : this.mode === 'delete'
+            ? '批量删除标签失败'
+            : '修改标签名称失败';
+        new Notice(error && error.message ? error.message : fallbackMessage);
         inputEl.focus();
         inputEl.select();
       }
@@ -3281,10 +3591,7 @@ class PuffsTagRenameModal extends Modal {
       if (!this.isSubmitting) this.close();
     });
 
-    window.setTimeout(() => {
-      inputEl.focus();
-      inputEl.select();
-    }, 0);
+    renderMode('rename');
   }
 }
 
@@ -3297,6 +3604,17 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
+
+    new Setting(containerEl)
+      .setName('自动切到大纲标签页')
+      .setDesc('开启后，插件会按当前笔记的侧边栏偏好在标签列表和大纲之间自动切换')
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.autoSwitchToOutlineEnabled)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ autoSwitchToOutlineEnabled: value });
+          });
+      });
 
     new Setting(containerEl)
       .setName('弹出/收起搜索栏快捷键')
@@ -3347,13 +3665,29 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('自动切到大纲标签页')
-      .setDesc('开启后，插件会按当前笔记的侧边栏偏好在标签列表和大纲之间自动切换')
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.autoSwitchToOutlineEnabled)
+      .setName('备份间隔')
+      .setDesc('按分钟定时备份插件数据；输入 0 停止备份')
+      .addText((text) => {
+        text
+          .setValue(String(this.plugin.settings.backupIntervalMinutes))
+          .setPlaceholder('0')
           .onChange(async (value) => {
-            await this.plugin.updateSettings({ autoSwitchToOutlineEnabled: value });
+            await this.plugin.updateSettings({ backupIntervalMinutes: value });
+          });
+        text.inputEl.type = 'number';
+        text.inputEl.min = '0';
+        text.inputEl.step = '1';
+      });
+
+    new Setting(containerEl)
+      .setName('备份路径')
+      .setDesc('Vault 内的相对文件夹路径；留空表示 Vault 根目录，支持 \\ 或 /')
+      .addText((text) => {
+        text
+          .setValue(this.plugin.settings.backupFolderPath)
+          .setPlaceholder('其他\\备份')
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ backupFolderPath: value });
           });
       });
   }
