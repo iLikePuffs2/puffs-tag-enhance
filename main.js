@@ -43,6 +43,7 @@ const DEFAULT_SETTINGS = {
   moveNoteDownHotkey: DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
   backupIntervalMinutes: 0,
   backupFolderPath: '',
+  pinnedTag: null,
 };
 
 function normalizeTag(rawTag) {
@@ -608,15 +609,25 @@ class PuffsTagShelfView extends ItemView {
     if (!this.listEl || !this.summaryTagCountEl || !this.summaryNoteCountEl) return;
 
     const query = this.searchQuery.trim();
-    const items = this.plugin.getTagShelfItems(query);
-    const noteCardSearch = parseNoteCardSearch(query);
+    const effectiveQuery = this.plugin.resolvePinnedSearchQuery(query);
+    const matchingItems = this.plugin.getTagShelfItems(effectiveQuery, false);
+    const items = this.plugin.prependPinnedTagItem(matchingItems);
+    const noteCardSearch = parseNoteCardSearch(effectiveQuery);
     if (noteCardSearch && noteCardSearch.isValid) {
       this.clearAutoExpandedTag();
-      this.plugin.syncNoteCardSearchState(this.noteCardSearchState, query, items, this.expandedTags);
+      this.plugin.syncNoteCardSearchState(
+        this.noteCardSearchState,
+        effectiveQuery,
+        matchingItems,
+        this.expandedTags
+      );
     } else {
       this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
       if (!noteCardSearch || noteCardSearch.isTagOnly) {
-        this.syncAutoSingleSearchResult(noteCardSearch ? noteCardSearch.tagQuery : query, items);
+        this.syncAutoSingleSearchResult(
+          noteCardSearch ? noteCardSearch.tagQuery : effectiveQuery,
+          matchingItems
+        );
       } else {
         this.clearAutoExpandedTag();
       }
@@ -718,6 +729,7 @@ class PuffsTagShelfView extends ItemView {
     countEl.textContent = String(files.length);
 
     let scrollBottomButtonEl = null;
+    let pinButtonEl = null;
     if (isExpanded) {
       scrollBottomButtonEl = document.createElement('button');
       scrollBottomButtonEl.type = 'button';
@@ -729,6 +741,22 @@ class PuffsTagShelfView extends ItemView {
         event.stopPropagation();
         this.plugin.scheduleLastNoteCardScroll(this.listEl, tag);
       });
+
+      if (!isVirtual) {
+        pinButtonEl = document.createElement('button');
+        pinButtonEl.type = 'button';
+        pinButtonEl.className = 'clickable-icon puffs-tag-pin-button';
+        pinButtonEl.dataset.puffsTag = tag;
+        pinButtonEl.classList.toggle('is-active', this.plugin.settings.pinnedTag === tag);
+        setIcon(pinButtonEl, 'pin');
+        pinButtonEl.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.plugin.togglePinnedTag(tag).catch((error) => {
+            console.error('[Puffs Tag Enhance] Failed to toggle pinned tag:', error);
+          });
+        });
+      }
     }
 
     innerEl.appendChild(textEl);
@@ -736,6 +764,7 @@ class PuffsTagShelfView extends ItemView {
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
+    if (pinButtonEl) tagEl.appendChild(pinButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
 
@@ -901,6 +930,10 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    this.settings.pinnedTag = normalizeTag(this.settings.pinnedTag);
+    if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
+      this.settings.pinnedTag = null;
+    }
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
   }
@@ -931,6 +964,10 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    this.settings.pinnedTag = normalizeTag(this.settings.pinnedTag);
+    if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
+      this.settings.pinnedTag = null;
+    }
     delete this.settings.tagOrder;
     await this.saveSettings();
     if (
@@ -1047,10 +1084,54 @@ class PuffsTagEnhancePlugin extends Plugin {
       .map(({ file }) => file);
   }
 
-  getTagShelfItems(query = '') {
+  resolvePinnedSearchQuery(value) {
+    const query = String(value || '').trimStart();
+    const pinnedTag = normalizeTag(this.settings.pinnedTag);
+    if (!pinnedTag || !['*', '&', '|'].includes(query.charAt(0))) return query;
+
+    return `${getTagDisplayName(pinnedTag)}${query}`;
+  }
+
+  getPinnedTagItem() {
+    const tag = normalizeTag(this.settings.pinnedTag);
+    const files = tag && !isNestedTag(tag) ? this.tagFileIndex.get(tag) || [] : [];
+    if (!tag || files.length === 0) return null;
+
+    return {
+      tag,
+      displayName: getTagDisplayName(tag),
+      isVirtual: false,
+      isPinnedExtra: true,
+      files: this.getOrderedFilesForTag(tag, files),
+    };
+  }
+
+  prependPinnedTagItem(items) {
+    const pinnedItem = this.getPinnedTagItem();
+    if (!pinnedItem) return items;
+
+    const remainingItems = items.filter((item) => item.tag !== pinnedItem.tag);
+    const matchingItem = items.find((item) => item.tag === pinnedItem.tag);
+    return [{ ...(matchingItem || pinnedItem), isPinnedExtra: !matchingItem }, ...remainingItems];
+  }
+
+  async togglePinnedTag(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || isNestedTag(tag) || !(this.tagFileIndex.get(tag) || []).length) return;
+
+    this.settings.pinnedTag = this.settings.pinnedTag === tag ? null : tag;
+    await this.saveSettings();
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+
+  getTagShelfItems(query = '', includePinned = true) {
     const tagQuery = getTagFilterQuery(query);
     const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
-    if (intersectionTerms) return this.getIntersectionSearchItems(intersectionTerms);
+    if (intersectionTerms) {
+      const intersectionItems = this.getIntersectionSearchItems(intersectionTerms);
+      return includePinned ? this.prependPinnedTagItem(intersectionItems) : intersectionItems;
+    }
 
     const unionTerms = splitUnionSearchTerms(tagQuery);
     const items = Array.from(this.tagFileIndex.entries())
@@ -1066,8 +1147,10 @@ class PuffsTagEnhancePlugin extends Plugin {
         return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
       });
 
-    if (unionTerms) return items.filter((item) => tagMatchesAnySearchTerm(item.tag, unionTerms));
-    return items.filter((item) => tagMatchesSearchText(item.tag, tagQuery));
+    const matchingItems = unionTerms
+      ? items.filter((item) => tagMatchesAnySearchTerm(item.tag, unionTerms))
+      : items.filter((item) => tagMatchesSearchText(item.tag, tagQuery));
+    return includePinned ? this.prependPinnedTagItem(matchingItems) : matchingItems;
   }
 
   getNoteCardSearchMatches(query, items) {
@@ -1481,7 +1564,8 @@ class PuffsTagEnhancePlugin extends Plugin {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 55%, transparent);
 }
 
-.puffs-tag-scroll-bottom-button {
+.puffs-tag-scroll-bottom-button,
+.puffs-tag-pin-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1497,14 +1581,22 @@ class PuffsTagEnhancePlugin extends Plugin {
   cursor: pointer;
 }
 
-.puffs-tag-scroll-bottom-button:hover {
+.puffs-tag-scroll-bottom-button:hover,
+.puffs-tag-pin-button:hover {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
 
-.puffs-tag-scroll-bottom-button svg {
+.puffs-tag-scroll-bottom-button svg,
+.puffs-tag-pin-button svg {
   width: 14px;
   height: 14px;
+}
+
+.puffs-tag-pin-button.is-active {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  box-shadow: none;
 }
 
 .puffs-tag-hidden {
@@ -2332,7 +2424,8 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     this.tagFileIndex = nextIndex;
     this.reconcileExpandedTags();
-    return noteOrderChanged;
+    const pinnedTagChanged = this.reconcilePinnedTag();
+    return noteOrderChanged || pinnedTagChanged;
   }
 
   initializeNoteOrders(nextIndex) {
@@ -2421,6 +2514,15 @@ class PuffsTagEnhancePlugin extends Plugin {
         this.expandedTags.delete(tag);
       }
     }
+  }
+
+  reconcilePinnedTag() {
+    const pinnedTag = normalizeTag(this.settings.pinnedTag);
+    if (!pinnedTag || this.activeTagRename || !this.noteOrderTrackingReady) return false;
+    if (!isNestedTag(pinnedTag) && (this.tagFileIndex.get(pinnedTag) || []).length > 0) return false;
+
+    this.settings.pinnedTag = null;
+    return true;
   }
 
   getFocusedTagView() {
@@ -2604,6 +2706,17 @@ class PuffsTagEnhancePlugin extends Plugin {
       const target = evt.target instanceof Element ? evt.target : null;
       if (!target || !view.containerEl.contains(target)) return;
 
+      const pinButtonEl = target.closest('.puffs-tag-pin-button');
+      if (pinButtonEl) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        this.togglePinnedTag(pinButtonEl.dataset.puffsTag).catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to toggle pinned tag:', error);
+        });
+        return;
+      }
+
       const scrollBottomButtonEl = target.closest('.puffs-tag-scroll-bottom-button');
       if (scrollBottomButtonEl) {
         evt.preventDefault();
@@ -2690,7 +2803,8 @@ class PuffsTagEnhancePlugin extends Plugin {
     view.updateSearch = () => {
       if (patch.isSearchComposing) return;
 
-      const query = this.getTagSearchValue(view);
+      const rawQuery = this.getTagSearchValue(view);
+      const query = this.resolvePinnedSearchQuery(rawQuery);
       const noteCardSearch = parseNoteCardSearch(query);
       const tagQuery = noteCardSearch ? noteCardSearch.tagQuery : query;
       const unionTerms = splitUnionSearchTerms(tagQuery);
@@ -2703,8 +2817,8 @@ class PuffsTagEnhancePlugin extends Plugin {
       }
 
       view.searchQuery = noteCardSearch
-        ? createTagFilterSearchQuery(query, tagQuery)
-        : createMultiTagSearchQuery(query, unionTerms || intersectionTerms);
+        ? createTagFilterSearchQuery(rawQuery, tagQuery)
+        : createMultiTagSearchQuery(rawQuery, unionTerms || intersectionTerms);
       if (typeof view.updateTags === 'function') view.updateTags();
       this.scheduleSyncView(view, 0);
     };
@@ -2860,18 +2974,20 @@ class PuffsTagEnhancePlugin extends Plugin {
     const listEl = this.ensureListModeContainer(view);
     if (!listEl) return;
 
-    const items = this.getListModeItems(view);
+    const rawQuery = this.getTagSearchValue(view);
+    const effectiveQuery = this.resolvePinnedSearchQuery(rawQuery);
+    const matchingItems = this.getListModeItems(view, effectiveQuery, false);
+    const items = this.prependPinnedTagItem(matchingItems);
     const patch = this.viewPatches.get(view);
-    const query = this.getTagSearchValue(view);
-    const noteCardSearch = parseNoteCardSearch(query);
+    const noteCardSearch = parseNoteCardSearch(effectiveQuery);
     if (patch) {
       if (noteCardSearch && noteCardSearch.isValid) {
         this.clearAutoExpandedTag(patch);
-        this.syncNoteCardSearchState(patch.noteCardSearchState, query, items);
+        this.syncNoteCardSearchState(patch.noteCardSearchState, effectiveQuery, matchingItems);
       } else {
         this.clearNoteCardSearchState(patch.noteCardSearchState);
         if (!noteCardSearch || noteCardSearch.isTagOnly) {
-          this.syncAutoSingleSearchResult(view, patch, items);
+          this.syncAutoSingleSearchResult(view, patch, matchingItems, effectiveQuery);
         } else {
           this.clearAutoExpandedTag(patch);
         }
@@ -2885,6 +3001,7 @@ class PuffsTagEnhancePlugin extends Plugin {
         item.displayName,
         item.isVirtual,
         item.files.length,
+        this.settings.pinnedTag === item.tag,
         this.expandedTags.has(item.tag),
         this.expandedTags.has(item.tag) ? item.files.map((file) => file.path).join('\n') : '',
       ])
@@ -2907,8 +3024,10 @@ class PuffsTagEnhancePlugin extends Plugin {
     }
   }
 
-  syncAutoSingleSearchResult(view, patch, items) {
-    const query = this.getTagSearchValue(view).trim();
+  syncAutoSingleSearchResult(view, patch, items, queryValue = this.resolvePinnedSearchQuery(
+    this.getTagSearchValue(view)
+  )) {
+    const query = getTagFilterQuery(queryValue).trim();
     if (!query || items.length !== 1) {
       this.clearAutoExpandedTag(patch);
       return;
@@ -2958,10 +3077,17 @@ class PuffsTagEnhancePlugin extends Plugin {
     return listEl;
   }
 
-  getListModeItems(view) {
-    const query = getTagFilterQuery(this.getTagSearchValue(view));
+  getListModeItems(
+    view,
+    queryValue = this.resolvePinnedSearchQuery(this.getTagSearchValue(view)),
+    includePinned = true
+  ) {
+    const query = getTagFilterQuery(queryValue);
     const intersectionTerms = splitIntersectionSearchTerms(query);
-    if (intersectionTerms) return this.getIntersectionSearchItems(intersectionTerms);
+    if (intersectionTerms) {
+      const intersectionItems = this.getIntersectionSearchItems(intersectionTerms);
+      return includePinned ? this.prependPinnedTagItem(intersectionItems) : intersectionItems;
+    }
 
     const unionTerms = splitUnionSearchTerms(query);
     const items = [];
@@ -3008,7 +3134,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
     });
 
-    return items;
+    return includePinned ? this.prependPinnedTagItem(items) : items;
   }
 
   getIntersectionSearchItems(terms) {
@@ -3119,12 +3245,22 @@ class PuffsTagEnhancePlugin extends Plugin {
     countEl.textContent = String(files.length);
 
     let scrollBottomButtonEl = null;
+    let pinButtonEl = null;
     if (isExpanded) {
       scrollBottomButtonEl = document.createElement('button');
       scrollBottomButtonEl.type = 'button';
       scrollBottomButtonEl.className = 'clickable-icon puffs-tag-scroll-bottom-button';
       scrollBottomButtonEl.dataset.puffsTag = tag;
       setIcon(scrollBottomButtonEl, 'arrow-down-to-line');
+
+      if (!isVirtual) {
+        pinButtonEl = document.createElement('button');
+        pinButtonEl.type = 'button';
+        pinButtonEl.className = 'clickable-icon puffs-tag-pin-button';
+        pinButtonEl.dataset.puffsTag = tag;
+        pinButtonEl.classList.toggle('is-active', this.settings.pinnedTag === tag);
+        setIcon(pinButtonEl, 'pin');
+      }
     }
 
     innerEl.appendChild(textEl);
@@ -3132,6 +3268,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
+    if (pinButtonEl) tagEl.appendChild(pinButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
 
@@ -3400,6 +3537,9 @@ class PuffsTagEnhancePlugin extends Plugin {
 
       if (this.expandedTags.delete(oldTag)) {
         this.expandedTags.add(newTag);
+      }
+      if (this.settings.pinnedTag === oldTag) {
+        this.settings.pinnedTag = newTag;
       }
 
       if (migratedOrder.length > 0) {
