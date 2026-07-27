@@ -1705,6 +1705,20 @@ class PuffsTagEnhancePlugin extends Plugin {
     if (styleEl) styleEl.remove();
   }
 
+  isNoteOrderSearchControl(target) {
+    if (!(target instanceof Element)) return false;
+    if (target.closest('.puffs-tag-shelf-search-host')) return true;
+
+    return this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE).some((leaf) => {
+      const view = leaf && leaf.view;
+      const inputEl = view && view.searchComponent && view.searchComponent.inputEl;
+      if (!inputEl || !inputEl.isConnected) return false;
+
+      const searchContainerEl = inputEl.closest('.search-input-container') || inputEl;
+      return searchContainerEl.contains(target);
+    });
+  }
+
   registerKeyboardHandler() {
     this.keydownHandler = (evt) => {
       if (!this.isQuickSearchHotkey(evt)) return;
@@ -1723,6 +1737,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       if (!this.selectedNoteOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
       if (target && target.closest('.puffs-tag-note-order-button')) return;
+      if (this.isNoteOrderSearchControl(target)) return;
       if (evt.button === 2 && target && target.closest('.puffs-tag-note-card')) return;
       this.clearNoteOrderTarget();
     };
