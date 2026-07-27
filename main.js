@@ -34,6 +34,7 @@ const MAX_BACKUP_INTERVAL_MINUTES = Math.floor(0x7fffffff / 60000);
 
 const DEFAULT_SETTINGS = {
   autoSwitchToOutlineEnabled: true,
+  freezeSearchWhileComposing: true,
   tagSidebarPreferredFiles: {},
   noteOrderByTag: {},
   newNotePosition: 'end',
@@ -375,6 +376,8 @@ class PuffsTagShelfView extends ItemView {
     this.searchComponent = null;
     this.isShowingSearch = true;
     this.searchHotkeyHandler = null;
+    this.searchCompositionCleanup = null;
+    this.isSearchComposing = false;
     this.noteCardSearchState = createNoteCardSearchState();
     this.listEl = null;
     this.summaryTagCountEl = null;
@@ -401,6 +404,7 @@ class PuffsTagShelfView extends ItemView {
   }
 
   async onClose() {
+    this.clearSearchCompositionHandlers();
     if (this.searchHotkeyHandler) {
       window.removeEventListener('keydown', this.searchHotkeyHandler, true);
       document.removeEventListener('keydown', this.searchHotkeyHandler, true);
@@ -458,6 +462,7 @@ class PuffsTagShelfView extends ItemView {
   }
 
   render() {
+    this.clearSearchCompositionHandlers();
     this.contentEl.empty();
     this.contentEl.classList.add('puffs-tag-shelf-view');
 
@@ -499,9 +504,30 @@ class PuffsTagShelfView extends ItemView {
     this.searchComponent.inputEl.classList.add('puffs-tag-shelf-search-input');
     this.searchComponent.setPlaceholder('搜索标签');
     this.searchComponent.setValue(this.searchQuery);
-    this.searchComponent.onChange((value) => {
+    const searchInputEl = this.searchComponent.inputEl;
+    const applySearchValue = (value) => {
+      if (value === this.searchQuery) return;
       this.searchQuery = value;
       this.renderTagList();
+    };
+    const onCompositionStart = () => {
+      this.isSearchComposing = this.plugin.settings.freezeSearchWhileComposing;
+    };
+    const onCompositionEnd = () => {
+      this.isSearchComposing = false;
+      applySearchValue(searchInputEl.value);
+    };
+    searchInputEl.addEventListener('compositionstart', onCompositionStart);
+    searchInputEl.addEventListener('compositionend', onCompositionEnd);
+    this.searchCompositionCleanup = () => {
+      searchInputEl.removeEventListener('compositionstart', onCompositionStart);
+      searchInputEl.removeEventListener('compositionend', onCompositionEnd);
+      this.isSearchComposing = false;
+      this.searchCompositionCleanup = null;
+    };
+    this.searchComponent.onChange((value) => {
+      if (this.isSearchComposing) return;
+      applySearchValue(value);
     });
     this.searchComponent.inputEl.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' || event.isComposing) return;
@@ -523,6 +549,14 @@ class PuffsTagShelfView extends ItemView {
 
     this.contentEl.appendChild(pageEl);
     this.renderTagList();
+  }
+
+  clearSearchCompositionHandlers() {
+    if (this.searchCompositionCleanup) {
+      this.searchCompositionCleanup();
+    } else {
+      this.isSearchComposing = false;
+    }
   }
 
   syncSidebarTreeStyles(pageEl) {
@@ -836,6 +870,7 @@ class PuffsTagEnhancePlugin extends Plugin {
   async loadSettings() {
     const savedSettings = (await this.loadData()) || {};
     this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
+    this.settings.freezeSearchWhileComposing = this.settings.freezeSearchWhileComposing !== false;
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
     this.settings.moveNoteUpHotkey = normalizeHotkeyText(
       this.settings.moveNoteUpHotkey,
@@ -865,6 +900,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
   async updateSettings(newSettings) {
     this.settings = Object.assign({}, this.settings, newSettings);
+    this.settings.freezeSearchWhileComposing = this.settings.freezeSearchWhileComposing !== false;
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
     this.settings.moveNoteUpHotkey = normalizeHotkeyText(
       this.settings.moveNoteUpHotkey,
@@ -2430,6 +2466,7 @@ class PuffsTagEnhancePlugin extends Plugin {
       hotkeyRegistration: null,
       hotkeySignature: '',
       originalUpdateSearch: null,
+      isSearchComposing: false,
       autoExpandedTag: null,
       autoExpandedWasAlreadyExpanded: false,
       noteCardSearchState: createNoteCardSearchState(),
@@ -2437,6 +2474,13 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     const searchInputEl = view.searchComponent && view.searchComponent.inputEl;
     if (searchInputEl) {
+      const onSearchCompositionStart = () => {
+        patch.isSearchComposing = this.settings.freezeSearchWhileComposing;
+      };
+      const onSearchCompositionEnd = () => {
+        patch.isSearchComposing = false;
+        view.updateSearch();
+      };
       const onNoteSearchEnter = (event) => {
         if (event.key !== 'Enter' || event.isComposing) return;
         if (!this.advanceNoteCardSearchState(patch.noteCardSearchState)) return;
@@ -2445,10 +2489,15 @@ class PuffsTagEnhancePlugin extends Plugin {
         event.stopImmediatePropagation();
         this.scheduleSyncView(view, 0);
       };
+      searchInputEl.addEventListener('compositionstart', onSearchCompositionStart);
+      searchInputEl.addEventListener('compositionend', onSearchCompositionEnd);
       searchInputEl.addEventListener('keydown', onNoteSearchEnter, true);
-      patch.cleanup.push(() =>
-        searchInputEl.removeEventListener('keydown', onNoteSearchEnter, true)
-      );
+      patch.cleanup.push(() => {
+        searchInputEl.removeEventListener('compositionstart', onSearchCompositionStart);
+        searchInputEl.removeEventListener('compositionend', onSearchCompositionEnd);
+        searchInputEl.removeEventListener('keydown', onNoteSearchEnter, true);
+        patch.isSearchComposing = false;
+      });
     }
 
     const expandAllEl = view.collapseOrExpandAllEl;
@@ -2568,6 +2617,8 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     patch.originalUpdateSearch = view.updateSearch;
     view.updateSearch = () => {
+      if (patch.isSearchComposing) return;
+
       const query = this.getTagSearchValue(view);
       const noteCardSearch = parseNoteCardSearch(query);
       const tagQuery = noteCardSearch ? noteCardSearch.tagQuery : query;
@@ -3713,6 +3764,17 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.autoSwitchToOutlineEnabled)
           .onChange(async (value) => {
             await this.plugin.updateSettings({ autoSwitchToOutlineEnabled: value });
+          });
+      });
+
+    new Setting(containerEl)
+      .setName('输入法组合期间保持搜索结果')
+      .setDesc('开启后，使用中文输入法输入拼音时保持上一次搜索结果，确认候选字后再刷新')
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.freezeSearchWhileComposing)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ freezeSearchWhileComposing: value });
           });
       });
 
