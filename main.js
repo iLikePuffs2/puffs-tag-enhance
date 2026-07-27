@@ -720,13 +720,16 @@ class PuffsTagShelfView extends ItemView {
         noteCardEl.dataset.path = file.path;
 
         if (!isVirtual) {
+          noteCardEl.dataset.puffsTag = tag;
+          noteCardEl.dataset.puffsSurface = 'shelf';
+
           const orderButtonEl = document.createElement('button');
           orderButtonEl.type = 'button';
           orderButtonEl.className = 'clickable-icon puffs-tag-note-order-button';
           orderButtonEl.dataset.puffsTag = tag;
           orderButtonEl.dataset.path = file.path;
           orderButtonEl.dataset.puffsSurface = 'shelf';
-          orderButtonEl.setAttribute('aria-label', '选中笔记并使用快捷键调整顺序');
+          orderButtonEl.setAttribute('aria-label', '选中笔记并使用快捷键或右键目标卡片调整顺序');
           setIcon(orderButtonEl, 'list-todo');
           this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
           orderButtonEl.addEventListener('click', (event) => {
@@ -1290,6 +1293,39 @@ class PuffsTagEnhancePlugin extends Plugin {
     return true;
   }
 
+  async moveSelectedNoteAfter(targetTagValue, targetPath) {
+    const selected = this.selectedNoteOrderTarget;
+    const targetTag = normalizeTag(targetTagValue);
+    if (
+      !selected ||
+      !targetTag ||
+      selected.tag !== targetTag ||
+      !targetPath ||
+      selected.path === targetPath
+    ) {
+      return false;
+    }
+
+    const order = this.getOrderedFilesForTag(
+      selected.tag,
+      this.tagFileIndex.get(selected.tag) || []
+    ).map((file) => file.path);
+    const movingIndex = order.indexOf(selected.path);
+    const targetIndex = order.indexOf(targetPath);
+
+    if (movingIndex < 0) {
+      this.clearNoteOrderTarget();
+      return false;
+    }
+    if (targetIndex < 0 || movingIndex === targetIndex + 1) return false;
+
+    await this.reorderNote(selected.tag, selected.path, targetPath, 'after');
+    window.setTimeout(() => {
+      this.refreshNoteOrderSelectionState();
+    }, 0);
+    return true;
+  }
+
   async reorderNote(tagValue, movingPath, targetPath, placement) {
     const tag = normalizeTag(tagValue);
     if (!tag || isNestedTag(tag) || !movingPath || !targetPath || movingPath === targetPath) return;
@@ -1687,14 +1723,48 @@ class PuffsTagEnhancePlugin extends Plugin {
       if (!this.selectedNoteOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
       if (target && target.closest('.puffs-tag-note-order-button')) return;
+      if (evt.button === 2 && target && target.closest('.puffs-tag-note-card')) return;
       this.clearNoteOrderTarget();
     };
     document.addEventListener('pointerdown', this.pointerdownHandler, true);
+
+    this.noteOrderContextMenuHandler = (evt) => {
+      const selected = this.selectedNoteOrderTarget;
+      if (!selected) return;
+
+      const target = evt.target instanceof Element ? evt.target : null;
+      if (!target) return;
+      if (target.closest('.puffs-tag-note-order-button')) return;
+
+      const cardEl = target.closest('.puffs-tag-note-card');
+      if (!cardEl) return;
+
+      const targetTag = normalizeTag(cardEl.dataset.puffsTag);
+      const targetPath = cardEl.dataset.path;
+      if (targetTag === selected.tag && targetPath === selected.path) return;
+
+      if (!targetTag || targetTag !== selected.tag || !targetPath) {
+        this.clearNoteOrderTarget();
+        return;
+      }
+
+      evt.preventDefault();
+      evt.stopPropagation();
+      evt.stopImmediatePropagation();
+      this.moveSelectedNoteAfter(targetTag, targetPath).catch((error) => {
+        console.error('[Puffs Tag Enhance] Failed to move selected note after target:', error);
+        new Notice('调整笔记顺序失败');
+      });
+    };
+    document.addEventListener('contextmenu', this.noteOrderContextMenuHandler, true);
+
     this.register(() => {
       document.removeEventListener('keydown', this.keydownHandler, true);
       document.removeEventListener('pointerdown', this.pointerdownHandler, true);
+      document.removeEventListener('contextmenu', this.noteOrderContextMenuHandler, true);
       this.keydownHandler = null;
       this.pointerdownHandler = null;
+      this.noteOrderContextMenuHandler = null;
     });
   }
 
@@ -3033,13 +3103,16 @@ class PuffsTagEnhancePlugin extends Plugin {
       cardEl.style.setProperty('padding-inline-start', canReorder ? '17px' : '41px', 'important');
 
       if (canReorder) {
+        cardEl.dataset.puffsTag = tag;
+        cardEl.dataset.puffsSurface = 'sidebar';
+
         const orderButtonEl = document.createElement('button');
         orderButtonEl.type = 'button';
         orderButtonEl.className = 'clickable-icon puffs-tag-note-order-button';
         orderButtonEl.dataset.puffsTag = tag;
         orderButtonEl.dataset.path = file.path;
         orderButtonEl.dataset.puffsSurface = 'sidebar';
-        orderButtonEl.setAttribute('aria-label', '选中笔记并使用快捷键调整顺序');
+        orderButtonEl.setAttribute('aria-label', '选中笔记并使用快捷键或右键目标卡片调整顺序');
         setIcon(orderButtonEl, 'list-todo');
         this.syncNoteOrderButtonSelection(orderButtonEl);
         cardEl.appendChild(orderButtonEl);
