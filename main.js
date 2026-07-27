@@ -717,10 +717,25 @@ class PuffsTagShelfView extends ItemView {
     countEl.className = 'tag-pane-tag-count tree-item-flair';
     countEl.textContent = String(files.length);
 
+    let scrollBottomButtonEl = null;
+    if (isExpanded) {
+      scrollBottomButtonEl = document.createElement('button');
+      scrollBottomButtonEl.type = 'button';
+      scrollBottomButtonEl.className = 'clickable-icon puffs-tag-scroll-bottom-button';
+      scrollBottomButtonEl.dataset.puffsTag = tag;
+      setIcon(scrollBottomButtonEl, 'arrow-down-to-line');
+      scrollBottomButtonEl.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.plugin.scheduleLastNoteCardScroll(this.listEl, tag);
+      });
+    }
+
     innerEl.appendChild(textEl);
     flairOuterEl.appendChild(countEl);
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
+    if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
 
@@ -763,7 +778,6 @@ class PuffsTagShelfView extends ItemView {
           orderButtonEl.dataset.puffsTag = tag;
           orderButtonEl.dataset.path = file.path;
           orderButtonEl.dataset.puffsSurface = 'shelf';
-          orderButtonEl.setAttribute('aria-label', '选中笔记并使用快捷键或右键目标卡片调整顺序');
           setIcon(orderButtonEl, 'list-todo');
           this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
           orderButtonEl.addEventListener('click', (event) => {
@@ -1192,6 +1206,26 @@ class PuffsTagEnhancePlugin extends Plugin {
     }, 0);
   }
 
+  scheduleLastNoteCardScroll(containerEl, tag) {
+    if (!containerEl || !tag) return;
+
+    window.setTimeout(() => {
+      if (!containerEl.isConnected) return;
+
+      const tagRowEl = Array.from(
+        containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
+      ).find((rowEl) => rowEl.dataset.puffsTag === tag);
+      const tagItemEl = tagRowEl && tagRowEl.closest('.puffs-tag-list-item');
+      const noteCards = tagItemEl
+        ? Array.from(tagItemEl.querySelectorAll('.puffs-tag-note-card[data-path]'))
+        : [];
+      const lastCardEl = noteCards[noteCards.length - 1];
+      if (!lastCardEl) return;
+
+      lastCardEl.scrollIntoView({ block: 'center', inline: 'nearest' });
+    }, 0);
+  }
+
   isNoteOrderTargetSelected(tag, path) {
     return !!(
       this.selectedNoteOrderTarget &&
@@ -1445,6 +1479,32 @@ class PuffsTagEnhancePlugin extends Plugin {
 .puffs-tag-note-card.is-note-search-match {
   background: color-mix(in srgb, var(--interactive-accent) 16%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 55%, transparent);
+}
+
+.puffs-tag-scroll-bottom-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin: 0 0 0 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.puffs-tag-scroll-bottom-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.puffs-tag-scroll-bottom-button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .puffs-tag-hidden {
@@ -2544,6 +2604,17 @@ class PuffsTagEnhancePlugin extends Plugin {
       const target = evt.target instanceof Element ? evt.target : null;
       if (!target || !view.containerEl.contains(target)) return;
 
+      const scrollBottomButtonEl = target.closest('.puffs-tag-scroll-bottom-button');
+      if (scrollBottomButtonEl) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        const tag = scrollBottomButtonEl.dataset.puffsTag;
+        const listEl = view.containerEl.querySelector('.puffs-tag-list-container');
+        this.scheduleLastNoteCardScroll(listEl, tag);
+        return;
+      }
+
       const orderButtonEl = target.closest('.puffs-tag-note-order-button');
       if (orderButtonEl) {
         evt.preventDefault();
@@ -3047,10 +3118,20 @@ class PuffsTagEnhancePlugin extends Plugin {
     countEl.className = 'tag-pane-tag-count tree-item-flair';
     countEl.textContent = String(files.length);
 
+    let scrollBottomButtonEl = null;
+    if (isExpanded) {
+      scrollBottomButtonEl = document.createElement('button');
+      scrollBottomButtonEl.type = 'button';
+      scrollBottomButtonEl.className = 'clickable-icon puffs-tag-scroll-bottom-button';
+      scrollBottomButtonEl.dataset.puffsTag = tag;
+      setIcon(scrollBottomButtonEl, 'arrow-down-to-line');
+    }
+
     innerEl.appendChild(textEl);
     flairOuterEl.appendChild(countEl);
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
+    if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
 
@@ -3178,7 +3259,6 @@ class PuffsTagEnhancePlugin extends Plugin {
         orderButtonEl.dataset.puffsTag = tag;
         orderButtonEl.dataset.path = file.path;
         orderButtonEl.dataset.puffsSurface = 'sidebar';
-        orderButtonEl.setAttribute('aria-label', '选中笔记并使用快捷键或右键目标卡片调整顺序');
         setIcon(orderButtonEl, 'list-todo');
         this.syncNoteOrderButtonSelection(orderButtonEl);
         cardEl.appendChild(orderButtonEl);
