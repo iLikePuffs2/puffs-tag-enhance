@@ -1836,5 +1836,6 @@
   "moveNoteDownHotkey": "Alt + Shift + ↓",
   "backupIntervalMinutes": 60,
   "backupFolderPath": "其他/备份",
-  "pinnedTag": "#爱情-升温"
+  "pinnedTag": "#爱情-升温",
+  "scrollTopButtonThreshold": 10
 }

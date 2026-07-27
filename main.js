@@ -31,6 +31,7 @@ const TAG_SYSTEM_ICON = LIST_MODE_ICON;
 const INITIAL_TAG_INDEX_REFRESH_DELAYS_MS = [0, 500, 1500, 3000, 6000];
 const BACKUP_FILE_NAME = 'tag-data.md';
 const MAX_BACKUP_INTERVAL_MINUTES = Math.floor(0x7fffffff / 60000);
+const DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD = 10;
 
 const DEFAULT_SETTINGS = {
   autoSwitchToOutlineEnabled: true,
@@ -44,6 +45,7 @@ const DEFAULT_SETTINGS = {
   backupIntervalMinutes: 0,
   backupFolderPath: '',
   pinnedTag: null,
+  scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
 };
 
 function normalizeTag(rawTag) {
@@ -63,6 +65,12 @@ function normalizeBackupInterval(value) {
   const minutes = Math.floor(Number(value));
   if (!Number.isFinite(minutes) || minutes <= 0) return 0;
   return Math.min(minutes, MAX_BACKUP_INTERVAL_MINUTES);
+}
+
+function normalizeScrollTopButtonThreshold(value) {
+  const threshold = Math.floor(Number(value));
+  if (!Number.isFinite(threshold)) return DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD;
+  return Math.max(0, threshold);
 }
 
 function normalizeBackupFolderPath(value) {
@@ -784,7 +792,7 @@ class PuffsTagShelfView extends ItemView {
       const notesEl = document.createElement('div');
       notesEl.className = 'tree-item-children puffs-tag-note-list puffs-tag-shelf-notes';
 
-      for (const file of files) {
+      for (const [fileIndex, file] of files.entries()) {
         const noteItemEl = document.createElement('div');
         noteItemEl.className = 'tree-item puffs-tag-note-item puffs-tag-shelf-note-item';
         noteItemEl.dataset.path = file.path;
@@ -826,6 +834,24 @@ class PuffsTagShelfView extends ItemView {
 
         noteInnerEl.appendChild(noteTextEl);
         noteCardEl.appendChild(noteInnerEl);
+        const scrollTopButtonThreshold = this.plugin.settings.scrollTopButtonThreshold;
+        if (
+          scrollTopButtonThreshold > 0 &&
+          files.length >= scrollTopButtonThreshold &&
+          fileIndex === files.length - 1
+        ) {
+          const scrollTopButtonEl = document.createElement('button');
+          scrollTopButtonEl.type = 'button';
+          scrollTopButtonEl.className = 'clickable-icon puffs-tag-scroll-top-button';
+          scrollTopButtonEl.dataset.puffsTag = tag;
+          setIcon(scrollTopButtonEl, 'arrow-up-to-line');
+          scrollTopButtonEl.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.plugin.scheduleTagTopScroll(this.listEl, tag);
+          });
+          noteCardEl.appendChild(scrollTopButtonEl);
+        }
         noteCardEl.addEventListener('click', () => {
           this.plugin.openNoteCard(noteCardEl).catch((error) => {
             console.error('[Puffs Tag Enhance] Failed to open note:', error);
@@ -930,6 +956,9 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
+      this.settings.scrollTopButtonThreshold
+    );
     this.settings.pinnedTag = normalizeTag(this.settings.pinnedTag);
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
@@ -964,6 +993,9 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
+      this.settings.scrollTopButtonThreshold
+    );
     this.settings.pinnedTag = normalizeTag(this.settings.pinnedTag);
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
@@ -992,6 +1024,10 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'autoSwitchToOutlineEnabled')) {
       this.applySidebarPreferenceForCurrentFile();
+    }
+    if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'scrollTopButtonThreshold')) {
+      this.refreshTagViews();
+      this.refreshTagShelfViews();
     }
   }
 
@@ -1309,6 +1345,21 @@ class PuffsTagEnhancePlugin extends Plugin {
     }, 0);
   }
 
+  scheduleTagTopScroll(containerEl, tag) {
+    if (!containerEl || !tag) return;
+
+    window.setTimeout(() => {
+      if (!containerEl.isConnected) return;
+
+      const tagRowEl = Array.from(
+        containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
+      ).find((rowEl) => rowEl.dataset.puffsTag === tag);
+      if (!tagRowEl) return;
+
+      tagRowEl.scrollIntoView({ block: 'start', inline: 'nearest' });
+    }, 0);
+  }
+
   isNoteOrderTargetSelected(tag, path) {
     return !!(
       this.selectedNoteOrderTarget &&
@@ -1565,7 +1616,8 @@ class PuffsTagEnhancePlugin extends Plugin {
 }
 
 .puffs-tag-scroll-bottom-button,
-.puffs-tag-pin-button {
+.puffs-tag-pin-button,
+.puffs-tag-scroll-top-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1582,13 +1634,15 @@ class PuffsTagEnhancePlugin extends Plugin {
 }
 
 .puffs-tag-scroll-bottom-button:hover,
-.puffs-tag-pin-button:hover {
+.puffs-tag-pin-button:hover,
+.puffs-tag-scroll-top-button:hover {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
 
 .puffs-tag-scroll-bottom-button svg,
-.puffs-tag-pin-button svg {
+.puffs-tag-pin-button svg,
+.puffs-tag-scroll-top-button svg {
   width: 14px;
   height: 14px;
 }
@@ -2728,6 +2782,17 @@ class PuffsTagEnhancePlugin extends Plugin {
         return;
       }
 
+      const scrollTopButtonEl = target.closest('.puffs-tag-scroll-top-button');
+      if (scrollTopButtonEl) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        const tag = scrollTopButtonEl.dataset.puffsTag;
+        const listEl = view.containerEl.querySelector('.puffs-tag-list-container');
+        this.scheduleTagTopScroll(listEl, tag);
+        return;
+      }
+
       const orderButtonEl = target.closest('.puffs-tag-note-order-button');
       if (orderButtonEl) {
         evt.preventDefault();
@@ -3369,7 +3434,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     const tag = normalizeTag(tagValue);
     const canReorder = !!tag && !isVirtual && !isNestedTag(tag);
-    for (const file of files) {
+    for (const [fileIndex, file] of files.entries()) {
       const itemEl = document.createElement('div');
       itemEl.className = 'tree-item puffs-tag-note-item';
       itemEl.dataset.path = file.path;
@@ -3410,6 +3475,19 @@ class PuffsTagEnhancePlugin extends Plugin {
 
       innerEl.appendChild(textEl);
       cardEl.appendChild(innerEl);
+      const scrollTopButtonThreshold = this.settings.scrollTopButtonThreshold;
+      if (
+        scrollTopButtonThreshold > 0 &&
+        files.length >= scrollTopButtonThreshold &&
+        fileIndex === files.length - 1
+      ) {
+        const scrollTopButtonEl = document.createElement('button');
+        scrollTopButtonEl.type = 'button';
+        scrollTopButtonEl.className = 'clickable-icon puffs-tag-scroll-top-button';
+        scrollTopButtonEl.dataset.puffsTag = tagValue;
+        setIcon(scrollTopButtonEl, 'arrow-up-to-line');
+        cardEl.appendChild(scrollTopButtonEl);
+      }
       itemEl.appendChild(cardEl);
       listEl.appendChild(itemEl);
     }
@@ -4071,6 +4149,21 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             await this.plugin.updateSettings({ backupFolderPath: value });
           });
+      });
+
+    new Setting(containerEl)
+      .setName('回顶按钮显示阈值')
+      .setDesc('标签的笔记卡片数量达到该值时显示回顶按钮；输入 0 不显示')
+      .addText((text) => {
+        text
+          .setValue(String(this.plugin.settings.scrollTopButtonThreshold))
+          .setPlaceholder(String(DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD))
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ scrollTopButtonThreshold: value });
+          });
+        text.inputEl.type = 'number';
+        text.inputEl.min = '0';
+        text.inputEl.step = '1';
       });
   }
 }
