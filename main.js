@@ -1979,6 +1979,8 @@ class PuffsTagEnhancePlugin extends Plugin {
       if (!this.selectedNoteOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
       if (target && target.closest('.puffs-tag-note-order-button')) return;
+      if (target && target.closest('.puffs-tag-scroll-top-button')) return;
+      if (target && target.closest('.puffs-tag-scroll-bottom-button')) return;
       if (this.isNoteOrderSearchControl(target)) return;
       if (evt.button === 2 && target && target.closest('.puffs-tag-note-card')) return;
       this.clearNoteOrderTarget();
