@@ -151,6 +151,11 @@ class PuffsTagShelfView extends ItemView {
       if (value === this.searchQuery) return;
       this.searchQuery = value;
       this.renderTagList();
+      if (value.trim() && !value.includes('*')) {
+        window.requestAnimationFrame(() => {
+          if (this.contentEl && this.contentEl.isConnected) this.contentEl.scrollTop = 0;
+        });
+      }
     };
     const onCompositionStart = () => {
       this.isSearchComposing = this.plugin.settings.freezeSearchWhileComposing;
@@ -252,7 +257,7 @@ class PuffsTagShelfView extends ItemView {
     const query = this.searchQuery.trim();
     const effectiveQuery = this.plugin.resolvePinnedSearchQuery(query);
     const matchingItems = this.plugin.getTagShelfItems(effectiveQuery, false);
-    const items = this.plugin.prependPinnedTagItem(matchingItems);
+    const items = this.plugin.prependPinnedTagItem(matchingItems, query);
     const noteCardSearch = parseNoteCardSearch(effectiveQuery);
     if (noteCardSearch && noteCardSearch.isValid) {
       this.clearAutoExpandedTag();

@@ -130,6 +130,7 @@ export class TagPaneBehavior {
       autoExpandedTag: null,
       autoExpandedWasAlreadyExpanded: false,
       noteCardSearchState: createNoteCardSearchState(),
+      lastRenderedSearchQuery: this.getTagSearchValue(view),
     };
 
     const searchInputEl = view.searchComponent && view.searchComponent.inputEl;
@@ -484,10 +485,17 @@ export class TagPaneBehavior {
     if (!listEl) return;
 
     const rawQuery = this.getTagSearchValue(view);
+    const patch = this.viewPatches.get(view);
+    const shouldResetSearchScroll = !!(
+      patch &&
+      rawQuery !== patch.lastRenderedSearchQuery &&
+      rawQuery.trim() &&
+      !rawQuery.includes('*')
+    );
+    if (patch) patch.lastRenderedSearchQuery = rawQuery;
     const effectiveQuery = this.resolvePinnedSearchQuery(rawQuery);
     const matchingItems = this.getListModeItems(view, effectiveQuery, false);
-    const items = this.prependPinnedTagItem(matchingItems);
-    const patch = this.viewPatches.get(view);
+    const items = this.prependPinnedTagItem(matchingItems, rawQuery);
     const noteCardSearch = parseNoteCardSearch(effectiveQuery);
     if (patch) {
       if (noteCardSearch && noteCardSearch.isValid) {
@@ -530,6 +538,12 @@ export class TagPaneBehavior {
         view.searchComponent && view.searchComponent.inputEl,
         patch.noteCardSearchState
       );
+    }
+    if (shouldResetSearchScroll) {
+      window.requestAnimationFrame(() => {
+        const scrollEl = view.tagPaneEl || listEl.parentElement;
+        if (scrollEl && scrollEl.isConnected) scrollEl.scrollTop = 0;
+      });
     }
   }
 
@@ -595,7 +609,7 @@ export class TagPaneBehavior {
     const intersectionTerms = splitIntersectionSearchTerms(query);
     if (intersectionTerms) {
       const intersectionItems = this.getIntersectionSearchItems(intersectionTerms);
-      return includePinned ? this.prependPinnedTagItem(intersectionItems) : intersectionItems;
+      return includePinned ? this.prependPinnedTagItem(intersectionItems, queryValue) : intersectionItems;
     }
 
     const unionTerms = splitUnionSearchTerms(query);
@@ -643,7 +657,7 @@ export class TagPaneBehavior {
       return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
     });
 
-    return includePinned ? this.prependPinnedTagItem(items) : items;
+    return includePinned ? this.prependPinnedTagItem(items, queryValue) : items;
   }
 
   getIntersectionSearchItems(terms) {

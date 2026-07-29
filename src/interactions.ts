@@ -64,13 +64,20 @@ export class InteractionsBehavior {
     };
   }
 
-  prependPinnedTagItem(items) {
+  prependPinnedTagItem(items, query = '') {
     const pinnedItem = this.getPinnedTagItem();
     if (!pinnedItem) return items;
 
     const remainingItems = items.filter((item) => item.tag !== pinnedItem.tag);
     const matchingItem = items.find((item) => item.tag === pinnedItem.tag);
-    return [{ ...(matchingItem || pinnedItem), isPinnedExtra: !matchingItem }, ...remainingItems];
+    const positionedPinnedItem = {
+      ...(matchingItem || pinnedItem),
+      isPinnedExtra: !matchingItem,
+    };
+    const isNonNoteSearch = String(query || '').trim() && !String(query || '').includes('*');
+    return isNonNoteSearch
+      ? [...remainingItems, positionedPinnedItem]
+      : [positionedPinnedItem, ...remainingItems];
   }
 
   async togglePinnedTag(tagValue) {
@@ -88,7 +95,7 @@ export class InteractionsBehavior {
     const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
     if (intersectionTerms) {
       const intersectionItems = this.getIntersectionSearchItems(intersectionTerms);
-      return includePinned ? this.prependPinnedTagItem(intersectionItems) : intersectionItems;
+      return includePinned ? this.prependPinnedTagItem(intersectionItems, query) : intersectionItems;
     }
 
     const unionTerms = splitUnionSearchTerms(tagQuery);
@@ -108,7 +115,7 @@ export class InteractionsBehavior {
     const matchingItems = unionTerms
       ? items.filter((item) => tagMatchesAnySearchTerm(item.tag, unionTerms))
       : items.filter((item) => tagMatchesSearchText(item.tag, tagQuery));
-    return includePinned ? this.prependPinnedTagItem(matchingItems) : matchingItems;
+    return includePinned ? this.prependPinnedTagItem(matchingItems, query) : matchingItems;
   }
 
   getNoteCardSearchMatches(query, items) {

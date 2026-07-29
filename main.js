@@ -436,6 +436,11 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
       if (value === this.searchQuery) return;
       this.searchQuery = value;
       this.renderTagList();
+      if (value.trim() && !value.includes("*")) {
+        window.requestAnimationFrame(() => {
+          if (this.contentEl && this.contentEl.isConnected) this.contentEl.scrollTop = 0;
+        });
+      }
     };
     const onCompositionStart = () => {
       this.isSearchComposing = this.plugin.settings.freezeSearchWhileComposing;
@@ -523,7 +528,7 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     const query = this.searchQuery.trim();
     const effectiveQuery = this.plugin.resolvePinnedSearchQuery(query);
     const matchingItems = this.plugin.getTagShelfItems(effectiveQuery, false);
-    const items = this.plugin.prependPinnedTagItem(matchingItems);
+    const items = this.plugin.prependPinnedTagItem(matchingItems, query);
     const noteCardSearch = parseNoteCardSearch(effectiveQuery);
     if (noteCardSearch && noteCardSearch.isValid) {
       this.clearAutoExpandedTag();
@@ -977,12 +982,17 @@ var InteractionsBehavior = class {
       files: this.getOrderedFilesForTag(tag, files)
     };
   }
-  prependPinnedTagItem(items) {
+  prependPinnedTagItem(items, query = "") {
     const pinnedItem = this.getPinnedTagItem();
     if (!pinnedItem) return items;
     const remainingItems = items.filter((item) => item.tag !== pinnedItem.tag);
     const matchingItem = items.find((item) => item.tag === pinnedItem.tag);
-    return [{ ...matchingItem || pinnedItem, isPinnedExtra: !matchingItem }, ...remainingItems];
+    const positionedPinnedItem = {
+      ...matchingItem || pinnedItem,
+      isPinnedExtra: !matchingItem
+    };
+    const isNonNoteSearch = String(query || "").trim() && !String(query || "").includes("*");
+    return isNonNoteSearch ? [...remainingItems, positionedPinnedItem] : [positionedPinnedItem, ...remainingItems];
   }
   async togglePinnedTag(tagValue) {
     const tag = normalizeTag(tagValue);
@@ -997,7 +1007,7 @@ var InteractionsBehavior = class {
     const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
     if (intersectionTerms) {
       const intersectionItems = this.getIntersectionSearchItems(intersectionTerms);
-      return includePinned ? this.prependPinnedTagItem(intersectionItems) : intersectionItems;
+      return includePinned ? this.prependPinnedTagItem(intersectionItems, query) : intersectionItems;
     }
     const unionTerms = splitUnionSearchTerms(tagQuery);
     const items = Array.from(this.tagFileIndex.entries()).filter(([tag, files]) => !isNestedTag(tag) && files.length > 0).map(([tag, files]) => ({
@@ -1010,7 +1020,7 @@ var InteractionsBehavior = class {
       return countDiff || a.displayName.localeCompare(b.displayName, "zh-Hans-CN");
     });
     const matchingItems = unionTerms ? items.filter((item) => tagMatchesAnySearchTerm(item.tag, unionTerms)) : items.filter((item) => tagMatchesSearchText(item.tag, tagQuery));
-    return includePinned ? this.prependPinnedTagItem(matchingItems) : matchingItems;
+    return includePinned ? this.prependPinnedTagItem(matchingItems, query) : matchingItems;
   }
   getNoteCardSearchMatches(query, items) {
     const noteCardSearch = parseNoteCardSearch(query);
@@ -2283,7 +2293,8 @@ var TagPaneBehavior = class {
       isSearchComposing: false,
       autoExpandedTag: null,
       autoExpandedWasAlreadyExpanded: false,
-      noteCardSearchState: createNoteCardSearchState()
+      noteCardSearchState: createNoteCardSearchState(),
+      lastRenderedSearchQuery: this.getTagSearchValue(view)
     };
     const searchInputEl = view.searchComponent && view.searchComponent.inputEl;
     if (searchInputEl) {
@@ -2569,10 +2580,12 @@ var TagPaneBehavior = class {
     const listEl = this.ensureListModeContainer(view);
     if (!listEl) return;
     const rawQuery = this.getTagSearchValue(view);
+    const patch = this.viewPatches.get(view);
+    const shouldResetSearchScroll = !!(patch && rawQuery !== patch.lastRenderedSearchQuery && rawQuery.trim() && !rawQuery.includes("*"));
+    if (patch) patch.lastRenderedSearchQuery = rawQuery;
     const effectiveQuery = this.resolvePinnedSearchQuery(rawQuery);
     const matchingItems = this.getListModeItems(view, effectiveQuery, false);
-    const items = this.prependPinnedTagItem(matchingItems);
-    const patch = this.viewPatches.get(view);
+    const items = this.prependPinnedTagItem(matchingItems, rawQuery);
     const noteCardSearch = parseNoteCardSearch(effectiveQuery);
     if (patch) {
       if (noteCardSearch && noteCardSearch.isValid) {
@@ -2612,6 +2625,12 @@ var TagPaneBehavior = class {
         view.searchComponent && view.searchComponent.inputEl,
         patch.noteCardSearchState
       );
+    }
+    if (shouldResetSearchScroll) {
+      window.requestAnimationFrame(() => {
+        const scrollEl = view.tagPaneEl || listEl.parentElement;
+        if (scrollEl && scrollEl.isConnected) scrollEl.scrollTop = 0;
+      });
     }
   }
   syncAutoSingleSearchResult(view, patch, items, queryValue = this.resolvePinnedSearchQuery(
@@ -2661,7 +2680,7 @@ var TagPaneBehavior = class {
     const intersectionTerms = splitIntersectionSearchTerms(query);
     if (intersectionTerms) {
       const intersectionItems = this.getIntersectionSearchItems(intersectionTerms);
-      return includePinned ? this.prependPinnedTagItem(intersectionItems) : intersectionItems;
+      return includePinned ? this.prependPinnedTagItem(intersectionItems, queryValue) : intersectionItems;
     }
     const unionTerms = splitUnionSearchTerms(query);
     const items = [];
@@ -2696,7 +2715,7 @@ var TagPaneBehavior = class {
       const countDiff = b.files.length - a.files.length;
       return countDiff || a.displayName.localeCompare(b.displayName, "zh-Hans-CN");
     });
-    return includePinned ? this.prependPinnedTagItem(items) : items;
+    return includePinned ? this.prependPinnedTagItem(items, queryValue) : items;
   }
   getIntersectionSearchItems(terms) {
     const tags = Array.from(this.tagFileIndex.keys()).filter((tag) => !isNestedTag(tag) && (this.tagFileIndex.get(tag) || []).length > 0).sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), "zh-Hans-CN"));
