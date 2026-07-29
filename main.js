@@ -2449,6 +2449,16 @@ class PuffsTagEnhancePlugin extends Plugin {
     });
   }
 
+  getStableNoteOrderTags(nextIndex) {
+    const existingTags = Object.keys(this.settings.noteOrderByTag)
+      .filter((tag) => nextIndex.has(tag));
+    const existingTagSet = new Set(existingTags);
+    const addedTags = Array.from(nextIndex.keys())
+      .filter((tag) => !existingTagSet.has(tag))
+      .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+    return existingTags.concat(addedTags);
+  }
+
   rebuildTagFileIndex(changedPath = null) {
     const nextIndex = new Map();
 
@@ -2487,7 +2497,8 @@ class PuffsTagEnhancePlugin extends Plugin {
   initializeNoteOrders(nextIndex) {
     const nextOrders = {};
 
-    for (const [tag, files] of nextIndex.entries()) {
+    for (const tag of this.getStableNoteOrderTags(nextIndex)) {
+      const files = nextIndex.get(tag) || [];
       const currentPaths = files.map((file) => file.path);
       const currentPathSet = new Set(currentPaths);
       const savedOrder = Array.isArray(this.settings.noteOrderByTag[tag])
@@ -2508,7 +2519,8 @@ class PuffsTagEnhancePlugin extends Plugin {
   reconcileNoteOrders(nextIndex, changedPath = null) {
     const nextOrders = {};
 
-    for (const [tag, files] of nextIndex.entries()) {
+    for (const tag of this.getStableNoteOrderTags(nextIndex)) {
+      const files = nextIndex.get(tag) || [];
       const currentPaths = files.map((file) => file.path);
       const currentPathSet = new Set(currentPaths);
       const savedOrder = Array.isArray(this.settings.noteOrderByTag[tag])
