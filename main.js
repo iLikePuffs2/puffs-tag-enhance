@@ -815,7 +815,7 @@ class PuffsTagShelfView extends ItemView {
           orderButtonEl.dataset.puffsTag = tag;
           orderButtonEl.dataset.path = file.path;
           orderButtonEl.dataset.puffsSurface = 'shelf';
-          setIcon(orderButtonEl, 'list-todo');
+          setIcon(orderButtonEl, 'grip-vertical');
           this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
           orderButtonEl.addEventListener('click', (event) => {
             event.preventDefault();
@@ -3475,7 +3475,7 @@ class PuffsTagEnhancePlugin extends Plugin {
         orderButtonEl.dataset.puffsTag = tag;
         orderButtonEl.dataset.path = file.path;
         orderButtonEl.dataset.puffsSurface = 'sidebar';
-        setIcon(orderButtonEl, 'list-todo');
+        setIcon(orderButtonEl, 'grip-vertical');
         this.syncNoteOrderButtonSelection(orderButtonEl);
         cardEl.appendChild(orderButtonEl);
       }
