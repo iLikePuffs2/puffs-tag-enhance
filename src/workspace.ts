@@ -172,14 +172,14 @@ export class WorkspaceBehavior {
       const filePathChanged = filePath !== this.currentMainFilePath;
       this.rememberMainLeaf(leaf);
       this.currentMainFilePath = filePath;
-      if (filePathChanged && !this.isSidebarAutoSwitchGuarded()) {
+      if (filePathChanged) {
         this.applySidebarPreferenceForCurrentFile();
       }
       return;
     }
 
     if (this.isManagedSidebarLeaf(leaf)) {
-      this.handleSidebarSelection(leaf.view.getViewType());
+      this.handleSidebarSelection(leaf);
     }
   }
 
@@ -206,16 +206,25 @@ export class WorkspaceBehavior {
     const leaf = this.getSelectedManagedSidebarLeaf();
     if (!leaf || !leaf.view) return;
 
-    this.handleSidebarSelection(leaf.view.getViewType());
+    this.handleSidebarSelection(leaf);
   }
 
-  handleSidebarSelection(viewType) {
+  handleSidebarSelection(leaf) {
+    if (!this.isManagedSidebarLeaf(leaf)) return;
+
+    const operation = this.activeSidebarSelectionOperation;
+    if (operation && leaf.parent === operation.group) {
+      return;
+    }
+
+    const viewType = leaf.view.getViewType();
     if (!viewType || viewType === this.selectedSidebarViewType) return;
 
     const previousViewType = this.selectedSidebarViewType;
     this.selectedSidebarViewType = viewType;
+    this.sidebarSwitchRequestId += 1;
 
-    if (!this.settings.autoSwitchToOutlineEnabled || this.isSidebarAutoSwitchGuarded()) return;
+    if (!this.settings.autoSwitchToOutlineEnabled) return;
 
     if (viewType === TAG_VIEW_TYPE) {
       this.setTagSidebarPreference(this.currentMainFilePath, true);
@@ -246,27 +255,63 @@ export class WorkspaceBehavior {
   }
 
   applySidebarPreferenceForCurrentFile() {
-    if (!this.settings.autoSwitchToOutlineEnabled || !this.currentMainFilePath) return;
+    const requestId = ++this.sidebarSwitchRequestId;
+    const filePath = this.currentMainFilePath;
+    if (!this.settings.autoSwitchToOutlineEnabled || !filePath) return;
 
-    const targetViewType = this.hasTagSidebarPreference(this.currentMainFilePath)
+    const targetViewType = this.hasTagSidebarPreference(filePath)
       ? TAG_VIEW_TYPE
       : OUTLINE_VIEW_TYPE;
-    this.switchManagedSidebarTo(targetViewType);
+    this.switchManagedSidebarTo(requestId, filePath, targetViewType).catch((error) => {
+      console.error('[Puffs Tag Enhance] Failed to switch sidebar for current file:', error);
+    });
   }
 
-  async switchManagedSidebarTo(viewType) {
-    const mainLeaf = this.lastMainLeaf;
+  async switchManagedSidebarTo(requestId, filePath, viewType) {
     const leaf = await this.getOrCreateManagedSidebarLeaf(viewType);
+    if (this.isUnloaded) return;
+    if (requestId !== this.sidebarSwitchRequestId) return;
+    if (filePath !== this.currentMainFilePath) return;
+    if (!this.settings.autoSwitchToOutlineEnabled) return;
+
+    const currentTargetViewType = this.hasTagSidebarPreference(filePath)
+      ? TAG_VIEW_TYPE
+      : OUTLINE_VIEW_TYPE;
+    if (currentTargetViewType !== viewType) return;
     if (!leaf || !leaf.parent || typeof leaf.parent.selectTab !== 'function') return;
 
-    this.withSidebarAutoSwitchGuard(() => {
-      leaf.parent.selectTab(leaf);
-      this.selectedSidebarViewType = viewType;
+    const group = leaf.parent;
+    const operation = {
+      requestId,
+      filePath,
+      targetLeaf: leaf,
+      targetViewType: viewType,
+      group,
+    };
+    this.activeSidebarSelectionOperation = operation;
 
-      if (this.isUsableMainLeaf(mainLeaf)) {
-        this.app.workspace.setActiveLeaf(mainLeaf, { focus: true });
+    try {
+      leaf.parent.selectTab(leaf);
+    } finally {
+      if (this.activeSidebarSelectionOperation === operation) {
+        this.activeSidebarSelectionOperation = null;
       }
-    });
+      const selectedLeaf = Array.isArray(group.children) && Number.isInteger(group.currentTab)
+        ? group.children[group.currentTab]
+        : null;
+      this.selectedSidebarViewType = this.isManagedSidebarLeaf(selectedLeaf)
+        ? selectedLeaf.view.getViewType()
+        : null;
+    }
+
+    const mainLeaf = this.lastMainLeaf;
+    if (
+      this.selectedSidebarViewType === viewType &&
+      this.isUsableMainLeaf(mainLeaf) &&
+      getLeafFilePath(mainLeaf) === filePath
+    ) {
+      this.app.workspace.setActiveLeaf(mainLeaf, { focus: true });
+    }
   }
 
   async getOrCreateManagedSidebarLeaf(viewType) {
@@ -310,23 +355,6 @@ export class WorkspaceBehavior {
     if (outlineLeaf && outlineLeaf.parent) return outlineLeaf.parent;
 
     return null;
-  }
-
-  withSidebarAutoSwitchGuard(callback) {
-    this.sidebarSwitchGuardUntil = Date.now() + 300;
-    try {
-      callback();
-    } finally {
-      window.setTimeout(() => {
-        if (Date.now() >= this.sidebarSwitchGuardUntil) {
-          this.sidebarSwitchGuardUntil = 0;
-        }
-      }, 320);
-    }
-  }
-
-  isSidebarAutoSwitchGuarded() {
-    return Date.now() < this.sidebarSwitchGuardUntil;
   }
 
   handlePreferredFileRename(file, oldPath) {
