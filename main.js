@@ -1602,6 +1602,7 @@ class PuffsTagEnhancePlugin extends Plugin {
 .puffs-tag-note-card .tree-item-inner {
   flex: 1 1 auto;
   min-width: 0;
+  margin-inline-start: 3px;
 }
 
 .puffs-tag-note-card .tree-item-inner-text {
