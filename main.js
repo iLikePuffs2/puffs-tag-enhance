@@ -1032,7 +1032,7 @@ var InteractionsBehavior = class {
         matches.push({
           tag: item.tag,
           path: file.path,
-          key: `${String(query)}\0${item.tag}\0${file.path}`
+          key: `${item.tag}\0${file.path}`
         });
       }
     }
@@ -1100,37 +1100,46 @@ var InteractionsBehavior = class {
   }
   scheduleNoteCardSearchEffect(containerEl, inputEl, state) {
     if (!containerEl || !state) return;
-    containerEl.querySelectorAll(".puffs-tag-note-card.is-note-search-match").forEach((cardEl) => {
-      cardEl.classList.remove("is-note-search-match");
-    });
     if (state.effectTimer !== null) {
       window.clearTimeout(state.effectTimer);
       state.effectTimer = null;
     }
-    if (!state.target) return;
+    const findTargetCard = (target2) => {
+      if (!target2) return null;
+      const tagRowEl = Array.from(
+        containerEl.querySelectorAll(".tag-pane-tag[data-puffs-tag]")
+      ).find((rowEl) => rowEl.dataset.puffsTag === target2.tag);
+      const tagItemEl = tagRowEl && tagRowEl.closest(".puffs-tag-list-item");
+      return tagItemEl && Array.from(tagItemEl.querySelectorAll(".puffs-tag-note-card[data-path]")).find(
+        (candidate) => candidate.dataset.path === target2.path
+      );
+    };
+    const target = state.target;
+    const targetCardEl = findTargetCard(target);
+    containerEl.querySelectorAll(".puffs-tag-note-card.is-note-search-match").forEach((cardEl) => {
+      if (cardEl !== targetCardEl) cardEl.classList.remove("is-note-search-match");
+    });
+    if (!target || !targetCardEl) return;
+    targetCardEl.classList.add("is-note-search-match");
+    if (state.pendingScrollKey !== target.key) return;
+    const scheduledTargetKey = target.key;
     const shouldRestoreInputFocus = document.activeElement === inputEl;
     state.effectTimer = window.setTimeout(() => {
       state.effectTimer = null;
-      if (!state.target) return;
-      const tagRowEl = Array.from(
-        containerEl.querySelectorAll(".tag-pane-tag[data-puffs-tag]")
-      ).find((rowEl) => rowEl.dataset.puffsTag === state.target.tag);
-      const tagItemEl = tagRowEl && tagRowEl.closest(".puffs-tag-list-item");
-      const cardEl = tagItemEl && Array.from(tagItemEl.querySelectorAll(".puffs-tag-note-card[data-path]")).find(
-        (candidate) => candidate.dataset.path === state.target.path
-      );
-      if (!cardEl) return;
-      cardEl.classList.add("is-note-search-match");
-      if (state.pendingScrollKey === state.target.key) {
-        cardEl.scrollIntoView({ block: "center", inline: "nearest" });
-        state.lastScrolledKey = state.target.key;
-        state.pendingScrollKey = "";
-        if (shouldRestoreInputFocus && inputEl && inputEl.isConnected) {
-          try {
-            inputEl.focus({ preventScroll: true });
-          } catch (_) {
-            inputEl.focus();
-          }
+      const currentTarget = state.target;
+      if (!currentTarget || currentTarget.key !== scheduledTargetKey || state.pendingScrollKey !== scheduledTargetKey) {
+        return;
+      }
+      const currentCardEl = findTargetCard(currentTarget);
+      if (!currentCardEl) return;
+      currentCardEl.scrollIntoView({ block: "center", inline: "nearest" });
+      state.lastScrolledKey = scheduledTargetKey;
+      state.pendingScrollKey = "";
+      if (shouldRestoreInputFocus && inputEl && inputEl.isConnected) {
+        try {
+          inputEl.focus({ preventScroll: true });
+        } catch (_) {
+          inputEl.focus();
         }
       }
     }, 0);
