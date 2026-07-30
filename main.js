@@ -1345,6 +1345,17 @@ var WorkspaceBehavior = class {
       return searchContainerEl.contains(target);
     });
   }
+  isTagSidebarScrollbarPointer(evt, target) {
+    if (!(target instanceof Element)) return false;
+    const scrollEl = target.closest(
+      '.workspace-leaf-content[data-type="tag"] .tag-container'
+    );
+    if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight) return false;
+    const scrollbarWidth = scrollEl.offsetWidth - scrollEl.clientWidth;
+    if (scrollbarWidth <= 0) return false;
+    const rect = scrollEl.getBoundingClientRect();
+    return evt.clientX >= rect.right - scrollbarWidth && evt.clientX <= rect.right && evt.clientY >= rect.top && evt.clientY <= rect.bottom;
+  }
   registerKeyboardHandler() {
     this.keydownHandler = (evt) => {
       if (!this.isQuickSearchHotkey(evt)) return;
@@ -1363,6 +1374,7 @@ var WorkspaceBehavior = class {
       if (target && target.closest(".puffs-tag-scroll-top-button")) return;
       if (target && target.closest(".puffs-tag-scroll-bottom-button")) return;
       if (this.isNoteOrderSearchControl(target)) return;
+      if (this.isTagSidebarScrollbarPointer(evt, target)) return;
       if (evt.button === 2 && target && target.closest(".puffs-tag-note-card")) return;
       this.clearNoteOrderTarget();
     };
