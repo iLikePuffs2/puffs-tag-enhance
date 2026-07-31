@@ -55,6 +55,7 @@ var DEFAULT_SETTINGS = {
   freezeSearchWhileComposing: true,
   tagSidebarPreferredFiles: {},
   noteOrderByTag: {},
+  noteDisplayNameByTag: {},
   newNotePosition: "end",
   toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
   moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,
@@ -118,9 +119,12 @@ function getTagFilterQuery(value) {
   const noteCardSearch = parseNoteCardSearch(value);
   return noteCardSearch ? noteCardSearch.tagQuery : String(value || "");
 }
-function fileMatchesNoteSearch(file, value) {
+function fileMatchesNoteSearch(file, value, displayName = "") {
   const term = String(value || "").trim().toLowerCase();
-  return !!term && String(file && file.basename || "").toLowerCase().includes(term);
+  if (!term) return false;
+  const fileName = String(file && file.basename || "").toLowerCase();
+  const visibleName = String(displayName || "").toLowerCase();
+  return fileName.includes(term) || !!visibleName && visibleName.includes(term);
 }
 function splitUnionSearchTerms(value) {
   const text = String(value || "");
@@ -709,7 +713,7 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
         noteInnerEl.className = "tree-item-inner";
         const noteTextEl = document.createElement("div");
         noteTextEl.className = "tree-item-inner-text";
-        noteTextEl.textContent = file.basename;
+        noteTextEl.textContent = this.plugin.getNoteDisplayName(tag, file, isVirtual);
         noteInnerEl.appendChild(noteTextEl);
         noteCardEl.appendChild(noteInnerEl);
         const scrollTopButtonThreshold = this.plugin.settings.scrollTopButtonThreshold;
@@ -731,6 +735,11 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
             console.error("[Puffs Tag Enhance] Failed to open note:", error);
             new import_obsidian2.Notice("\u6253\u5F00\u7B14\u8BB0\u5931\u8D25");
           });
+        });
+        noteCardEl.addEventListener("contextmenu", (event) => {
+          if (!this.plugin.showNoteDisplayNameMenuForCard(event, noteCardEl)) return;
+          event.preventDefault();
+          event.stopPropagation();
         });
         noteItemEl.appendChild(noteCardEl);
         notesEl.appendChild(noteItemEl);
@@ -826,6 +835,9 @@ var PersistenceBehavior = class {
     }
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
+      this.settings.noteDisplayNameByTag
+    );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
@@ -860,6 +872,9 @@ var PersistenceBehavior = class {
     }
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
+      this.settings.noteDisplayNameByTag
+    );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
@@ -943,6 +958,25 @@ var PersistenceBehavior = class {
     }
     return result;
   }
+  normalizeNoteDisplayNameByTag(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const result = {};
+    for (const [rawTag, rawEntries] of Object.entries(value)) {
+      const tag = normalizeTag(rawTag);
+      if (!tag || isNestedTag(tag) || !rawEntries || typeof rawEntries !== "object" || Array.isArray(rawEntries)) {
+        continue;
+      }
+      const entries = {};
+      for (const [rawPath, rawDisplayName] of Object.entries(rawEntries)) {
+        const path = typeof rawPath === "string" ? rawPath.trim() : "";
+        const displayName = typeof rawDisplayName === "string" ? rawDisplayName.trim() : "";
+        if (!path || !displayName) continue;
+        entries[path] = displayName;
+      }
+      if (Object.keys(entries).length > 0) result[tag] = entries;
+    }
+    return result;
+  }
 };
 
 // src/interactions.ts
@@ -963,6 +997,106 @@ var InteractionsBehavior = class {
       if (bIsRanked) return 1;
       return a.index - b.index;
     }).map(({ file }) => file);
+  }
+  getNoteAliases(file) {
+    if (!(file instanceof import_obsidian5.TFile) || file.extension !== "md") return [];
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = cache && cache.frontmatter;
+    if (!frontmatter) return [];
+    const aliases = [];
+    const collectAliases = (value) => {
+      if (Array.isArray(value)) {
+        value.forEach(collectAliases);
+        return;
+      }
+      if (value == null) return;
+      const alias = String(value).trim();
+      if (alias) aliases.push(alias);
+    };
+    collectAliases(frontmatter.aliases);
+    collectAliases(frontmatter.alias);
+    return Array.from(new Set(aliases)).filter((alias) => alias !== file.basename);
+  }
+  getNoteDisplayName(tagValue, file, isVirtual = false) {
+    if (!(file instanceof import_obsidian5.TFile) || isVirtual) return file && file.basename ? file.basename : "";
+    const tag = normalizeTag(tagValue);
+    if (!tag || isNestedTag(tag)) return file.basename;
+    const selected = this.settings.noteDisplayNameByTag && this.settings.noteDisplayNameByTag[tag] && this.settings.noteDisplayNameByTag[tag][file.path];
+    return selected && this.getNoteAliases(file).includes(selected) ? selected : file.basename;
+  }
+  refreshNoteDisplayNameCards(tagValue, file) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !(file instanceof import_obsidian5.TFile)) return;
+    const displayName = this.getNoteDisplayName(tag, file);
+    document.querySelectorAll(".puffs-tag-note-card[data-puffs-tag][data-path]").forEach((cardEl) => {
+      if (cardEl.dataset.puffsTag !== tag || cardEl.dataset.path !== file.path) return;
+      const textEl = cardEl.querySelector(".tree-item-inner-text");
+      if (textEl) textEl.textContent = displayName;
+    });
+  }
+  async setNoteDisplayName(tagValue, file, displayName) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || isNestedTag(tag) || !(file instanceof import_obsidian5.TFile) || file.extension !== "md" || !(this.tagFileIndex.get(tag) || []).some((candidate) => candidate.path === file.path)) {
+      return;
+    }
+    const aliases = this.getNoteAliases(file);
+    const selected = typeof displayName === "string" ? displayName.trim() : "";
+    if (selected && !aliases.includes(selected)) return;
+    if (!this.settings.noteDisplayNameByTag || typeof this.settings.noteDisplayNameByTag !== "object") {
+      this.settings.noteDisplayNameByTag = {};
+    }
+    if (selected) {
+      if (!this.settings.noteDisplayNameByTag[tag]) this.settings.noteDisplayNameByTag[tag] = {};
+      this.settings.noteDisplayNameByTag[tag][file.path] = selected;
+    } else if (this.settings.noteDisplayNameByTag[tag]) {
+      delete this.settings.noteDisplayNameByTag[tag][file.path];
+      if (Object.keys(this.settings.noteDisplayNameByTag[tag]).length === 0) {
+        delete this.settings.noteDisplayNameByTag[tag];
+      }
+    }
+    this.refreshNoteDisplayNameCards(tag, file);
+    await this.saveSettings();
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+  showNoteDisplayNameMenuForCard(event, cardEl) {
+    const tag = normalizeTag(cardEl && cardEl.dataset.puffsTag);
+    const path = cardEl && cardEl.dataset.path;
+    if (!tag || isNestedTag(tag) || !path) return false;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof import_obsidian5.TFile)) return false;
+    const aliases = this.getNoteAliases(file);
+    if (aliases.length === 0) return false;
+    const menu = new import_obsidian5.Menu();
+    menu.addItem((item) => {
+      item.setTitle("\u66F4\u6362\u663E\u793A\u540D\u79F0").setIcon("text-cursor-input").onClick(() => {
+        const position = { x: event.clientX, y: event.clientY };
+        window.setTimeout(() => {
+          this.showNoteDisplayNameOptions(position, tag, file, aliases);
+        }, 0);
+      });
+    });
+    menu.showAtMouseEvent(event);
+    return true;
+  }
+  showNoteDisplayNameOptions(position, tag, file, aliases = this.getNoteAliases(file)) {
+    const currentName = this.getNoteDisplayName(tag, file);
+    const menu = new import_obsidian5.Menu();
+    menu.addItem((item) => {
+      item.setTitle(file.basename).setChecked(currentName === file.basename).onClick(() => this.setNoteDisplayName(tag, file, "").catch((error) => {
+        console.error("[Puffs Tag Enhance] Failed to restore note display name:", error);
+        new import_obsidian5.Notice("\u6062\u590D\u6587\u4EF6\u540D\u5931\u8D25");
+      }));
+    });
+    for (const alias of aliases) {
+      menu.addItem((item) => {
+        item.setTitle(alias).setChecked(currentName === alias).onClick(() => this.setNoteDisplayName(tag, file, alias).catch((error) => {
+          console.error("[Puffs Tag Enhance] Failed to change note display name:", error);
+          new import_obsidian5.Notice("\u66F4\u6362\u5C55\u793A\u540D\u79F0\u5931\u8D25");
+        }));
+      });
+    }
+    menu.showAtPosition(position);
   }
   resolvePinnedSearchQuery(value) {
     const query = String(value || "").trimStart();
@@ -1028,7 +1162,8 @@ var InteractionsBehavior = class {
     const matches = [];
     for (const item of items) {
       for (const file of item.files) {
-        if (!fileMatchesNoteSearch(file, noteCardSearch.noteQuery)) continue;
+        const displayName = this.getNoteDisplayName(item.tag, file, item.isVirtual);
+        if (!fileMatchesNoteSearch(file, noteCardSearch.noteQuery, displayName)) continue;
         matches.push({
           tag: item.tag,
           path: file.path,
@@ -1641,6 +1776,41 @@ var WorkspaceBehavior = class {
       });
     }
   }
+  handleNoteDisplayNameFileRename(file, oldPath) {
+    if (!(file instanceof import_obsidian6.TFile) || file.extension !== "md" || !oldPath || !file.path || !this.settings.noteDisplayNameByTag) {
+      return;
+    }
+    let changed = false;
+    for (const [tag, entries] of Object.entries(this.settings.noteDisplayNameByTag)) {
+      if (!entries || typeof entries !== "object" || !entries[oldPath]) continue;
+      if (!entries[file.path]) entries[file.path] = entries[oldPath];
+      delete entries[oldPath];
+      if (Object.keys(entries).length === 0) delete this.settings.noteDisplayNameByTag[tag];
+      changed = true;
+    }
+    if (changed) {
+      this.saveSettings().catch((error) => {
+        console.error("[Puffs Tag Enhance] Failed to update note display name after rename:", error);
+      });
+    }
+  }
+  handleNoteDisplayNameFileDelete(file) {
+    if (!(file instanceof import_obsidian6.TFile) || file.extension !== "md" || !file.path || !this.settings.noteDisplayNameByTag) {
+      return;
+    }
+    let changed = false;
+    for (const [tag, entries] of Object.entries(this.settings.noteDisplayNameByTag)) {
+      if (!entries || typeof entries !== "object" || !entries[file.path]) continue;
+      delete entries[file.path];
+      if (Object.keys(entries).length === 0) delete this.settings.noteDisplayNameByTag[tag];
+      changed = true;
+    }
+    if (changed) {
+      this.saveSettings().catch((error) => {
+        console.error("[Puffs Tag Enhance] Failed to remove note display name after delete:", error);
+      });
+    }
+  }
   async openNoteCard(cardEl) {
     const path = cardEl.dataset.path;
     if (!path) return;
@@ -1780,12 +1950,14 @@ var TagIndexBehavior = class {
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       this.handlePreferredFileRename(file, oldPath);
       this.handleNoteOrderFileRename(file, oldPath);
+      this.handleNoteDisplayNameFileRename(file, oldPath);
       this.refreshTagViews();
       this.refreshTagShelfViews();
     }));
     this.registerEvent(this.app.vault.on("delete", (file) => {
       this.handlePreferredFileDelete(file);
       this.handleNoteOrderFileDelete(file);
+      this.handleNoteDisplayNameFileDelete(file);
       scheduleRefresh(file);
     }));
   }
@@ -1912,7 +2084,28 @@ var TagIndexBehavior = class {
     this.tagFileIndex = nextIndex;
     this.reconcileExpandedTags();
     const pinnedTagChanged = this.reconcilePinnedTag();
-    return noteOrderChanged || pinnedTagChanged;
+    const noteDisplayNamesChanged = !this.activeTagRename ? this.reconcileNoteDisplayNames(nextIndex) : false;
+    return noteOrderChanged || pinnedTagChanged || noteDisplayNamesChanged;
+  }
+  reconcileNoteDisplayNames(nextIndex) {
+    const nextDisplayNames = {};
+    const savedDisplayNames = this.settings.noteDisplayNameByTag || {};
+    for (const [tag, entries] of Object.entries(savedDisplayNames)) {
+      if (!nextIndex.has(tag) || !entries || typeof entries !== "object" || Array.isArray(entries)) {
+        continue;
+      }
+      const filesByPath = new Map((nextIndex.get(tag) || []).map((file) => [file.path, file]));
+      const retainedEntries = {};
+      for (const [path, displayName] of Object.entries(entries)) {
+        const file = filesByPath.get(path);
+        if (!file || !this.getNoteAliases(file).includes(displayName)) continue;
+        retainedEntries[path] = displayName;
+      }
+      if (Object.keys(retainedEntries).length > 0) nextDisplayNames[tag] = retainedEntries;
+    }
+    const changed = JSON.stringify(nextDisplayNames) !== JSON.stringify(this.settings.noteDisplayNameByTag || {});
+    if (changed) this.settings.noteDisplayNameByTag = nextDisplayNames;
+    return changed;
   }
   initializeNoteOrders(nextIndex) {
     const nextOrders = {};
@@ -2005,6 +2198,12 @@ var TagIndexBehavior = class {
     const existingNewFiles = Array.from(new Set(this.tagFileIndex.get(newTag) || []));
     const existingNewOrder = this.getOrderedFilesForTag(newTag, existingNewFiles).map((file) => file.path);
     const migratedOrder = Array.from(/* @__PURE__ */ new Set([...oldNoteOrder, ...existingNewOrder]));
+    const oldDisplayNames = {
+      ...this.settings.noteDisplayNameByTag && this.settings.noteDisplayNameByTag[oldTag] || {}
+    };
+    const existingNewDisplayNames = {
+      ...this.settings.noteDisplayNameByTag && this.settings.noteDisplayNameByTag[newTag] || {}
+    };
     const migration = {
       mode: "rename",
       oldTag,
@@ -2030,6 +2229,16 @@ var TagIndexBehavior = class {
       }
       delete this.settings.noteOrderByTag[oldTag];
       this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+      const migratedDisplayNames = { ...oldDisplayNames, ...existingNewDisplayNames };
+      if (Object.keys(migratedDisplayNames).length > 0) {
+        this.settings.noteDisplayNameByTag[newTag] = migratedDisplayNames;
+      } else {
+        delete this.settings.noteDisplayNameByTag[newTag];
+      }
+      delete this.settings.noteDisplayNameByTag[oldTag];
+      this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
+        this.settings.noteDisplayNameByTag
+      );
       await this.saveSettings();
       migration.committed = true;
       this.refreshTagIndexAndViews();
@@ -2458,7 +2667,14 @@ var TagPaneBehavior = class {
     const onTagPaneContextMenu = (evt) => {
       const target = evt.target instanceof Element ? evt.target : null;
       if (!target || !view.containerEl.contains(target)) return;
-      if (target.closest(".puffs-tag-note-card")) return;
+      const noteCardEl = target.closest(".puffs-tag-note-card");
+      if (noteCardEl) {
+        if (!this.showNoteDisplayNameMenuForCard(evt, noteCardEl)) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        return;
+      }
       const tagEl = target.closest(".tag-pane-tag");
       if (!tagEl) return;
       if (tagEl.dataset.puffsVirtualTag === "true") return;
@@ -2976,7 +3192,7 @@ var TagPaneBehavior = class {
       innerEl.className = "tree-item-inner";
       const textEl = document.createElement("div");
       textEl.className = "tree-item-inner-text";
-      textEl.textContent = file.basename;
+      textEl.textContent = this.getNoteDisplayName(tag, file, isVirtual);
       innerEl.appendChild(textEl);
       cardEl.appendChild(innerEl);
       const scrollTopButtonThreshold = this.settings.scrollTopButtonThreshold;

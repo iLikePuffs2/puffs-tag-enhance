@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { Notice, Scope } from "obsidian";
+import { Menu, Notice, Scope, TFile } from "obsidian";
 import {
   DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
   DEFAULT_MOVE_NOTE_UP_HOTKEY,
@@ -40,6 +40,144 @@ export class InteractionsBehavior {
         return a.index - b.index;
       })
       .map(({ file }) => file);
+  }
+
+  getNoteAliases(file) {
+    if (!(file instanceof TFile) || file.extension !== 'md') return [];
+
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = cache && cache.frontmatter;
+    if (!frontmatter) return [];
+
+    const aliases = [];
+    const collectAliases = (value) => {
+      if (Array.isArray(value)) {
+        value.forEach(collectAliases);
+        return;
+      }
+
+      if (value == null) return;
+      const alias = String(value).trim();
+      if (alias) aliases.push(alias);
+    };
+
+    collectAliases(frontmatter.aliases);
+    collectAliases(frontmatter.alias);
+    return Array.from(new Set(aliases)).filter((alias) => alias !== file.basename);
+  }
+
+  getNoteDisplayName(tagValue, file, isVirtual = false) {
+    if (!(file instanceof TFile) || isVirtual) return file && file.basename ? file.basename : '';
+
+    const tag = normalizeTag(tagValue);
+    if (!tag || isNestedTag(tag)) return file.basename;
+
+    const selected =
+      this.settings.noteDisplayNameByTag &&
+      this.settings.noteDisplayNameByTag[tag] &&
+      this.settings.noteDisplayNameByTag[tag][file.path];
+    return selected && this.getNoteAliases(file).includes(selected) ? selected : file.basename;
+  }
+
+  refreshNoteDisplayNameCards(tagValue, file) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !(file instanceof TFile)) return;
+
+    const displayName = this.getNoteDisplayName(tag, file);
+    document.querySelectorAll('.puffs-tag-note-card[data-puffs-tag][data-path]').forEach((cardEl) => {
+      if (cardEl.dataset.puffsTag !== tag || cardEl.dataset.path !== file.path) return;
+      const textEl = cardEl.querySelector('.tree-item-inner-text');
+      if (textEl) textEl.textContent = displayName;
+    });
+  }
+
+  async setNoteDisplayName(tagValue, file, displayName) {
+    const tag = normalizeTag(tagValue);
+    if (
+      !tag ||
+      isNestedTag(tag) ||
+      !(file instanceof TFile) ||
+      file.extension !== 'md' ||
+      !(this.tagFileIndex.get(tag) || []).some((candidate) => candidate.path === file.path)
+    ) {
+      return;
+    }
+
+    const aliases = this.getNoteAliases(file);
+    const selected = typeof displayName === 'string' ? displayName.trim() : '';
+    if (selected && !aliases.includes(selected)) return;
+
+    if (!this.settings.noteDisplayNameByTag || typeof this.settings.noteDisplayNameByTag !== 'object') {
+      this.settings.noteDisplayNameByTag = {};
+    }
+
+    if (selected) {
+      if (!this.settings.noteDisplayNameByTag[tag]) this.settings.noteDisplayNameByTag[tag] = {};
+      this.settings.noteDisplayNameByTag[tag][file.path] = selected;
+    } else if (this.settings.noteDisplayNameByTag[tag]) {
+      delete this.settings.noteDisplayNameByTag[tag][file.path];
+      if (Object.keys(this.settings.noteDisplayNameByTag[tag]).length === 0) {
+        delete this.settings.noteDisplayNameByTag[tag];
+      }
+    }
+
+    this.refreshNoteDisplayNameCards(tag, file);
+    await this.saveSettings();
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+
+  showNoteDisplayNameMenuForCard(event, cardEl) {
+    const tag = normalizeTag(cardEl && cardEl.dataset.puffsTag);
+    const path = cardEl && cardEl.dataset.path;
+    if (!tag || isNestedTag(tag) || !path) return false;
+
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return false;
+
+    const aliases = this.getNoteAliases(file);
+    if (aliases.length === 0) return false;
+
+    const menu = new Menu();
+    menu.addItem((item) => {
+      item
+        .setTitle('更换显示名称')
+        .setIcon('text-cursor-input')
+        .onClick(() => {
+          const position = { x: event.clientX, y: event.clientY };
+          window.setTimeout(() => {
+            this.showNoteDisplayNameOptions(position, tag, file, aliases);
+          }, 0);
+        });
+    });
+    menu.showAtMouseEvent(event);
+    return true;
+  }
+
+  showNoteDisplayNameOptions(position, tag, file, aliases = this.getNoteAliases(file)) {
+    const currentName = this.getNoteDisplayName(tag, file);
+    const menu = new Menu();
+    menu.addItem((item) => {
+      item
+        .setTitle(file.basename)
+        .setChecked(currentName === file.basename)
+        .onClick(() => this.setNoteDisplayName(tag, file, '').catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to restore note display name:', error);
+          new Notice('恢复文件名失败');
+        }));
+    });
+    for (const alias of aliases) {
+      menu.addItem((item) => {
+        item
+          .setTitle(alias)
+          .setChecked(currentName === alias)
+          .onClick(() => this.setNoteDisplayName(tag, file, alias).catch((error) => {
+            console.error('[Puffs Tag Enhance] Failed to change note display name:', error);
+            new Notice('更换展示名称失败');
+          }));
+      });
+    }
+    menu.showAtPosition(position);
   }
 
   resolvePinnedSearchQuery(value) {
@@ -125,7 +263,8 @@ export class InteractionsBehavior {
     const matches = [];
     for (const item of items) {
       for (const file of item.files) {
-        if (!fileMatchesNoteSearch(file, noteCardSearch.noteQuery)) continue;
+        const displayName = this.getNoteDisplayName(item.tag, file, item.isVirtual);
+        if (!fileMatchesNoteSearch(file, noteCardSearch.noteQuery, displayName)) continue;
         matches.push({
           tag: item.tag,
           path: file.path,

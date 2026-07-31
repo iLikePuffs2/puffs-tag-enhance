@@ -444,6 +444,60 @@ export class WorkspaceBehavior {
     }
   }
 
+  handleNoteDisplayNameFileRename(file, oldPath) {
+    if (
+      !(file instanceof TFile) ||
+      file.extension !== 'md' ||
+      !oldPath ||
+      !file.path ||
+      !this.settings.noteDisplayNameByTag
+    ) {
+      return;
+    }
+
+    let changed = false;
+    for (const [tag, entries] of Object.entries(this.settings.noteDisplayNameByTag)) {
+      if (!entries || typeof entries !== 'object' || !entries[oldPath]) continue;
+
+      if (!entries[file.path]) entries[file.path] = entries[oldPath];
+      delete entries[oldPath];
+      if (Object.keys(entries).length === 0) delete this.settings.noteDisplayNameByTag[tag];
+      changed = true;
+    }
+
+    if (changed) {
+      this.saveSettings().catch((error) => {
+        console.error('[Puffs Tag Enhance] Failed to update note display name after rename:', error);
+      });
+    }
+  }
+
+  handleNoteDisplayNameFileDelete(file) {
+    if (
+      !(file instanceof TFile) ||
+      file.extension !== 'md' ||
+      !file.path ||
+      !this.settings.noteDisplayNameByTag
+    ) {
+      return;
+    }
+
+    let changed = false;
+    for (const [tag, entries] of Object.entries(this.settings.noteDisplayNameByTag)) {
+      if (!entries || typeof entries !== 'object' || !entries[file.path]) continue;
+
+      delete entries[file.path];
+      if (Object.keys(entries).length === 0) delete this.settings.noteDisplayNameByTag[tag];
+      changed = true;
+    }
+
+    if (changed) {
+      this.saveSettings().catch((error) => {
+        console.error('[Puffs Tag Enhance] Failed to remove note display name after delete:', error);
+      });
+    }
+  }
+
 
   async openNoteCard(cardEl) {
     const path = cardEl.dataset.path;

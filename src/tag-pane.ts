@@ -275,7 +275,14 @@ export class TagPaneBehavior {
     const onTagPaneContextMenu = (evt) => {
       const target = evt.target instanceof Element ? evt.target : null;
       if (!target || !view.containerEl.contains(target)) return;
-      if (target.closest('.puffs-tag-note-card')) return;
+      const noteCardEl = target.closest('.puffs-tag-note-card');
+      if (noteCardEl) {
+        if (!this.showNoteDisplayNameMenuForCard(evt, noteCardEl)) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        return;
+      }
 
       const tagEl = target.closest('.tag-pane-tag');
       if (!tagEl) return;
@@ -929,7 +936,7 @@ export class TagPaneBehavior {
 
       const textEl = document.createElement('div');
       textEl.className = 'tree-item-inner-text';
-      textEl.textContent = file.basename;
+      textEl.textContent = this.getNoteDisplayName(tag, file, isVirtual);
 
       innerEl.appendChild(textEl);
       cardEl.appendChild(innerEl);

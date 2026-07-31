@@ -35,6 +35,9 @@ export class PersistenceBehavior {
     }
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
+      this.settings.noteDisplayNameByTag
+    );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
@@ -72,6 +75,9 @@ export class PersistenceBehavior {
     }
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+    this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
+      this.settings.noteDisplayNameByTag
+    );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
@@ -174,6 +180,36 @@ export class PersistenceBehavior {
       }
 
       if (paths.length > 0) result[tag] = paths;
+    }
+
+    return result;
+  }
+
+  normalizeNoteDisplayNameByTag(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+
+    const result = {};
+    for (const [rawTag, rawEntries] of Object.entries(value)) {
+      const tag = normalizeTag(rawTag);
+      if (
+        !tag ||
+        isNestedTag(tag) ||
+        !rawEntries ||
+        typeof rawEntries !== 'object' ||
+        Array.isArray(rawEntries)
+      ) {
+        continue;
+      }
+
+      const entries = {};
+      for (const [rawPath, rawDisplayName] of Object.entries(rawEntries)) {
+        const path = typeof rawPath === 'string' ? rawPath.trim() : '';
+        const displayName = typeof rawDisplayName === 'string' ? rawDisplayName.trim() : '';
+        if (!path || !displayName) continue;
+        entries[path] = displayName;
+      }
+
+      if (Object.keys(entries).length > 0) result[tag] = entries;
     }
 
     return result;

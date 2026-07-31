@@ -42,12 +42,14 @@ export class TagIndexBehavior {
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       this.handlePreferredFileRename(file, oldPath);
       this.handleNoteOrderFileRename(file, oldPath);
+      this.handleNoteDisplayNameFileRename(file, oldPath);
       this.refreshTagViews();
       this.refreshTagShelfViews();
     }));
     this.registerEvent(this.app.vault.on('delete', (file) => {
       this.handlePreferredFileDelete(file);
       this.handleNoteOrderFileDelete(file);
+      this.handleNoteDisplayNameFileDelete(file);
       scheduleRefresh(file);
     }));
   }
@@ -206,7 +208,36 @@ export class TagIndexBehavior {
     this.tagFileIndex = nextIndex;
     this.reconcileExpandedTags();
     const pinnedTagChanged = this.reconcilePinnedTag();
-    return noteOrderChanged || pinnedTagChanged;
+    const noteDisplayNamesChanged = !this.activeTagRename
+      ? this.reconcileNoteDisplayNames(nextIndex)
+      : false;
+    return noteOrderChanged || pinnedTagChanged || noteDisplayNamesChanged;
+  }
+
+  reconcileNoteDisplayNames(nextIndex) {
+    const nextDisplayNames = {};
+    const savedDisplayNames = this.settings.noteDisplayNameByTag || {};
+
+    for (const [tag, entries] of Object.entries(savedDisplayNames)) {
+      if (!nextIndex.has(tag) || !entries || typeof entries !== 'object' || Array.isArray(entries)) {
+        continue;
+      }
+
+      const filesByPath = new Map((nextIndex.get(tag) || []).map((file) => [file.path, file]));
+      const retainedEntries = {};
+      for (const [path, displayName] of Object.entries(entries)) {
+        const file = filesByPath.get(path);
+        if (!file || !this.getNoteAliases(file).includes(displayName)) continue;
+        retainedEntries[path] = displayName;
+      }
+
+      if (Object.keys(retainedEntries).length > 0) nextDisplayNames[tag] = retainedEntries;
+    }
+
+    const changed =
+      JSON.stringify(nextDisplayNames) !== JSON.stringify(this.settings.noteDisplayNameByTag || {});
+    if (changed) this.settings.noteDisplayNameByTag = nextDisplayNames;
+    return changed;
   }
 
   initializeNoteOrders(nextIndex) {
@@ -325,6 +356,12 @@ export class TagIndexBehavior {
     const existingNewFiles = Array.from(new Set(this.tagFileIndex.get(newTag) || []));
     const existingNewOrder = this.getOrderedFilesForTag(newTag, existingNewFiles).map((file) => file.path);
     const migratedOrder = Array.from(new Set([...oldNoteOrder, ...existingNewOrder]));
+    const oldDisplayNames = {
+      ...((this.settings.noteDisplayNameByTag && this.settings.noteDisplayNameByTag[oldTag]) || {}),
+    };
+    const existingNewDisplayNames = {
+      ...((this.settings.noteDisplayNameByTag && this.settings.noteDisplayNameByTag[newTag]) || {}),
+    };
     const migration = {
       mode: 'rename',
       oldTag,
@@ -354,6 +391,16 @@ export class TagIndexBehavior {
       }
       delete this.settings.noteOrderByTag[oldTag];
       this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+      const migratedDisplayNames = { ...oldDisplayNames, ...existingNewDisplayNames };
+      if (Object.keys(migratedDisplayNames).length > 0) {
+        this.settings.noteDisplayNameByTag[newTag] = migratedDisplayNames;
+      } else {
+        delete this.settings.noteDisplayNameByTag[newTag];
+      }
+      delete this.settings.noteDisplayNameByTag[oldTag];
+      this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
+        this.settings.noteDisplayNameByTag
+      );
       await this.saveSettings();
 
       migration.committed = true;

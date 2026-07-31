@@ -468,7 +468,7 @@ class PuffsTagShelfView extends ItemView {
 
         const noteTextEl = document.createElement('div');
         noteTextEl.className = 'tree-item-inner-text';
-        noteTextEl.textContent = file.basename;
+        noteTextEl.textContent = this.plugin.getNoteDisplayName(tag, file, isVirtual);
 
         noteInnerEl.appendChild(noteTextEl);
         noteCardEl.appendChild(noteInnerEl);
@@ -495,6 +495,11 @@ class PuffsTagShelfView extends ItemView {
             console.error('[Puffs Tag Enhance] Failed to open note:', error);
             new Notice('打开笔记失败');
           });
+        });
+        noteCardEl.addEventListener('contextmenu', (event) => {
+          if (!this.plugin.showNoteDisplayNameMenuForCard(event, noteCardEl)) return;
+          event.preventDefault();
+          event.stopPropagation();
         });
         noteItemEl.appendChild(noteCardEl);
         notesEl.appendChild(noteItemEl);

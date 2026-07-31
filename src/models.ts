@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS = {
   freezeSearchWhileComposing: true,
   tagSidebarPreferredFiles: {},
   noteOrderByTag: {},
+  noteDisplayNameByTag: {},
   newNotePosition: 'end',
   toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
   moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,
@@ -103,9 +104,13 @@ function getTagFilterQuery(value) {
   return noteCardSearch ? noteCardSearch.tagQuery : String(value || '');
 }
 
-function fileMatchesNoteSearch(file, value) {
+function fileMatchesNoteSearch(file, value, displayName = '') {
   const term = String(value || '').trim().toLowerCase();
-  return !!term && String((file && file.basename) || '').toLowerCase().includes(term);
+  if (!term) return false;
+
+  const fileName = String((file && file.basename) || '').toLowerCase();
+  const visibleName = String(displayName || '').toLowerCase();
+  return fileName.includes(term) || (!!visibleName && visibleName.includes(term));
 }
 
 function splitUnionSearchTerms(value) {
