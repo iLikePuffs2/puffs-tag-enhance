@@ -5,8 +5,10 @@ import {
   DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
   DEFAULT_MOVE_NOTE_UP_HOTKEY,
   DEFAULT_SETTINGS,
+  getBackupPathParts,
   isNestedTag,
   normalizeBackupFolderPath,
+  normalizeBackupFileName,
   normalizeBackupInterval,
   normalizeHotkeyText,
   normalizeNewNotePosition,
@@ -40,6 +42,15 @@ export class PersistenceBehavior {
     );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    if (savedSettings.backupFileName) {
+      const legacyFileName = normalizeBackupFileName(savedSettings.backupFileName);
+      const backupPathParts = getBackupPathParts(this.settings.backupFolderPath);
+      if (legacyFileName !== BACKUP_FILE_NAME && backupPathParts.fileName === BACKUP_FILE_NAME) {
+        this.settings.backupFolderPath = normalizePath(
+          backupPathParts.folderPath ? `${backupPathParts.folderPath}/${legacyFileName}` : legacyFileName
+        );
+      }
+    }
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
       this.settings.scrollTopButtonThreshold
     );
@@ -49,6 +60,7 @@ export class PersistenceBehavior {
     }
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
+    delete this.settings.backupFileName;
   }
 
   async saveSettings() {
@@ -88,6 +100,7 @@ export class PersistenceBehavior {
       this.settings.pinnedTag = null;
     }
     delete this.settings.tagOrder;
+    delete this.settings.backupFileName;
     await this.saveSettings();
     if (
       newSettings &&
@@ -152,10 +165,10 @@ export class PersistenceBehavior {
   async writeDataBackup() {
     await this.settingsSavePromise.catch(() => {});
 
-    const folderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    const { folderPath, fileName } = getBackupPathParts(this.settings.backupFolderPath);
     await this.ensureBackupFolder(folderPath);
     const backupPath = normalizePath(
-      folderPath ? `${folderPath}/${BACKUP_FILE_NAME}` : BACKUP_FILE_NAME
+      folderPath ? `${folderPath}/${fileName}` : fileName
     );
     const data = (await this.loadData()) || this.settings;
     await this.app.vault.adapter.write(backupPath, `${JSON.stringify(data, null, 2)}\n`);

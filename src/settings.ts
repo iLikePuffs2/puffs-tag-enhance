@@ -104,11 +104,11 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('备份路径')
-      .setDesc('Vault 内的相对文件夹路径；留空表示 Vault 根目录，支持 \\ 或 /')
+      .setDesc('Vault 内的相对路径；可输入文件夹，也可输入包含文件名的完整路径，支持 \\ 或 /')
       .addText((text) => {
         text
           .setValue(this.plugin.settings.backupFolderPath)
-          .setPlaceholder('其他\\备份')
+          .setPlaceholder('其他\\备份\\tag-data.md')
           .onChange(async (value) => {
             await this.plugin.updateSettings({ backupFolderPath: value });
           });

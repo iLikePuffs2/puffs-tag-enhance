@@ -91,6 +91,33 @@ function normalizeBackupFolderPath(value) {
   if (segments.some((segment) => segment === ".." || segment.includes(":"))) return "";
   return (0, import_obsidian.normalizePath)(segments.join("/"));
 }
+function normalizeBackupFileName(value) {
+  const text = String(value || "").trim();
+  if (!text) return BACKUP_FILE_NAME;
+  if (/[\\/:*?"<>|]/.test(text) || text === "." || text === "..") return BACKUP_FILE_NAME;
+  return text;
+}
+function getBackupPathParts(value) {
+  const normalizedPath = normalizeBackupFolderPath(value);
+  if (!normalizedPath) {
+    return {
+      folderPath: "",
+      fileName: BACKUP_FILE_NAME
+    };
+  }
+  const segments = normalizedPath.split("/");
+  const lastSegment = segments[segments.length - 1];
+  if (lastSegment.includes(".")) {
+    return {
+      folderPath: normalizeBackupFolderPath(segments.slice(0, -1).join("/")),
+      fileName: normalizeBackupFileName(lastSegment)
+    };
+  }
+  return {
+    folderPath: normalizedPath,
+    fileName: BACKUP_FILE_NAME
+  };
+}
 function isNestedTag(tag) {
   return String(tag || "").includes("/");
 }
@@ -798,8 +825,8 @@ var PuffsTagEnhanceSettingTab = class extends import_obsidian3.PluginSettingTab 
       text.inputEl.min = "0";
       text.inputEl.step = "1";
     });
-    new import_obsidian3.Setting(containerEl).setName("\u5907\u4EFD\u8DEF\u5F84").setDesc("Vault \u5185\u7684\u76F8\u5BF9\u6587\u4EF6\u5939\u8DEF\u5F84\uFF1B\u7559\u7A7A\u8868\u793A Vault \u6839\u76EE\u5F55\uFF0C\u652F\u6301 \\ \u6216 /").addText((text) => {
-      text.setValue(this.plugin.settings.backupFolderPath).setPlaceholder("\u5176\u4ED6\\\u5907\u4EFD").onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName("\u5907\u4EFD\u8DEF\u5F84").setDesc("Vault \u5185\u7684\u76F8\u5BF9\u8DEF\u5F84\uFF1B\u53EF\u8F93\u5165\u6587\u4EF6\u5939\uFF0C\u4E5F\u53EF\u8F93\u5165\u5305\u542B\u6587\u4EF6\u540D\u7684\u5B8C\u6574\u8DEF\u5F84\uFF0C\u652F\u6301 \\ \u6216 /").addText((text) => {
+      text.setValue(this.plugin.settings.backupFolderPath).setPlaceholder("\u5176\u4ED6\\\u5907\u4EFD\\tag-data.md").onChange(async (value) => {
         await this.plugin.updateSettings({ backupFolderPath: value });
       });
     });
@@ -840,6 +867,15 @@ var PersistenceBehavior = class {
     );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    if (savedSettings.backupFileName) {
+      const legacyFileName = normalizeBackupFileName(savedSettings.backupFileName);
+      const backupPathParts = getBackupPathParts(this.settings.backupFolderPath);
+      if (legacyFileName !== BACKUP_FILE_NAME && backupPathParts.fileName === BACKUP_FILE_NAME) {
+        this.settings.backupFolderPath = (0, import_obsidian4.normalizePath)(
+          backupPathParts.folderPath ? `${backupPathParts.folderPath}/${legacyFileName}` : legacyFileName
+        );
+      }
+    }
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
       this.settings.scrollTopButtonThreshold
     );
@@ -849,6 +885,7 @@ var PersistenceBehavior = class {
     }
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
+    delete this.settings.backupFileName;
   }
   async saveSettings() {
     this.settingsSavePromise = this.settingsSavePromise.catch(() => {
@@ -885,6 +922,7 @@ var PersistenceBehavior = class {
       this.settings.pinnedTag = null;
     }
     delete this.settings.tagOrder;
+    delete this.settings.backupFileName;
     await this.saveSettings();
     if (newSettings && (Object.prototype.hasOwnProperty.call(newSettings, "backupIntervalMinutes") || Object.prototype.hasOwnProperty.call(newSettings, "backupFolderPath"))) {
       this.restartBackupTimer();
@@ -930,10 +968,10 @@ var PersistenceBehavior = class {
   async writeDataBackup() {
     await this.settingsSavePromise.catch(() => {
     });
-    const folderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
+    const { folderPath, fileName } = getBackupPathParts(this.settings.backupFolderPath);
     await this.ensureBackupFolder(folderPath);
     const backupPath = (0, import_obsidian4.normalizePath)(
-      folderPath ? `${folderPath}/${BACKUP_FILE_NAME}` : BACKUP_FILE_NAME
+      folderPath ? `${folderPath}/${fileName}` : fileName
     );
     const data = await this.loadData() || this.settings;
     await this.app.vault.adapter.write(backupPath, `${JSON.stringify(data, null, 2)}

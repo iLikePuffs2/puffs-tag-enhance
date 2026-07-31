@@ -69,6 +69,37 @@ function normalizeBackupFolderPath(value) {
   return normalizePath(segments.join('/'));
 }
 
+function normalizeBackupFileName(value) {
+  const text = String(value || '').trim();
+  if (!text) return BACKUP_FILE_NAME;
+  if (/[\\/:*?"<>|]/.test(text) || text === '.' || text === '..') return BACKUP_FILE_NAME;
+  return text;
+}
+
+function getBackupPathParts(value) {
+  const normalizedPath = normalizeBackupFolderPath(value);
+  if (!normalizedPath) {
+    return {
+      folderPath: '',
+      fileName: BACKUP_FILE_NAME,
+    };
+  }
+
+  const segments = normalizedPath.split('/');
+  const lastSegment = segments[segments.length - 1];
+  if (lastSegment.includes('.')) {
+    return {
+      folderPath: normalizeBackupFolderPath(segments.slice(0, -1).join('/')),
+      fileName: normalizeBackupFileName(lastSegment),
+    };
+  }
+
+  return {
+    folderPath: normalizedPath,
+    fileName: BACKUP_FILE_NAME,
+  };
+}
+
 function isNestedTag(tag) {
   return String(tag || '').includes('/');
 }
@@ -383,6 +414,8 @@ export {
   normalizeBackupInterval,
   normalizeScrollTopButtonThreshold,
   normalizeBackupFolderPath,
+  normalizeBackupFileName,
+  getBackupPathParts,
   isNestedTag,
   getTagDisplayName,
   normalizeSearchTerm,
