@@ -3,6 +3,11 @@
   overflow: visible !important;
 }
 
+.workspace-leaf-content.puffs-tag-list-mode-enabled .nav-buttons-container {
+  flex: 0 0 auto !important;
+  flex-wrap: nowrap;
+}
+
 .workspace-leaf-content.puffs-tag-list-mode-enabled .tag-container > :not(.puffs-tag-list-container) {
   display: none !important;
 }

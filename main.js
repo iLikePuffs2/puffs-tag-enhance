@@ -2581,10 +2581,21 @@ var TagPaneBehavior = class {
       expandAllEl.addEventListener("click", onExpandAllClick, true);
       patch.cleanup.push(() => expandAllEl.removeEventListener("click", onExpandAllClick, true));
       const tagSystemButtonEl = document.createElement("div");
-      tagSystemButtonEl.className = "clickable-icon nav-action-button puffs-tag-system-button";
+      tagSystemButtonEl.className = "clickable-icon nav-action-button puffs-tag-system-button puffs-tag-hidden";
       tagSystemButtonEl.setAttribute("aria-label", "\u6253\u5F00\u6807\u7B7E\u7CFB\u7EDF");
+      tagSystemButtonEl.setAttribute("aria-hidden", "true");
       (0, import_obsidian9.setIcon)(tagSystemButtonEl, TAG_SYSTEM_ICON);
       expandAllEl.insertAdjacentElement("afterend", tagSystemButtonEl);
+      const scrollBottomButtonEl = document.createElement("div");
+      scrollBottomButtonEl.className = "clickable-icon nav-action-button puffs-tag-pane-scroll-bottom-button";
+      scrollBottomButtonEl.setAttribute("aria-label", "\u56DE\u5E95");
+      (0, import_obsidian9.setIcon)(scrollBottomButtonEl, "arrow-down-to-line");
+      tagSystemButtonEl.insertAdjacentElement("afterend", scrollBottomButtonEl);
+      const scrollTopButtonEl = document.createElement("div");
+      scrollTopButtonEl.className = "clickable-icon nav-action-button puffs-tag-pane-scroll-top-button";
+      scrollTopButtonEl.setAttribute("aria-label", "\u56DE\u9876");
+      (0, import_obsidian9.setIcon)(scrollTopButtonEl, "arrow-up-to-line");
+      scrollBottomButtonEl.insertAdjacentElement("afterend", scrollTopButtonEl);
       const onTagSystemButtonClick = (evt) => {
         if (evt.button !== 0) return;
         evt.preventDefault();
@@ -2595,10 +2606,35 @@ var TagPaneBehavior = class {
           new import_obsidian9.Notice("\u6253\u5F00\u6807\u7B7E\u7CFB\u7EDF\u5931\u8D25");
         });
       };
+      const scrollTagPaneTo = (position) => {
+        const tagContainerEl = view.containerEl.querySelector(".tag-container");
+        if (!tagContainerEl) return;
+        tagContainerEl.scrollTop = position === "bottom" ? tagContainerEl.scrollHeight : 0;
+      };
+      const onScrollBottomButtonClick = (evt) => {
+        if (evt.button !== 0) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        scrollTagPaneTo("bottom");
+      };
+      const onScrollTopButtonClick = (evt) => {
+        if (evt.button !== 0) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        scrollTagPaneTo("top");
+      };
       tagSystemButtonEl.addEventListener("click", onTagSystemButtonClick, true);
+      scrollBottomButtonEl.addEventListener("click", onScrollBottomButtonClick, true);
+      scrollTopButtonEl.addEventListener("click", onScrollTopButtonClick, true);
       patch.cleanup.push(() => {
         tagSystemButtonEl.removeEventListener("click", onTagSystemButtonClick, true);
+        scrollBottomButtonEl.removeEventListener("click", onScrollBottomButtonClick, true);
+        scrollTopButtonEl.removeEventListener("click", onScrollTopButtonClick, true);
         tagSystemButtonEl.remove();
+        scrollBottomButtonEl.remove();
+        scrollTopButtonEl.remove();
       });
     }
     this.patchMultiTagSearch(view, patch);

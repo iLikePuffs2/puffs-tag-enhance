@@ -176,10 +176,23 @@ export class TagPaneBehavior {
       patch.cleanup.push(() => expandAllEl.removeEventListener('click', onExpandAllClick, true));
 
       const tagSystemButtonEl = document.createElement('div');
-      tagSystemButtonEl.className = 'clickable-icon nav-action-button puffs-tag-system-button';
+      tagSystemButtonEl.className = 'clickable-icon nav-action-button puffs-tag-system-button puffs-tag-hidden';
       tagSystemButtonEl.setAttribute('aria-label', '打开标签系统');
+      tagSystemButtonEl.setAttribute('aria-hidden', 'true');
       setIcon(tagSystemButtonEl, TAG_SYSTEM_ICON);
       expandAllEl.insertAdjacentElement('afterend', tagSystemButtonEl);
+
+      const scrollBottomButtonEl = document.createElement('div');
+      scrollBottomButtonEl.className = 'clickable-icon nav-action-button puffs-tag-pane-scroll-bottom-button';
+      scrollBottomButtonEl.setAttribute('aria-label', '回底');
+      setIcon(scrollBottomButtonEl, 'arrow-down-to-line');
+      tagSystemButtonEl.insertAdjacentElement('afterend', scrollBottomButtonEl);
+
+      const scrollTopButtonEl = document.createElement('div');
+      scrollTopButtonEl.className = 'clickable-icon nav-action-button puffs-tag-pane-scroll-top-button';
+      scrollTopButtonEl.setAttribute('aria-label', '回顶');
+      setIcon(scrollTopButtonEl, 'arrow-up-to-line');
+      scrollBottomButtonEl.insertAdjacentElement('afterend', scrollTopButtonEl);
 
       const onTagSystemButtonClick = (evt) => {
         if (evt.button !== 0) return;
@@ -192,10 +205,38 @@ export class TagPaneBehavior {
         });
       };
 
+      const scrollTagPaneTo = (position) => {
+        const tagContainerEl = view.containerEl.querySelector('.tag-container');
+        if (!tagContainerEl) return;
+        tagContainerEl.scrollTop = position === 'bottom' ? tagContainerEl.scrollHeight : 0;
+      };
+
+      const onScrollBottomButtonClick = (evt) => {
+        if (evt.button !== 0) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        scrollTagPaneTo('bottom');
+      };
+
+      const onScrollTopButtonClick = (evt) => {
+        if (evt.button !== 0) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        scrollTagPaneTo('top');
+      };
+
       tagSystemButtonEl.addEventListener('click', onTagSystemButtonClick, true);
+      scrollBottomButtonEl.addEventListener('click', onScrollBottomButtonClick, true);
+      scrollTopButtonEl.addEventListener('click', onScrollTopButtonClick, true);
       patch.cleanup.push(() => {
         tagSystemButtonEl.removeEventListener('click', onTagSystemButtonClick, true);
+        scrollBottomButtonEl.removeEventListener('click', onScrollBottomButtonClick, true);
+        scrollTopButtonEl.removeEventListener('click', onScrollTopButtonClick, true);
         tagSystemButtonEl.remove();
+        scrollBottomButtonEl.remove();
+        scrollTopButtonEl.remove();
       });
     }
 
