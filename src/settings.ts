@@ -6,6 +6,11 @@ import {
   DEFAULT_QUICK_SEARCH_HOTKEY,
   DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD
 } from "./models";
+import {
+  getSidebarToolbarButtonLabel,
+  moveSidebarToolbarButton,
+  normalizeSidebarToolbarButtons,
+} from "./sidebar-toolbar";
 
 class PuffsTagEnhanceSettingTab extends PluginSettingTab {
   constructor(app, plugin) {
@@ -128,6 +133,52 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
         text.inputEl.min = '0';
         text.inputEl.step = '1';
       });
+
+    containerEl.createEl('h3', { text: '侧边栏顶栏按钮' });
+    const toolbarButtons = normalizeSidebarToolbarButtons(this.plugin.settings.sidebarToolbarButtons);
+    toolbarButtons.forEach((buttonSetting, index) => {
+      const setting = new Setting(containerEl)
+        .setName(getSidebarToolbarButtonLabel(buttonSetting.id))
+        .addToggle((toggle) => {
+          toggle.setValue(buttonSetting.visible).onChange(async (visible) => {
+            const nextButtons = normalizeSidebarToolbarButtons(this.plugin.settings.sidebarToolbarButtons)
+              .map((item) => item.id === buttonSetting.id ? { ...item, visible } : item);
+            await this.plugin.updateSettings({ sidebarToolbarButtons: nextButtons });
+          });
+        });
+      setting.addExtraButton((button) => {
+        button
+          .setIcon('arrow-up')
+          .setTooltip('上移')
+          .setDisabled(index === 0)
+          .onClick(async () => {
+            await this.plugin.updateSettings({
+              sidebarToolbarButtons: moveSidebarToolbarButton(
+                this.plugin.settings.sidebarToolbarButtons,
+                buttonSetting.id,
+                -1
+              ),
+            });
+            this.display();
+          });
+      });
+      setting.addExtraButton((button) => {
+        button
+          .setIcon('arrow-down')
+          .setTooltip('下移')
+          .setDisabled(index === toolbarButtons.length - 1)
+          .onClick(async () => {
+            await this.plugin.updateSettings({
+              sidebarToolbarButtons: moveSidebarToolbarButton(
+                this.plugin.settings.sidebarToolbarButtons,
+                buttonSetting.id,
+                1
+              ),
+            });
+            this.display();
+          });
+      });
+    });
   }
 }
 

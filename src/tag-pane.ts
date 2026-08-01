@@ -19,6 +19,10 @@ import {
   tagMatchesSearchText
 } from "./models";
 import { PuffsTagRenameModal } from "./modals";
+import {
+  getAvailableSidebarToolbarButtons,
+  normalizeSidebarToolbarButtons,
+} from "./sidebar-toolbar";
 
 export class TagPaneBehavior {
   [key: string]: any;
@@ -144,6 +148,8 @@ export class TagPaneBehavior {
       hierarchyButtonEl: null,
       scrollBottomButtonEl: null,
       scrollTopButtonEl: null,
+      tagSystemButtonEl: null,
+      toolbarButtonEls: new Map(),
     };
 
     const searchInputEl = view.searchComponent && view.searchComponent.inputEl;
@@ -189,9 +195,8 @@ export class TagPaneBehavior {
       patch.cleanup.push(() => expandAllEl.removeEventListener('click', onExpandAllClick, true));
 
       const tagSystemButtonEl = document.createElement('div');
-      tagSystemButtonEl.className = 'clickable-icon nav-action-button puffs-tag-system-button puffs-tag-hidden';
+      tagSystemButtonEl.className = 'clickable-icon nav-action-button puffs-tag-system-button';
       tagSystemButtonEl.setAttribute('aria-label', '打开标签系统');
-      tagSystemButtonEl.setAttribute('aria-hidden', 'true');
       setIcon(tagSystemButtonEl, TAG_SYSTEM_ICON);
       expandAllEl.insertAdjacentElement('afterend', tagSystemButtonEl);
 
@@ -215,6 +220,11 @@ export class TagPaneBehavior {
       patch.hierarchyButtonEl = hierarchyButtonEl;
       patch.scrollBottomButtonEl = scrollBottomButtonEl;
       patch.scrollTopButtonEl = scrollTopButtonEl;
+      patch.tagSystemButtonEl = tagSystemButtonEl;
+      patch.toolbarButtonEls.set('open-tag-system', tagSystemButtonEl);
+      patch.toolbarButtonEls.set('scroll-bottom', scrollBottomButtonEl);
+      patch.toolbarButtonEls.set('scroll-top', scrollTopButtonEl);
+      patch.toolbarButtonEls.set('note-hierarchy', hierarchyButtonEl);
 
       const onTagSystemButtonClick = (evt) => {
         if (evt.button !== 0) return;
@@ -446,6 +456,11 @@ export class TagPaneBehavior {
     }
 
     this.clearNoteCardSearchState(patch.noteCardSearchState);
+    for (const buttonEl of patch.toolbarButtonEls.values()) {
+      if (!buttonEl || !buttonEl.classList) continue;
+      buttonEl.classList.remove('puffs-toolbar-config-hidden', 'puffs-toolbar-context-hidden');
+      buttonEl.removeAttribute('data-puffs-toolbar-button');
+    }
     for (const cleanup of patch.cleanup) {
       cleanup();
     }
@@ -516,6 +531,7 @@ export class TagPaneBehavior {
       this.repairHiddenSearchValue(view);
       this.hideHierarchyButton(view);
       this.registerTagViewHotkey(view, patch);
+      this.syncSidebarToolbarButtons(view, patch);
 
       if (view.useHierarchy !== false && typeof view.setUseHierarchy === 'function') {
         view.setUseHierarchy(false);
@@ -582,6 +598,64 @@ export class TagPaneBehavior {
     buttonEl.setAttribute('aria-hidden', 'true');
   }
 
+  refreshSidebarToolbarButtonRegistry(view, patch) {
+    const buttons = patch.toolbarButtonEls || new Map();
+    patch.toolbarButtonEls = buttons;
+    if (view.collapseOrExpandAllEl) buttons.set('expand-collapse', view.collapseOrExpandAllEl);
+    else buttons.delete('expand-collapse');
+    if (view.showSearchButtonEl) buttons.set('filter', view.showSearchButtonEl);
+    else buttons.delete('filter');
+
+    const existingSortEl = buttons.get('sort');
+    if (!existingSortEl || !existingSortEl.isConnected) {
+      const navButtonsEl =
+        (view.collapseOrExpandAllEl && view.collapseOrExpandAllEl.parentElement) ||
+        view.containerEl.querySelector('.nav-buttons-container');
+      const sortEl = navButtonsEl && Array.from(navButtonsEl.children).find((element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const label = element.getAttribute('aria-label') || '';
+        return label === '排序' || label.startsWith('排序');
+      });
+      if (sortEl) buttons.set('sort', sortEl);
+      else buttons.delete('sort');
+    }
+    return buttons;
+  }
+
+  syncSidebarToolbarButtons(view, patch) {
+    const buttons = this.refreshSidebarToolbarButtonRegistry(view, patch);
+    const settings = normalizeSidebarToolbarButtons(this.settings.sidebarToolbarButtons);
+    const settingsById = new Map(settings.map((item) => [item.id, item]));
+    const availableSettings = getAvailableSidebarToolbarButtons(settings, buttons.keys());
+    const navButtonsEl =
+      (view.collapseOrExpandAllEl && view.collapseOrExpandAllEl.parentElement) ||
+      view.containerEl.querySelector('.nav-buttons-container');
+    if (navButtonsEl) {
+      for (const item of availableSettings) {
+        const buttonEl = buttons.get(item.id);
+        if (buttonEl && buttonEl.parentElement === navButtonsEl) navButtonsEl.appendChild(buttonEl);
+      }
+    }
+    for (const [id, buttonEl] of buttons) {
+      if (!buttonEl || !buttonEl.classList) continue;
+      const visible = settingsById.get(id)?.visible !== false;
+      buttonEl.dataset.puffsToolbarButton = id;
+      buttonEl.classList.toggle('puffs-toolbar-config-hidden', !visible);
+      if (!visible) buttonEl.setAttribute('aria-hidden', 'true');
+      else if (!buttonEl.classList.contains('puffs-toolbar-context-hidden')) buttonEl.removeAttribute('aria-hidden');
+    }
+  }
+
+  setSidebarToolbarContextHidden(patch, hierarchyMode) {
+    for (const [id, buttonEl] of patch.toolbarButtonEls || []) {
+      if (!buttonEl || !buttonEl.classList) continue;
+      const hidden = hierarchyMode && id !== 'note-hierarchy';
+      buttonEl.classList.toggle('puffs-toolbar-context-hidden', hidden);
+      if (hidden) buttonEl.setAttribute('aria-hidden', 'true');
+      else if (!buttonEl.classList.contains('puffs-toolbar-config-hidden')) buttonEl.removeAttribute('aria-hidden');
+    }
+  }
+
   renderSidebarHierarchyPage(view, patch) {
     const tagPaneEl = view.tagPaneEl || view.containerEl.querySelector('.tag-container');
     if (!tagPaneEl) return;
@@ -613,9 +687,7 @@ export class TagPaneBehavior {
       patch.hierarchyButtonEl.setAttribute('aria-label', '返回标签列表');
       setIcon(patch.hierarchyButtonEl, 'tags');
     }
-    if (view.collapseOrExpandAllEl) view.collapseOrExpandAllEl.classList.add('puffs-tag-hidden');
-    if (patch.scrollBottomButtonEl) patch.scrollBottomButtonEl.classList.add('puffs-tag-hidden');
-    if (patch.scrollTopButtonEl) patch.scrollTopButtonEl.classList.add('puffs-tag-hidden');
+    this.setSidebarToolbarContextHidden(patch, true);
     if (view.searchComponent && view.searchComponent.containerEl) {
       view.searchComponent.containerEl.classList.add('puffs-tag-hidden');
     }
@@ -631,8 +703,7 @@ export class TagPaneBehavior {
       patch.hierarchyButtonEl.setAttribute('aria-label', '打开父子笔记');
       setIcon(patch.hierarchyButtonEl, 'git-fork');
     }
-    if (patch.scrollBottomButtonEl) patch.scrollBottomButtonEl.classList.remove('puffs-tag-hidden');
-    if (patch.scrollTopButtonEl) patch.scrollTopButtonEl.classList.remove('puffs-tag-hidden');
+    this.setSidebarToolbarContextHidden(patch, false);
     if (view.searchComponent && view.searchComponent.containerEl) {
       view.searchComponent.containerEl.classList.remove('puffs-tag-hidden');
     }
@@ -1164,6 +1235,10 @@ export class TagPaneBehavior {
     });
     view.containerEl.querySelectorAll('.puffs-tag-hidden').forEach((el) => {
       el.classList.remove('puffs-tag-hidden');
+    });
+    view.containerEl.querySelectorAll('.puffs-toolbar-config-hidden, .puffs-toolbar-context-hidden').forEach((el) => {
+      el.classList.remove('puffs-toolbar-config-hidden', 'puffs-toolbar-context-hidden');
+      el.removeAttribute('data-puffs-toolbar-button');
     });
     view.containerEl.querySelectorAll('.puffs-tag-expanded').forEach((el) => {
       el.classList.remove('puffs-tag-expanded');

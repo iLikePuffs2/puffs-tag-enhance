@@ -150,6 +150,11 @@
   display: none !important;
 }
 
+.puffs-toolbar-config-hidden,
+.puffs-toolbar-context-hidden {
+  display: none !important;
+}
+
 .puffs-note-hierarchy-button {
   flex: 0 0 auto;
 }

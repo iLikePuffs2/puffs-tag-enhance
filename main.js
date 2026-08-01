@@ -36,6 +36,67 @@ var import_obsidian12 = require("obsidian");
 
 // src/models.ts
 var import_obsidian = require("obsidian");
+
+// src/sidebar-toolbar.ts
+var SIDEBAR_TOOLBAR_BUTTON_DEFINITIONS = [
+  { id: "sort", label: "\u6392\u5E8F", visible: true },
+  { id: "expand-collapse", label: "\u5168\u90E8\u5C55\u5F00/\u6536\u8D77", visible: true },
+  { id: "open-tag-system", label: "\u6253\u5F00\u6807\u7B7E\u7CFB\u7EDF", visible: false },
+  { id: "scroll-bottom", label: "\u56DE\u5E95", visible: true },
+  { id: "scroll-top", label: "\u56DE\u9876", visible: true },
+  { id: "note-hierarchy", label: "\u7236\u5B50\u7B14\u8BB0", visible: true },
+  { id: "filter", label: "\u7B5B\u9009", visible: true }
+];
+var definitionById = new Map(SIDEBAR_TOOLBAR_BUTTON_DEFINITIONS.map((item) => [item.id, item]));
+function createDefaultSidebarToolbarButtons() {
+  return SIDEBAR_TOOLBAR_BUTTON_DEFINITIONS.map((item) => ({ id: item.id, visible: item.visible }));
+}
+function normalizeSidebarToolbarButtons(value) {
+  if (!Array.isArray(value)) return createDefaultSidebarToolbarButtons();
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const rawItem of value) {
+    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) continue;
+    const id = rawItem.id;
+    if (typeof id !== "string" || !definitionById.has(id)) continue;
+    const buttonId = id;
+    if (seen.has(buttonId)) continue;
+    seen.add(buttonId);
+    const definition = definitionById.get(buttonId);
+    const rawVisible = rawItem.visible;
+    result.push({
+      id: buttonId,
+      visible: typeof rawVisible === "boolean" ? rawVisible : definition.visible
+    });
+  }
+  for (const definition of SIDEBAR_TOOLBAR_BUTTON_DEFINITIONS) {
+    if (seen.has(definition.id)) continue;
+    const nextDefaultIds = SIDEBAR_TOOLBAR_BUTTON_DEFINITIONS.slice(SIDEBAR_TOOLBAR_BUTTON_DEFINITIONS.indexOf(definition) + 1).map((item) => item.id);
+    const insertIndex = result.findIndex((item) => nextDefaultIds.includes(item.id));
+    const setting = { id: definition.id, visible: definition.visible };
+    if (insertIndex >= 0) result.splice(insertIndex, 0, setting);
+    else result.push(setting);
+  }
+  return result;
+}
+function moveSidebarToolbarButton(value, id, direction) {
+  const result = normalizeSidebarToolbarButtons(value);
+  const index = result.findIndex((item) => item.id === id);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= result.length) return result;
+  [result[index], result[nextIndex]] = [result[nextIndex], result[index]];
+  return result;
+}
+function getAvailableSidebarToolbarButtons(value, availableIds) {
+  const available = new Set(availableIds);
+  return normalizeSidebarToolbarButtons(value).filter((item) => available.has(item.id));
+}
+function getSidebarToolbarButtonLabel(id) {
+  var _a;
+  return ((_a = definitionById.get(id)) == null ? void 0 : _a.label) || id;
+}
+
+// src/models.ts
 var TAG_VIEW_TYPE = "tag";
 var TAG_SHELF_VIEW_TYPE = "puffs-tag-shelf-view";
 var OUTLINE_VIEW_TYPE = "outline";
@@ -64,6 +125,7 @@ var DEFAULT_SETTINGS = {
   backupFolderPath: "",
   pinnedTag: null,
   scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
+  sidebarToolbarButtons: createDefaultSidebarToolbarButtons(),
   relations: {
     version: 1,
     tagInheritance: {
@@ -913,6 +975,40 @@ var PuffsTagEnhanceSettingTab = class extends import_obsidian3.PluginSettingTab 
       text.inputEl.min = "0";
       text.inputEl.step = "1";
     });
+    containerEl.createEl("h3", { text: "\u4FA7\u8FB9\u680F\u9876\u680F\u6309\u94AE" });
+    const toolbarButtons = normalizeSidebarToolbarButtons(this.plugin.settings.sidebarToolbarButtons);
+    toolbarButtons.forEach((buttonSetting, index) => {
+      const setting = new import_obsidian3.Setting(containerEl).setName(getSidebarToolbarButtonLabel(buttonSetting.id)).addToggle((toggle) => {
+        toggle.setValue(buttonSetting.visible).onChange(async (visible) => {
+          const nextButtons = normalizeSidebarToolbarButtons(this.plugin.settings.sidebarToolbarButtons).map((item) => item.id === buttonSetting.id ? { ...item, visible } : item);
+          await this.plugin.updateSettings({ sidebarToolbarButtons: nextButtons });
+        });
+      });
+      setting.addExtraButton((button) => {
+        button.setIcon("arrow-up").setTooltip("\u4E0A\u79FB").setDisabled(index === 0).onClick(async () => {
+          await this.plugin.updateSettings({
+            sidebarToolbarButtons: moveSidebarToolbarButton(
+              this.plugin.settings.sidebarToolbarButtons,
+              buttonSetting.id,
+              -1
+            )
+          });
+          this.display();
+        });
+      });
+      setting.addExtraButton((button) => {
+        button.setIcon("arrow-down").setTooltip("\u4E0B\u79FB").setDisabled(index === toolbarButtons.length - 1).onClick(async () => {
+          await this.plugin.updateSettings({
+            sidebarToolbarButtons: moveSidebarToolbarButton(
+              this.plugin.settings.sidebarToolbarButtons,
+              buttonSetting.id,
+              1
+            )
+          });
+          this.display();
+        });
+      });
+    });
   }
 };
 
@@ -954,6 +1050,9 @@ var PersistenceBehavior = class {
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
       this.settings.scrollTopButtonThreshold
     );
+    this.settings.sidebarToolbarButtons = normalizeSidebarToolbarButtons(
+      this.settings.sidebarToolbarButtons
+    );
     this.settings.pinnedTag = normalizeTag(this.settings.pinnedTag);
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
@@ -993,6 +1092,9 @@ var PersistenceBehavior = class {
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
       this.settings.scrollTopButtonThreshold
     );
+    this.settings.sidebarToolbarButtons = normalizeSidebarToolbarButtons(
+      this.settings.sidebarToolbarButtons
+    );
     this.settings.pinnedTag = normalizeTag(this.settings.pinnedTag);
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
@@ -1014,6 +1116,9 @@ var PersistenceBehavior = class {
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, "scrollTopButtonThreshold")) {
       this.refreshTagViews();
       this.refreshTagShelfViews();
+    }
+    if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, "sidebarToolbarButtons")) {
+      this.refreshTagViews();
     }
   }
   clearBackupTimer() {
@@ -2683,7 +2788,9 @@ var TagPaneBehavior = class {
       hierarchyPageEl: null,
       hierarchyButtonEl: null,
       scrollBottomButtonEl: null,
-      scrollTopButtonEl: null
+      scrollTopButtonEl: null,
+      tagSystemButtonEl: null,
+      toolbarButtonEls: /* @__PURE__ */ new Map()
     };
     const searchInputEl = view.searchComponent && view.searchComponent.inputEl;
     if (searchInputEl) {
@@ -2724,9 +2831,8 @@ var TagPaneBehavior = class {
       expandAllEl.addEventListener("click", onExpandAllClick, true);
       patch.cleanup.push(() => expandAllEl.removeEventListener("click", onExpandAllClick, true));
       const tagSystemButtonEl = document.createElement("div");
-      tagSystemButtonEl.className = "clickable-icon nav-action-button puffs-tag-system-button puffs-tag-hidden";
+      tagSystemButtonEl.className = "clickable-icon nav-action-button puffs-tag-system-button";
       tagSystemButtonEl.setAttribute("aria-label", "\u6253\u5F00\u6807\u7B7E\u7CFB\u7EDF");
-      tagSystemButtonEl.setAttribute("aria-hidden", "true");
       (0, import_obsidian9.setIcon)(tagSystemButtonEl, TAG_SYSTEM_ICON);
       expandAllEl.insertAdjacentElement("afterend", tagSystemButtonEl);
       const scrollBottomButtonEl = document.createElement("div");
@@ -2747,6 +2853,11 @@ var TagPaneBehavior = class {
       patch.hierarchyButtonEl = hierarchyButtonEl;
       patch.scrollBottomButtonEl = scrollBottomButtonEl;
       patch.scrollTopButtonEl = scrollTopButtonEl;
+      patch.tagSystemButtonEl = tagSystemButtonEl;
+      patch.toolbarButtonEls.set("open-tag-system", tagSystemButtonEl);
+      patch.toolbarButtonEls.set("scroll-bottom", scrollBottomButtonEl);
+      patch.toolbarButtonEls.set("scroll-top", scrollTopButtonEl);
+      patch.toolbarButtonEls.set("note-hierarchy", hierarchyButtonEl);
       const onTagSystemButtonClick = (evt) => {
         if (evt.button !== 0) return;
         evt.preventDefault();
@@ -2942,6 +3053,11 @@ var TagPaneBehavior = class {
       patch.originalUpdateSearch = null;
     }
     this.clearNoteCardSearchState(patch.noteCardSearchState);
+    for (const buttonEl of patch.toolbarButtonEls.values()) {
+      if (!buttonEl || !buttonEl.classList) continue;
+      buttonEl.classList.remove("puffs-toolbar-config-hidden", "puffs-toolbar-context-hidden");
+      buttonEl.removeAttribute("data-puffs-toolbar-button");
+    }
     for (const cleanup of patch.cleanup) {
       cleanup();
     }
@@ -2996,6 +3112,7 @@ var TagPaneBehavior = class {
       this.repairHiddenSearchValue(view);
       this.hideHierarchyButton(view);
       this.registerTagViewHotkey(view, patch);
+      this.syncSidebarToolbarButtons(view, patch);
       if (view.useHierarchy !== false && typeof view.setUseHierarchy === "function") {
         view.setUseHierarchy(false);
         this.scheduleSyncView(view);
@@ -3044,6 +3161,57 @@ var TagPaneBehavior = class {
     buttonEl.classList.add("puffs-tag-hidden");
     buttonEl.setAttribute("aria-hidden", "true");
   }
+  refreshSidebarToolbarButtonRegistry(view, patch) {
+    const buttons = patch.toolbarButtonEls || /* @__PURE__ */ new Map();
+    patch.toolbarButtonEls = buttons;
+    if (view.collapseOrExpandAllEl) buttons.set("expand-collapse", view.collapseOrExpandAllEl);
+    else buttons.delete("expand-collapse");
+    if (view.showSearchButtonEl) buttons.set("filter", view.showSearchButtonEl);
+    else buttons.delete("filter");
+    const existingSortEl = buttons.get("sort");
+    if (!existingSortEl || !existingSortEl.isConnected) {
+      const navButtonsEl = view.collapseOrExpandAllEl && view.collapseOrExpandAllEl.parentElement || view.containerEl.querySelector(".nav-buttons-container");
+      const sortEl = navButtonsEl && Array.from(navButtonsEl.children).find((element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const label = element.getAttribute("aria-label") || "";
+        return label === "\u6392\u5E8F" || label.startsWith("\u6392\u5E8F");
+      });
+      if (sortEl) buttons.set("sort", sortEl);
+      else buttons.delete("sort");
+    }
+    return buttons;
+  }
+  syncSidebarToolbarButtons(view, patch) {
+    var _a;
+    const buttons = this.refreshSidebarToolbarButtonRegistry(view, patch);
+    const settings = normalizeSidebarToolbarButtons(this.settings.sidebarToolbarButtons);
+    const settingsById = new Map(settings.map((item) => [item.id, item]));
+    const availableSettings = getAvailableSidebarToolbarButtons(settings, buttons.keys());
+    const navButtonsEl = view.collapseOrExpandAllEl && view.collapseOrExpandAllEl.parentElement || view.containerEl.querySelector(".nav-buttons-container");
+    if (navButtonsEl) {
+      for (const item of availableSettings) {
+        const buttonEl = buttons.get(item.id);
+        if (buttonEl && buttonEl.parentElement === navButtonsEl) navButtonsEl.appendChild(buttonEl);
+      }
+    }
+    for (const [id, buttonEl] of buttons) {
+      if (!buttonEl || !buttonEl.classList) continue;
+      const visible = ((_a = settingsById.get(id)) == null ? void 0 : _a.visible) !== false;
+      buttonEl.dataset.puffsToolbarButton = id;
+      buttonEl.classList.toggle("puffs-toolbar-config-hidden", !visible);
+      if (!visible) buttonEl.setAttribute("aria-hidden", "true");
+      else if (!buttonEl.classList.contains("puffs-toolbar-context-hidden")) buttonEl.removeAttribute("aria-hidden");
+    }
+  }
+  setSidebarToolbarContextHidden(patch, hierarchyMode) {
+    for (const [id, buttonEl] of patch.toolbarButtonEls || []) {
+      if (!buttonEl || !buttonEl.classList) continue;
+      const hidden = hierarchyMode && id !== "note-hierarchy";
+      buttonEl.classList.toggle("puffs-toolbar-context-hidden", hidden);
+      if (hidden) buttonEl.setAttribute("aria-hidden", "true");
+      else if (!buttonEl.classList.contains("puffs-toolbar-config-hidden")) buttonEl.removeAttribute("aria-hidden");
+    }
+  }
   renderSidebarHierarchyPage(view, patch) {
     const tagPaneEl = view.tagPaneEl || view.containerEl.querySelector(".tag-container");
     if (!tagPaneEl) return;
@@ -3071,9 +3239,7 @@ var TagPaneBehavior = class {
       patch.hierarchyButtonEl.setAttribute("aria-label", "\u8FD4\u56DE\u6807\u7B7E\u5217\u8868");
       (0, import_obsidian9.setIcon)(patch.hierarchyButtonEl, "tags");
     }
-    if (view.collapseOrExpandAllEl) view.collapseOrExpandAllEl.classList.add("puffs-tag-hidden");
-    if (patch.scrollBottomButtonEl) patch.scrollBottomButtonEl.classList.add("puffs-tag-hidden");
-    if (patch.scrollTopButtonEl) patch.scrollTopButtonEl.classList.add("puffs-tag-hidden");
+    this.setSidebarToolbarContextHidden(patch, true);
     if (view.searchComponent && view.searchComponent.containerEl) {
       view.searchComponent.containerEl.classList.add("puffs-tag-hidden");
     }
@@ -3088,8 +3254,7 @@ var TagPaneBehavior = class {
       patch.hierarchyButtonEl.setAttribute("aria-label", "\u6253\u5F00\u7236\u5B50\u7B14\u8BB0");
       (0, import_obsidian9.setIcon)(patch.hierarchyButtonEl, "git-fork");
     }
-    if (patch.scrollBottomButtonEl) patch.scrollBottomButtonEl.classList.remove("puffs-tag-hidden");
-    if (patch.scrollTopButtonEl) patch.scrollTopButtonEl.classList.remove("puffs-tag-hidden");
+    this.setSidebarToolbarContextHidden(patch, false);
     if (view.searchComponent && view.searchComponent.containerEl) {
       view.searchComponent.containerEl.classList.remove("puffs-tag-hidden");
     }
@@ -3523,6 +3688,10 @@ var TagPaneBehavior = class {
     });
     view.containerEl.querySelectorAll(".puffs-tag-hidden").forEach((el) => {
       el.classList.remove("puffs-tag-hidden");
+    });
+    view.containerEl.querySelectorAll(".puffs-toolbar-config-hidden, .puffs-toolbar-context-hidden").forEach((el) => {
+      el.classList.remove("puffs-toolbar-config-hidden", "puffs-toolbar-context-hidden");
+      el.removeAttribute("data-puffs-toolbar-button");
     });
     view.containerEl.querySelectorAll(".puffs-tag-expanded").forEach((el) => {
       el.classList.remove("puffs-tag-expanded");

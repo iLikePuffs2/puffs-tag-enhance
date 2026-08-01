@@ -15,6 +15,7 @@ import {
   normalizeScrollTopButtonThreshold,
   normalizeTag
 } from "./models";
+import { normalizeSidebarToolbarButtons } from "./sidebar-toolbar";
 
 export class PersistenceBehavior {
   [key: string]: any;
@@ -53,6 +54,9 @@ export class PersistenceBehavior {
     }
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
       this.settings.scrollTopButtonThreshold
+    );
+    this.settings.sidebarToolbarButtons = normalizeSidebarToolbarButtons(
+      this.settings.sidebarToolbarButtons
     );
     this.settings.pinnedTag = normalizeTag(this.settings.pinnedTag);
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
@@ -96,6 +100,9 @@ export class PersistenceBehavior {
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
       this.settings.scrollTopButtonThreshold
     );
+    this.settings.sidebarToolbarButtons = normalizeSidebarToolbarButtons(
+      this.settings.sidebarToolbarButtons
+    );
     this.settings.pinnedTag = normalizeTag(this.settings.pinnedTag);
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
@@ -130,6 +137,9 @@ export class PersistenceBehavior {
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'scrollTopButtonThreshold')) {
       this.refreshTagViews();
       this.refreshTagShelfViews();
+    }
+    if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'sidebarToolbarButtons')) {
+      this.refreshTagViews();
     }
   }
 

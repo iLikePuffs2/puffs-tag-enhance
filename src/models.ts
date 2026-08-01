@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { normalizePath } from "obsidian";
+import { createDefaultSidebarToolbarButtons } from "./sidebar-toolbar";
 
 const TAG_VIEW_TYPE = 'tag';
 const TAG_SHELF_VIEW_TYPE = 'puffs-tag-shelf-view';
@@ -30,6 +31,7 @@ const DEFAULT_SETTINGS = {
   backupFolderPath: '',
   pinnedTag: null,
   scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
+  sidebarToolbarButtons: createDefaultSidebarToolbarButtons(),
   relations: {
     version: 1,
     tagInheritance: {
