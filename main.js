@@ -32,7 +32,7 @@ __export(main_exports, {
   default: () => main_default
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian10 = require("obsidian");
+var import_obsidian12 = require("obsidian");
 
 // src/models.ts
 var import_obsidian = require("obsidian");
@@ -63,7 +63,19 @@ var DEFAULT_SETTINGS = {
   backupIntervalMinutes: 0,
   backupFolderPath: "",
   pinnedTag: null,
-  scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD
+  scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
+  relations: {
+    version: 1,
+    tagInheritance: {
+      childrenByParent: {},
+      enabledParents: [],
+      excludedPathsByParent: {}
+    },
+    noteHierarchy: {
+      childrenByParentPath: {},
+      displayNamesByParentPath: {}
+    }
+  }
 };
 function normalizeTag(rawTag) {
   if (!rawTag) return null;
@@ -365,6 +377,8 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     this.listEl = null;
     this.summaryTagCountEl = null;
     this.summaryNoteCountEl = null;
+    this.hierarchyMode = false;
+    this.hierarchyState = this.plugin.createHierarchySurfaceState();
   }
   getViewType() {
     return TAG_SHELF_VIEW_TYPE;
@@ -399,6 +413,10 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     });
   }
   toggleSearch() {
+    if (this.hierarchyMode) {
+      if (this.hierarchyState.inputEl) this.hierarchyState.inputEl.focus();
+      return;
+    }
     const inputEl = this.searchComponent && this.searchComponent.inputEl;
     if (!inputEl) return;
     if (this.isShowingSearch) {
@@ -431,6 +449,10 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     this.clearSearchCompositionHandlers();
     this.contentEl.empty();
     this.contentEl.classList.add("puffs-tag-shelf-view");
+    if (this.hierarchyMode) {
+      this.renderHierarchyPage();
+      return;
+    }
     const pageEl = document.createElement("div");
     pageEl.className = "puffs-tag-shelf-page";
     this.syncSidebarTreeStyles(pageEl);
@@ -439,7 +461,17 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     const titleEl = document.createElement("h3");
     titleEl.className = "puffs-tag-shelf-title";
     titleEl.textContent = "\u6807\u7B7E\u7CFB\u7EDF";
+    const hierarchyButtonEl = document.createElement("button");
+    hierarchyButtonEl.type = "button";
+    hierarchyButtonEl.className = "clickable-icon puffs-note-hierarchy-button";
+    hierarchyButtonEl.setAttribute("aria-label", "\u6253\u5F00\u7236\u5B50\u7B14\u8BB0");
+    (0, import_obsidian2.setIcon)(hierarchyButtonEl, "git-fork");
+    hierarchyButtonEl.addEventListener("click", () => {
+      this.hierarchyMode = true;
+      this.render();
+    });
     headerEl.appendChild(titleEl);
+    headerEl.appendChild(hierarchyButtonEl);
     pageEl.appendChild(headerEl);
     const summaryEl = document.createElement("div");
     summaryEl.className = "puffs-tag-shelf-summary";
@@ -509,6 +541,23 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     pageEl.appendChild(this.listEl);
     this.contentEl.appendChild(pageEl);
     this.renderTagList();
+  }
+  renderHierarchyPage() {
+    this.searchComponent = null;
+    this.listEl = null;
+    this.summaryTagCountEl = null;
+    this.summaryNoteCountEl = null;
+    const pageEl = document.createElement("div");
+    pageEl.className = "puffs-tag-shelf-page puffs-note-hierarchy-shelf";
+    this.syncSidebarTreeStyles(pageEl);
+    this.contentEl.appendChild(pageEl);
+    this.plugin.renderNoteHierarchyPage(pageEl, this.hierarchyState, {
+      surface: "shelf",
+      onBack: () => {
+        this.hierarchyMode = false;
+        this.render();
+      }
+    });
   }
   clearSearchCompositionHandlers() {
     if (this.searchCompositionCleanup) {
@@ -656,9 +705,26 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     flairOuterEl.className = "tree-item-flair-outer";
     const countEl = document.createElement("span");
     countEl.className = "tag-pane-tag-count tree-item-flair";
-    countEl.textContent = String(files.length);
+    countEl.textContent = item.inheritanceEnabled && item.inheritedCount > 0 ? `${item.exactCount}+${item.inheritedCount}` : String(files.length);
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
+    let inheritanceButtonEl = null;
+    if (!isVirtual && item.hasInheritance) {
+      inheritanceButtonEl = document.createElement("button");
+      inheritanceButtonEl.type = "button";
+      inheritanceButtonEl.className = "clickable-icon puffs-tag-inheritance-button";
+      inheritanceButtonEl.classList.toggle("is-active", !!item.inheritanceEnabled);
+      inheritanceButtonEl.setAttribute("aria-label", item.inheritanceEnabled ? "\u9690\u85CF\u540E\u4EE3\u6807\u7B7E\u7B14\u8BB0" : "\u663E\u793A\u540E\u4EE3\u6807\u7B7E\u7B14\u8BB0");
+      (0, import_obsidian2.setIcon)(inheritanceButtonEl, "git-merge");
+      inheritanceButtonEl.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.plugin.toggleTagInheritance(tag).catch((error) => {
+          console.error("[Puffs Tag Enhance] Failed to toggle inheritance:", error);
+          new import_obsidian2.Notice("\u5207\u6362\u6807\u7B7E\u7EE7\u627F\u5931\u8D25");
+        });
+      });
+    }
     if (isExpanded) {
       scrollBottomButtonEl = document.createElement("button");
       scrollBottomButtonEl.type = "button";
@@ -692,6 +758,7 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     tagEl.appendChild(innerEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
+    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
     tagEl.addEventListener("click", () => {
@@ -702,12 +769,13 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     tagEl.addEventListener("contextmenu", (event) => {
       if (isVirtual) return;
       event.preventDefault();
-      this.plugin.openRenameTagModal(tag);
+      this.plugin.showTagContextMenu(event, tag);
     });
     if (isExpanded) {
       const notesEl = document.createElement("div");
       notesEl.className = "tree-item-children puffs-tag-note-list puffs-tag-shelf-notes";
       for (const [fileIndex, file] of files.entries()) {
+        const inherited = !isVirtual && this.plugin.isInheritedFileForTag(tag, file.path);
         const noteItemEl = document.createElement("div");
         noteItemEl.className = "tree-item puffs-tag-note-item puffs-tag-shelf-note-item";
         noteItemEl.dataset.path = file.path;
@@ -721,20 +789,26 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
         if (!isVirtual) {
           noteCardEl.dataset.puffsTag = tag;
           noteCardEl.dataset.puffsSurface = "shelf";
-          const orderButtonEl = document.createElement("button");
-          orderButtonEl.type = "button";
-          orderButtonEl.className = "clickable-icon puffs-tag-note-order-button";
-          orderButtonEl.dataset.puffsTag = tag;
-          orderButtonEl.dataset.path = file.path;
-          orderButtonEl.dataset.puffsSurface = "shelf";
-          (0, import_obsidian2.setIcon)(orderButtonEl, "grip-vertical");
-          this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
-          orderButtonEl.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            this.plugin.toggleNoteOrderTarget(tag, file.path, "shelf");
-          });
-          noteCardEl.appendChild(orderButtonEl);
+          if (inherited) {
+            noteCardEl.dataset.puffsInherited = "true";
+            noteCardEl.title = `\u7EE7\u627F\u81EA\uFF1A${this.plugin.getInheritedFileSources(tag, file.path).join("\u3001")}`;
+          }
+          if (!inherited) {
+            const orderButtonEl = document.createElement("button");
+            orderButtonEl.type = "button";
+            orderButtonEl.className = "clickable-icon puffs-tag-note-order-button";
+            orderButtonEl.dataset.puffsTag = tag;
+            orderButtonEl.dataset.path = file.path;
+            orderButtonEl.dataset.puffsSurface = "shelf";
+            (0, import_obsidian2.setIcon)(orderButtonEl, "grip-vertical");
+            this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
+            orderButtonEl.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              this.plugin.toggleNoteOrderTarget(tag, file.path, "shelf");
+            });
+            noteCardEl.appendChild(orderButtonEl);
+          }
         }
         const noteInnerEl = document.createElement("div");
         noteInnerEl.className = "tree-item-inner";
@@ -764,7 +838,8 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
           });
         });
         noteCardEl.addEventListener("contextmenu", (event) => {
-          if (!this.plugin.showNoteDisplayNameMenuForCard(event, noteCardEl)) return;
+          const handled = this.plugin.showNoteCardContextMenu(event, noteCardEl);
+          if (!handled) return;
           event.preventDefault();
           event.stopPropagation();
         });
@@ -883,6 +958,7 @@ var PersistenceBehavior = class {
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
     }
+    this.normalizeRelationSettings(this.settings.relations);
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
     delete this.settings.backupFileName;
@@ -921,6 +997,7 @@ var PersistenceBehavior = class {
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
     }
+    this.normalizeRelationSettings(this.settings.relations);
     delete this.settings.tagOrder;
     delete this.settings.backupFileName;
     await this.saveSettings();
@@ -1144,14 +1221,19 @@ var InteractionsBehavior = class {
   }
   getPinnedTagItem() {
     const tag = normalizeTag(this.settings.pinnedTag);
-    const files = tag && !isNestedTag(tag) ? this.tagFileIndex.get(tag) || [] : [];
+    const browseData = tag && !isNestedTag(tag) ? this.getTagBrowseData(tag) : null;
+    const files = browseData ? browseData.files : [];
     if (!tag || files.length === 0) return null;
     return {
       tag,
       displayName: getTagDisplayName(tag),
       isVirtual: false,
       isPinnedExtra: true,
-      files: this.getOrderedFilesForTag(tag, files)
+      files,
+      exactCount: browseData.exactCount,
+      inheritedCount: browseData.inheritedCount,
+      inheritanceEnabled: browseData.inheritanceEnabled,
+      hasInheritance: browseData.hasInheritance
     };
   }
   prependPinnedTagItem(items, query = "") {
@@ -1168,7 +1250,7 @@ var InteractionsBehavior = class {
   }
   async togglePinnedTag(tagValue) {
     const tag = normalizeTag(tagValue);
-    if (!tag || isNestedTag(tag) || !(this.tagFileIndex.get(tag) || []).length) return;
+    if (!tag || isNestedTag(tag) || this.getTagBrowseData(tag).files.length === 0) return;
     this.settings.pinnedTag = this.settings.pinnedTag === tag ? null : tag;
     await this.saveSettings();
     this.refreshTagViews();
@@ -1182,12 +1264,20 @@ var InteractionsBehavior = class {
       return includePinned ? this.prependPinnedTagItem(intersectionItems, query) : intersectionItems;
     }
     const unionTerms = splitUnionSearchTerms(tagQuery);
-    const items = Array.from(this.tagFileIndex.entries()).filter(([tag, files]) => !isNestedTag(tag) && files.length > 0).map(([tag, files]) => ({
-      tag,
-      displayName: getTagDisplayName(tag),
-      isVirtual: false,
-      files: this.getOrderedFilesForTag(tag, files)
-    })).sort((a, b) => {
+    const items = Array.from(this.getLogicalTagSet()).filter((tag) => !isNestedTag(tag)).map((tag) => {
+      const browseData = this.getTagBrowseData(tag);
+      return {
+        tag,
+        displayName: getTagDisplayName(tag),
+        isVirtual: false,
+        files: browseData.files,
+        exactCount: browseData.exactCount,
+        inheritedCount: browseData.inheritedCount,
+        inheritanceEnabled: browseData.inheritanceEnabled,
+        hasInheritance: browseData.hasInheritance,
+        sourcesByPath: browseData.sourcesByPath
+      };
+    }).filter((item) => item.files.length > 0 || item.hasInheritance).sort((a, b) => {
       const countDiff = b.files.length - a.files.length;
       return countDiff || a.displayName.localeCompare(b.displayName, "zh-Hans-CN");
     });
@@ -1989,6 +2079,7 @@ var TagIndexBehavior = class {
       this.handlePreferredFileRename(file, oldPath);
       this.handleNoteOrderFileRename(file, oldPath);
       this.handleNoteDisplayNameFileRename(file, oldPath);
+      this.handleRelationFileRename(file, oldPath);
       this.refreshTagViews();
       this.refreshTagShelfViews();
     }));
@@ -1996,6 +2087,7 @@ var TagIndexBehavior = class {
       this.handlePreferredFileDelete(file);
       this.handleNoteOrderFileDelete(file);
       this.handleNoteDisplayNameFileDelete(file);
+      this.handleRelationFileDelete(file);
       scheduleRefresh(file);
     }));
   }
@@ -2260,6 +2352,7 @@ var TagIndexBehavior = class {
       if (this.settings.pinnedTag === oldTag) {
         this.settings.pinnedTag = newTag;
       }
+      this.migrateTagRelations(oldTag, newTag);
       if (migratedOrder.length > 0) {
         this.settings.noteOrderByTag[newTag] = migratedOrder;
       } else {
@@ -2509,6 +2602,12 @@ var TagPaneBehavior = class {
     return null;
   }
   toggleTagSearch(view) {
+    const patch = this.viewPatches.get(view);
+    if (patch && patch.hierarchyMode) {
+      const inputEl = patch.hierarchyState && patch.hierarchyState.inputEl;
+      if (inputEl) inputEl.focus();
+      return;
+    }
     const isShowingSearch = !!view.isShowingSearch;
     if (isShowingSearch) {
       this.clearTagSearch(view);
@@ -2578,7 +2677,13 @@ var TagPaneBehavior = class {
       autoExpandedTag: null,
       autoExpandedWasAlreadyExpanded: false,
       noteCardSearchState: createNoteCardSearchState(),
-      lastRenderedSearchQuery: this.getTagSearchValue(view)
+      lastRenderedSearchQuery: this.getTagSearchValue(view),
+      hierarchyMode: false,
+      hierarchyState: this.createHierarchySurfaceState(),
+      hierarchyPageEl: null,
+      hierarchyButtonEl: null,
+      scrollBottomButtonEl: null,
+      scrollTopButtonEl: null
     };
     const searchInputEl = view.searchComponent && view.searchComponent.inputEl;
     if (searchInputEl) {
@@ -2634,6 +2739,14 @@ var TagPaneBehavior = class {
       scrollTopButtonEl.setAttribute("aria-label", "\u56DE\u9876");
       (0, import_obsidian9.setIcon)(scrollTopButtonEl, "arrow-up-to-line");
       scrollBottomButtonEl.insertAdjacentElement("afterend", scrollTopButtonEl);
+      const hierarchyButtonEl = document.createElement("div");
+      hierarchyButtonEl.className = "clickable-icon nav-action-button puffs-note-hierarchy-button";
+      hierarchyButtonEl.setAttribute("aria-label", "\u6253\u5F00\u7236\u5B50\u7B14\u8BB0");
+      (0, import_obsidian9.setIcon)(hierarchyButtonEl, "git-fork");
+      scrollTopButtonEl.insertAdjacentElement("afterend", hierarchyButtonEl);
+      patch.hierarchyButtonEl = hierarchyButtonEl;
+      patch.scrollBottomButtonEl = scrollBottomButtonEl;
+      patch.scrollTopButtonEl = scrollTopButtonEl;
       const onTagSystemButtonClick = (evt) => {
         if (evt.button !== 0) return;
         evt.preventDefault();
@@ -2663,16 +2776,27 @@ var TagPaneBehavior = class {
         evt.stopImmediatePropagation();
         scrollTagPaneTo("top");
       };
+      const onHierarchyButtonClick = (evt) => {
+        if (evt.button !== 0) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        patch.hierarchyMode = !patch.hierarchyMode;
+        this.scheduleSyncView(view, 0);
+      };
       tagSystemButtonEl.addEventListener("click", onTagSystemButtonClick, true);
       scrollBottomButtonEl.addEventListener("click", onScrollBottomButtonClick, true);
       scrollTopButtonEl.addEventListener("click", onScrollTopButtonClick, true);
+      hierarchyButtonEl.addEventListener("click", onHierarchyButtonClick, true);
       patch.cleanup.push(() => {
         tagSystemButtonEl.removeEventListener("click", onTagSystemButtonClick, true);
         scrollBottomButtonEl.removeEventListener("click", onScrollBottomButtonClick, true);
         scrollTopButtonEl.removeEventListener("click", onScrollTopButtonClick, true);
+        hierarchyButtonEl.removeEventListener("click", onHierarchyButtonClick, true);
         tagSystemButtonEl.remove();
         scrollBottomButtonEl.remove();
         scrollTopButtonEl.remove();
+        hierarchyButtonEl.remove();
       });
     }
     this.patchMultiTagSearch(view, patch);
@@ -2686,6 +2810,17 @@ var TagPaneBehavior = class {
         evt.stopImmediatePropagation();
         this.togglePinnedTag(pinButtonEl.dataset.puffsTag).catch((error) => {
           console.error("[Puffs Tag Enhance] Failed to toggle pinned tag:", error);
+        });
+        return;
+      }
+      const inheritanceButtonEl = target.closest(".puffs-tag-inheritance-button");
+      if (inheritanceButtonEl) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        this.toggleTagInheritance(inheritanceButtonEl.dataset.puffsTag).catch((error) => {
+          console.error("[Puffs Tag Enhance] Failed to toggle tag inheritance:", error);
+          new import_obsidian9.Notice("\u5207\u6362\u6807\u7B7E\u7EE7\u627F\u5931\u8D25");
         });
         return;
       }
@@ -2743,7 +2878,8 @@ var TagPaneBehavior = class {
       if (!target || !view.containerEl.contains(target)) return;
       const noteCardEl = target.closest(".puffs-tag-note-card");
       if (noteCardEl) {
-        if (!this.showNoteDisplayNameMenuForCard(evt, noteCardEl)) return;
+        const handled = this.showNoteCardContextMenu(evt, noteCardEl);
+        if (!handled) return;
         evt.preventDefault();
         evt.stopPropagation();
         evt.stopImmediatePropagation();
@@ -2757,7 +2893,7 @@ var TagPaneBehavior = class {
       evt.preventDefault();
       evt.stopPropagation();
       evt.stopImmediatePropagation();
-      this.openRenameTagModal(tag);
+      this.showTagContextMenu(evt, tag);
     };
     view.containerEl.addEventListener("contextmenu", onTagPaneContextMenu, true);
     patch.cleanup.push(() => view.containerEl.removeEventListener("contextmenu", onTagPaneContextMenu, true));
@@ -2865,6 +3001,11 @@ var TagPaneBehavior = class {
         this.scheduleSyncView(view);
         return;
       }
+      if (patch.hierarchyMode) {
+        this.renderSidebarHierarchyPage(view, patch);
+        return;
+      }
+      this.hideSidebarHierarchyPage(view, patch);
       this.renderListMode(view);
       this.updateListModeExpandAllButton(view);
     } finally {
@@ -2903,6 +3044,56 @@ var TagPaneBehavior = class {
     buttonEl.classList.add("puffs-tag-hidden");
     buttonEl.setAttribute("aria-hidden", "true");
   }
+  renderSidebarHierarchyPage(view, patch) {
+    const tagPaneEl = view.tagPaneEl || view.containerEl.querySelector(".tag-container");
+    if (!tagPaneEl) return;
+    view.containerEl.classList.add("puffs-tag-list-mode-enabled", "puffs-note-hierarchy-mode");
+    const listEl = tagPaneEl.querySelector(":scope > .puffs-tag-list-container:not(.puffs-note-hierarchy-sidebar)");
+    if (listEl) listEl.classList.add("puffs-tag-hidden");
+    if (!patch.hierarchyPageEl || !patch.hierarchyPageEl.isConnected) {
+      patch.hierarchyPageEl = document.createElement("div");
+      patch.hierarchyPageEl.className = "puffs-tag-list-container puffs-note-hierarchy-sidebar";
+      tagPaneEl.appendChild(patch.hierarchyPageEl);
+    }
+    patch.hierarchyPageEl.classList.remove("puffs-tag-hidden");
+    const relationSignature = JSON.stringify(this.getNoteHierarchySettings());
+    if (patch.hierarchyPageEl.dataset.puffsRelationSignature !== relationSignature || !patch.hierarchyState.inputEl || !patch.hierarchyState.inputEl.isConnected) {
+      this.renderNoteHierarchyPage(patch.hierarchyPageEl, patch.hierarchyState, {
+        surface: "sidebar",
+        onBack: () => {
+          patch.hierarchyMode = false;
+          this.scheduleSyncView(view, 0);
+        }
+      });
+      patch.hierarchyPageEl.dataset.puffsRelationSignature = relationSignature;
+    }
+    if (patch.hierarchyButtonEl) {
+      patch.hierarchyButtonEl.setAttribute("aria-label", "\u8FD4\u56DE\u6807\u7B7E\u5217\u8868");
+      (0, import_obsidian9.setIcon)(patch.hierarchyButtonEl, "tags");
+    }
+    if (view.collapseOrExpandAllEl) view.collapseOrExpandAllEl.classList.add("puffs-tag-hidden");
+    if (patch.scrollBottomButtonEl) patch.scrollBottomButtonEl.classList.add("puffs-tag-hidden");
+    if (patch.scrollTopButtonEl) patch.scrollTopButtonEl.classList.add("puffs-tag-hidden");
+    if (view.searchComponent && view.searchComponent.containerEl) {
+      view.searchComponent.containerEl.classList.add("puffs-tag-hidden");
+    }
+  }
+  hideSidebarHierarchyPage(view, patch) {
+    view.containerEl.classList.remove("puffs-note-hierarchy-mode");
+    if (patch.hierarchyPageEl) patch.hierarchyPageEl.classList.add("puffs-tag-hidden");
+    const tagPaneEl = view.tagPaneEl || view.containerEl.querySelector(".tag-container");
+    const listEl = tagPaneEl && tagPaneEl.querySelector(":scope > .puffs-tag-list-container:not(.puffs-note-hierarchy-sidebar)");
+    if (listEl) listEl.classList.remove("puffs-tag-hidden");
+    if (patch.hierarchyButtonEl) {
+      patch.hierarchyButtonEl.setAttribute("aria-label", "\u6253\u5F00\u7236\u5B50\u7B14\u8BB0");
+      (0, import_obsidian9.setIcon)(patch.hierarchyButtonEl, "git-fork");
+    }
+    if (patch.scrollBottomButtonEl) patch.scrollBottomButtonEl.classList.remove("puffs-tag-hidden");
+    if (patch.scrollTopButtonEl) patch.scrollTopButtonEl.classList.remove("puffs-tag-hidden");
+    if (view.searchComponent && view.searchComponent.containerEl) {
+      view.searchComponent.containerEl.classList.remove("puffs-tag-hidden");
+    }
+  }
   renderListMode(view) {
     const listEl = this.ensureListModeContainer(view);
     if (!listEl) return;
@@ -2934,6 +3125,9 @@ var TagPaneBehavior = class {
         item.displayName,
         item.isVirtual,
         item.files.length,
+        item.exactCount,
+        item.inheritedCount,
+        item.inheritanceEnabled,
         this.settings.pinnedTag === item.tag,
         this.expandedTags.has(item.tag),
         this.expandedTags.has(item.tag) ? item.files.map((file) => file.path).join("\n") : ""
@@ -2994,7 +3188,7 @@ var TagPaneBehavior = class {
     const tagPaneEl = view.tagPaneEl || view.containerEl && view.containerEl.querySelector(".tag-container");
     if (!tagPaneEl) return null;
     view.containerEl.classList.add("puffs-tag-list-mode-enabled");
-    let listEl = tagPaneEl.querySelector(":scope > .puffs-tag-list-container");
+    let listEl = tagPaneEl.querySelector(":scope > .puffs-tag-list-container:not(.puffs-note-hierarchy-sidebar)");
     if (!listEl) {
       listEl = document.createElement("div");
       listEl.className = "puffs-tag-list-container";
@@ -3013,26 +3207,32 @@ var TagPaneBehavior = class {
     const items = [];
     const seen = /* @__PURE__ */ new Set();
     const shouldShowTag = (tag) => {
-      const files = this.tagFileIndex.get(tag) || [];
-      if (isNestedTag(tag) || files.length === 0) return false;
+      const browseData = this.getTagBrowseData(tag);
+      if (isNestedTag(tag) || browseData.files.length === 0 && !browseData.hasInheritance) return false;
       return unionTerms ? tagMatchesAnySearchTerm(tag, unionTerms) : tagMatchesSearchText(tag, query);
     };
     const pushTag = (tag) => {
       const normalizedTag = normalizeTag(tag);
       if (!normalizedTag || seen.has(normalizedTag) || !shouldShowTag(normalizedTag)) return;
       seen.add(normalizedTag);
+      const browseData = this.getTagBrowseData(normalizedTag);
       items.push({
         tag: normalizedTag,
         displayName: getTagDisplayName(normalizedTag),
         isVirtual: false,
-        files: this.getOrderedFilesForTag(normalizedTag, this.tagFileIndex.get(normalizedTag) || [])
+        files: browseData.files,
+        exactCount: browseData.exactCount,
+        inheritedCount: browseData.inheritedCount,
+        inheritanceEnabled: browseData.inheritanceEnabled,
+        hasInheritance: browseData.hasInheritance,
+        sourcesByPath: browseData.sourcesByPath
       });
     };
     for (const [tag, tagDom] of this.getTagDomEntries(view)) {
       pushTag(tagDom && tagDom.tag || tag);
     }
-    const fallbackTags = Array.from(this.tagFileIndex.keys()).filter((tag) => !seen.has(tag)).sort((a, b) => {
-      const countDiff = (this.tagFileIndex.get(b) || []).length - (this.tagFileIndex.get(a) || []).length;
+    const fallbackTags = Array.from(this.getLogicalTagSet()).filter((tag) => !seen.has(tag)).sort((a, b) => {
+      const countDiff = this.getTagBrowseData(b).files.length - this.getTagBrowseData(a).files.length;
       return countDiff || getTagDisplayName(a).localeCompare(getTagDisplayName(b), "zh-Hans-CN");
     });
     for (const tag of fallbackTags) {
@@ -3131,9 +3331,19 @@ var TagPaneBehavior = class {
     flairOuterEl.className = "tree-item-flair-outer";
     const countEl = document.createElement("span");
     countEl.className = "tag-pane-tag-count tree-item-flair";
-    countEl.textContent = String(files.length);
+    countEl.textContent = item.inheritanceEnabled && item.inheritedCount > 0 ? `${item.exactCount}+${item.inheritedCount}` : String(files.length);
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
+    let inheritanceButtonEl = null;
+    if (!isVirtual && item.hasInheritance) {
+      inheritanceButtonEl = document.createElement("button");
+      inheritanceButtonEl.type = "button";
+      inheritanceButtonEl.className = "clickable-icon puffs-tag-inheritance-button";
+      inheritanceButtonEl.dataset.puffsTag = tag;
+      inheritanceButtonEl.classList.toggle("is-active", !!item.inheritanceEnabled);
+      inheritanceButtonEl.setAttribute("aria-label", item.inheritanceEnabled ? "\u9690\u85CF\u540E\u4EE3\u6807\u7B7E\u7B14\u8BB0" : "\u663E\u793A\u540E\u4EE3\u6807\u7B7E\u7B14\u8BB0");
+      (0, import_obsidian9.setIcon)(inheritanceButtonEl, "git-merge");
+    }
     if (isExpanded) {
       scrollBottomButtonEl = document.createElement("button");
       scrollBottomButtonEl.type = "button";
@@ -3155,6 +3365,7 @@ var TagPaneBehavior = class {
     tagEl.appendChild(innerEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
+    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
     if (isExpanded) {
@@ -3233,8 +3444,10 @@ var TagPaneBehavior = class {
     listEl.className = "tree-item-children puffs-tag-note-list";
     listEl.empty();
     const tag = normalizeTag(tagValue);
-    const canReorder = !!tag && !isVirtual && !isNestedTag(tag);
+    const browseData = tag && !isVirtual ? this.getTagBrowseData(tag) : null;
     for (const [fileIndex, file] of files.entries()) {
+      const inherited = !!(browseData && browseData.inheritedFiles.some((candidate) => candidate.path === file.path));
+      const canReorder = !!tag && !isVirtual && !isNestedTag(tag) && !inherited;
       const itemEl = document.createElement("div");
       itemEl.className = "tree-item puffs-tag-note-item";
       itemEl.dataset.path = file.path;
@@ -3245,12 +3458,17 @@ var TagPaneBehavior = class {
       const cardEl = document.createElement("div");
       cardEl.className = "tree-item-self puffs-tag-note-card is-clickable";
       cardEl.dataset.path = file.path;
+      if (tag) cardEl.dataset.puffsTag = tag;
+      if (inherited) {
+        cardEl.dataset.puffsInherited = "true";
+        const sources = this.getInheritedFileSources(tag, file.path);
+        cardEl.title = `\u7EE7\u627F\u81EA\uFF1A${sources.join("\u3001")}`;
+      }
       cardEl.style.marginInlineStart = "-17px";
       cardEl.style.setProperty("margin-inline-start", "-17px", "important");
       cardEl.style.paddingInlineStart = canReorder ? "17px" : "41px";
       cardEl.style.setProperty("padding-inline-start", canReorder ? "17px" : "41px", "important");
       if (canReorder) {
-        cardEl.dataset.puffsTag = tag;
         cardEl.dataset.puffsSurface = "sidebar";
         const orderButtonEl = document.createElement("button");
         orderButtonEl.type = "button";
@@ -3371,8 +3589,965 @@ var TagPaneBehavior = class {
   }
 };
 
+// src/relations.ts
+var import_obsidian11 = require("obsidian");
+
+// src/relation-modals.ts
+var import_obsidian10 = require("obsidian");
+var AddParentTagModal = class extends import_obsidian10.Modal {
+  constructor(app, plugin, childTag) {
+    super(app);
+    this.plugin = plugin;
+    this.childTag = normalizeTag(childTag);
+  }
+  onOpen() {
+    this.modalEl.classList.add("puffs-relation-modal");
+    this.contentEl.empty();
+    const titleEl = this.contentEl.createEl("h3", { text: `\u4E3A ${this.childTag} \u6DFB\u52A0\u7236\u6807\u7B7E` });
+    titleEl.className = "puffs-relation-modal-title";
+    const inputEl = this.contentEl.createEl("input", { type: "text" });
+    inputEl.className = "puffs-relation-input";
+    inputEl.placeholder = "\u8F93\u5165\u7236\u6807\u7B7E\uFF0C\u53EF\u7701\u7565 #";
+    const submit = async () => {
+      try {
+        await this.plugin.addInheritanceParent(this.childTag, inputEl.value);
+        this.close();
+      } catch (error) {
+        new import_obsidian10.Notice(error && error.message ? error.message : "\u6DFB\u52A0\u7236\u6807\u7B7E\u5931\u8D25");
+      }
+    };
+    inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") submit();
+    });
+    const buttonEl = this.contentEl.createEl("button", { text: "\u6DFB\u52A0" });
+    buttonEl.className = "mod-cta";
+    buttonEl.addEventListener("click", submit);
+    window.setTimeout(() => inputEl.focus(), 0);
+  }
+};
+var TagInheritanceModal = class extends import_obsidian10.Modal {
+  constructor(app, plugin, parentTag) {
+    super(app);
+    this.plugin = plugin;
+    this.parentTag = normalizeTag(parentTag);
+    this.children = plugin.getInheritanceChildren(parentTag);
+  }
+  onOpen() {
+    this.modalEl.classList.add("puffs-relation-modal");
+    this.render();
+  }
+  render() {
+    this.contentEl.empty();
+    this.contentEl.createEl("h3", { text: `\u7BA1\u7406 ${this.parentTag} \u7684\u5B50\u6807\u7B7E`, cls: "puffs-relation-modal-title" });
+    const addRow = this.contentEl.createDiv({ cls: "puffs-relation-add-row" });
+    const inputEl = addRow.createEl("input", { type: "text", cls: "puffs-relation-input" });
+    inputEl.placeholder = "\u8F93\u5165\u5B50\u6807\u7B7E\uFF0C\u53EF\u7701\u7565 #";
+    const addButton = addRow.createEl("button", { text: "\u6DFB\u52A0" });
+    const addChild = () => {
+      const child = normalizeTag(inputEl.value);
+      if (!child || this.children.includes(child)) return;
+      if (this.plugin.wouldCreateTagInheritanceCycle(this.parentTag, child)) {
+        new import_obsidian10.Notice("\u4E0D\u80FD\u5EFA\u7ACB\u5FAA\u73AF\u7EE7\u627F");
+        return;
+      }
+      this.children.push(child);
+      this.render();
+    };
+    addButton.addEventListener("click", addChild);
+    inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") addChild();
+    });
+    const listEl = this.contentEl.createDiv({ cls: "puffs-relation-manage-list" });
+    if (!this.children.length) listEl.createDiv({ text: "\u6682\u65E0\u5B50\u6807\u7B7E", cls: "puffs-relation-empty" });
+    this.children.forEach((child, index) => {
+      const rowEl = listEl.createDiv({ cls: "puffs-relation-manage-row" });
+      rowEl.createSpan({ text: child, cls: "puffs-relation-manage-name" });
+      const makeButton = (icon, label, callback, disabled = false) => {
+        const button = rowEl.createEl("button", { cls: "clickable-icon", attr: { "aria-label": label } });
+        (0, import_obsidian10.setIcon)(button, icon);
+        button.disabled = disabled;
+        button.addEventListener("click", callback);
+      };
+      makeButton("arrow-up", "\u4E0A\u79FB", () => {
+        [this.children[index - 1], this.children[index]] = [this.children[index], this.children[index - 1]];
+        this.render();
+      }, index === 0);
+      makeButton("arrow-down", "\u4E0B\u79FB", () => {
+        [this.children[index], this.children[index + 1]] = [this.children[index + 1], this.children[index]];
+        this.render();
+      }, index === this.children.length - 1);
+      makeButton("x", "\u79FB\u9664", () => {
+        this.children.splice(index, 1);
+        this.render();
+      });
+    });
+    const exclusions = this.plugin.getTagInheritanceSettings().excludedPathsByParent[this.parentTag] || [];
+    if (exclusions.length) {
+      this.contentEl.createEl("h4", { text: "\u5DF2\u6392\u9664\u7B14\u8BB0" });
+      const exclusionListEl = this.contentEl.createDiv({ cls: "puffs-relation-manage-list" });
+      for (const path of exclusions) {
+        const rowEl = exclusionListEl.createDiv({ cls: "puffs-relation-manage-row" });
+        const file = this.app.vault.getAbstractFileByPath(path);
+        rowEl.createSpan({ text: file && file.basename ? file.basename : path, cls: "puffs-relation-manage-name" });
+        const restoreButton = rowEl.createEl("button", { text: "\u6062\u590D" });
+        restoreButton.addEventListener("click", async () => {
+          await this.plugin.restoreInheritedFile(this.parentTag, path);
+          this.render();
+        });
+      }
+    }
+    const footerEl = this.contentEl.createDiv({ cls: "puffs-relation-modal-footer" });
+    const saveButton = footerEl.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta" });
+    saveButton.addEventListener("click", async () => {
+      try {
+        await this.plugin.setInheritanceChildren(this.parentTag, this.children);
+        this.close();
+      } catch (error) {
+        new import_obsidian10.Notice(error && error.message ? error.message : "\u4FDD\u5B58\u7EE7\u627F\u5173\u7CFB\u5931\u8D25");
+      }
+    });
+  }
+};
+var NoteRelationModal = class extends import_obsidian10.Modal {
+  constructor(app, plugin, sourcePath, mode) {
+    super(app);
+    this.plugin = plugin;
+    this.sourcePath = sourcePath;
+    this.mode = mode === "parent" ? "parent" : "child";
+    this.query = "";
+  }
+  onOpen() {
+    this.modalEl.classList.add("puffs-relation-modal");
+    this.render();
+  }
+  render() {
+    this.contentEl.empty();
+    const sourceFile = this.app.vault.getAbstractFileByPath(this.sourcePath);
+    const sourceName = sourceFile instanceof import_obsidian10.TFile ? sourceFile.basename : this.sourcePath;
+    this.contentEl.createEl("h3", {
+      text: this.mode === "child" ? `\u4E3A ${sourceName} \u6DFB\u52A0\u5B50\u7B14\u8BB0` : `\u4E3A ${sourceName} \u6DFB\u52A0\u7236\u7B14\u8BB0`,
+      cls: "puffs-relation-modal-title"
+    });
+    const inputEl = this.contentEl.createEl("input", {
+      type: "search",
+      cls: "puffs-relation-input",
+      attr: { placeholder: "\u641C\u7D22\u6587\u4EF6\u540D\u3001\u8DEF\u5F84\u6216 alias" }
+    });
+    inputEl.value = this.query;
+    const resultsEl = this.contentEl.createDiv({ cls: "puffs-relation-note-results" });
+    const renderResults = () => {
+      resultsEl.empty();
+      const term = this.query.trim().toLowerCase();
+      const existing = new Set(this.mode === "child" ? this.plugin.getHierarchyChildren(this.sourcePath) : this.plugin.getHierarchyParents(this.sourcePath));
+      const files = this.app.vault.getMarkdownFiles().filter((file) => file.path !== this.sourcePath && !existing.has(file.path)).filter((file) => {
+        if (!term) return true;
+        return [file.basename, file.path, ...this.plugin.getNoteAliases(file)].some((value) => String(value).toLowerCase().includes(term));
+      }).sort((a, b) => a.basename.localeCompare(b.basename, "zh-Hans-CN")).slice(0, 100);
+      if (!files.length) {
+        resultsEl.createDiv({ text: "\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u7B14\u8BB0\u3002", cls: "puffs-relation-empty" });
+        return;
+      }
+      for (const file of files) {
+        const rowEl = resultsEl.createDiv({ cls: "puffs-relation-note-result is-clickable" });
+        rowEl.createDiv({ text: file.basename, cls: "puffs-relation-note-result-name" });
+        rowEl.createDiv({ text: file.path, cls: "puffs-relation-note-result-path" });
+        rowEl.addEventListener("click", async () => {
+          try {
+            const parentPath = this.mode === "child" ? this.sourcePath : file.path;
+            const childPath = this.mode === "child" ? file.path : this.sourcePath;
+            await this.plugin.addNoteHierarchyEdge(parentPath, childPath);
+            this.close();
+          } catch (error) {
+            new import_obsidian10.Notice(error && error.message ? error.message : "\u6DFB\u52A0\u7236\u5B50\u5173\u7CFB\u5931\u8D25");
+          }
+        });
+      }
+    };
+    inputEl.addEventListener("input", () => {
+      this.query = inputEl.value;
+      renderResults();
+    });
+    renderResults();
+    window.setTimeout(() => inputEl.focus(), 0);
+  }
+};
+
+// src/relation-utils.ts
+function collectDirectedDescendants(adjacency, root) {
+  const output = [];
+  const seen = /* @__PURE__ */ new Set([root]);
+  const visit = (node) => {
+    for (const child of adjacency[node] || []) {
+      if (!child || seen.has(child)) continue;
+      seen.add(child);
+      output.push(child);
+      visit(child);
+    }
+  };
+  visit(root);
+  return output;
+}
+function wouldCreateDirectedCycle(adjacency, parent, child) {
+  return !parent || !child || parent === child || collectDirectedDescendants(adjacency, child).includes(parent);
+}
+function sanitizeAcyclicAdjacency(value) {
+  const result = {};
+  for (const [parent, children] of Object.entries(value || {})) {
+    for (const child of Array.isArray(children) ? children : []) {
+      if (!child || wouldCreateDirectedCycle(result, parent, child)) continue;
+      if (!result[parent]) result[parent] = [];
+      if (!result[parent].includes(child)) result[parent].push(child);
+    }
+  }
+  return result;
+}
+function parseHierarchySearch(value) {
+  const text = String(value || "").trim();
+  const delimiter = text.indexOf("*");
+  if (delimiter >= 0 && delimiter !== text.lastIndexOf("*")) {
+    return { valid: false, parentQuery: "", childQuery: "", hasChildQuery: false };
+  }
+  return {
+    valid: true,
+    parentQuery: (delimiter < 0 ? text : text.slice(0, delimiter)).trim().toLowerCase(),
+    childQuery: (delimiter < 0 ? "" : text.slice(delimiter + 1)).trim().toLowerCase(),
+    hasChildQuery: delimiter >= 0
+  };
+}
+function mergeInheritedPaths(exactPaths, orderedBranches, excludedPaths = []) {
+  const seen = new Set(exactPaths);
+  const excluded = new Set(excludedPaths);
+  const inheritedPaths = [];
+  const sourcesByPath = /* @__PURE__ */ new Map();
+  for (const branch of orderedBranches) {
+    for (const path of branch.paths || []) {
+      const sources = sourcesByPath.get(path) || [];
+      if (!sources.includes(branch.source)) sources.push(branch.source);
+      sourcesByPath.set(path, sources);
+      if (!path || seen.has(path) || excluded.has(path)) continue;
+      seen.add(path);
+      inheritedPaths.push(path);
+    }
+  }
+  return { inheritedPaths, sourcesByPath };
+}
+function compareHierarchyParentItems(left, right) {
+  return right.directCount - left.directCount || left.name.localeCompare(right.name, "zh-Hans-CN");
+}
+
+// src/relations.ts
+var createEmptyRelations = () => ({
+  version: 1,
+  tagInheritance: {
+    childrenByParent: {},
+    enabledParents: [],
+    excludedPathsByParent: {}
+  },
+  noteHierarchy: {
+    childrenByParentPath: {},
+    displayNamesByParentPath: {}
+  }
+});
+var RelationsBehavior = class {
+  normalizeRelationSettings(value = this.settings.relations) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const result = createEmptyRelations();
+    const inheritance = source.tagInheritance && typeof source.tagInheritance === "object" ? source.tagInheritance : {};
+    const rawChildren = inheritance.childrenByParent;
+    if (rawChildren && typeof rawChildren === "object" && !Array.isArray(rawChildren)) {
+      for (const [rawParent, rawValues] of Object.entries(rawChildren)) {
+        const parent = normalizeTag(rawParent);
+        if (!parent || isNestedTag(parent) || !Array.isArray(rawValues)) continue;
+        const children = [];
+        const seen = /* @__PURE__ */ new Set();
+        for (const rawChild of rawValues) {
+          const child = normalizeTag(rawChild);
+          if (!child || child === parent || isNestedTag(child) || seen.has(child)) continue;
+          seen.add(child);
+          children.push(child);
+        }
+        if (children.length > 0) result.tagInheritance.childrenByParent[parent] = children;
+      }
+    }
+    const enabledParents = Array.isArray(inheritance.enabledParents) ? inheritance.enabledParents : [];
+    result.tagInheritance.enabledParents = Array.from(new Set(
+      enabledParents.map(normalizeTag).filter((tag) => tag && !isNestedTag(tag))
+    ));
+    const rawExclusions = inheritance.excludedPathsByParent;
+    if (rawExclusions && typeof rawExclusions === "object" && !Array.isArray(rawExclusions)) {
+      for (const [rawParent, rawPaths] of Object.entries(rawExclusions)) {
+        const parent = normalizeTag(rawParent);
+        if (!parent || !Array.isArray(rawPaths)) continue;
+        const paths = Array.from(new Set(rawPaths.map((path) => typeof path === "string" ? path.trim() : "").filter(Boolean)));
+        if (paths.length > 0) result.tagInheritance.excludedPathsByParent[parent] = paths;
+      }
+    }
+    const hierarchy = source.noteHierarchy && typeof source.noteHierarchy === "object" ? source.noteHierarchy : {};
+    for (const key of ["childrenByParentPath", "displayNamesByParentPath"]) {
+      const rawObject = hierarchy[key];
+      if (!rawObject || typeof rawObject !== "object" || Array.isArray(rawObject)) continue;
+      result.noteHierarchy[key] = {};
+      for (const [rawParentPath, rawEntries] of Object.entries(rawObject)) {
+        const parentPath = typeof rawParentPath === "string" ? rawParentPath.trim() : "";
+        if (!parentPath || !rawEntries || typeof rawEntries !== "object") continue;
+        if (key === "childrenByParentPath") {
+          if (!Array.isArray(rawEntries)) continue;
+          const children = Array.from(new Set(rawEntries.map((path) => typeof path === "string" ? path.trim() : "").filter((path) => path && path !== parentPath)));
+          if (children.length > 0) result.noteHierarchy[key][parentPath] = children;
+        } else if (!Array.isArray(rawEntries)) {
+          const entries = {};
+          for (const [rawPath, rawDisplayName] of Object.entries(rawEntries)) {
+            const path = typeof rawPath === "string" ? rawPath.trim() : "";
+            const displayName = typeof rawDisplayName === "string" ? rawDisplayName.trim() : "";
+            if (path && displayName) entries[path] = displayName;
+          }
+          if (Object.keys(entries).length > 0) result.noteHierarchy[key][parentPath] = entries;
+        }
+      }
+    }
+    this.settings.relations = result;
+    this.reconcileRelationCycles();
+    return result;
+  }
+  getTagInheritanceSettings() {
+    if (!this.settings.relations) this.normalizeRelationSettings();
+    return this.settings.relations.tagInheritance;
+  }
+  getNoteHierarchySettings() {
+    if (!this.settings.relations) this.normalizeRelationSettings();
+    return this.settings.relations.noteHierarchy;
+  }
+  getHierarchyChildren(parentPath) {
+    return [...this.getNoteHierarchySettings().childrenByParentPath[parentPath] || []];
+  }
+  getHierarchyParents(childPath) {
+    return Object.entries(this.getNoteHierarchySettings().childrenByParentPath).filter(([, children]) => Array.isArray(children) && children.includes(childPath)).map(([parentPath]) => parentPath);
+  }
+  getHierarchyDescendants(parentPath) {
+    return collectDirectedDescendants(this.getNoteHierarchySettings().childrenByParentPath, parentPath);
+  }
+  wouldCreateNoteHierarchyCycle(parentPath, childPath) {
+    return wouldCreateDirectedCycle(
+      this.getNoteHierarchySettings().childrenByParentPath,
+      parentPath,
+      childPath
+    );
+  }
+  async addNoteHierarchyEdge(parentPath, childPath) {
+    const parent = this.app.vault.getAbstractFileByPath(parentPath);
+    const child = this.app.vault.getAbstractFileByPath(childPath);
+    if (!(parent instanceof import_obsidian11.TFile) || parent.extension !== "md") throw new Error("\u7236\u7B14\u8BB0\u65E0\u6548");
+    if (!(child instanceof import_obsidian11.TFile) || child.extension !== "md") throw new Error("\u5B50\u7B14\u8BB0\u65E0\u6548");
+    if (this.wouldCreateNoteHierarchyCycle(parentPath, childPath)) throw new Error("\u4E0D\u80FD\u5EFA\u7ACB\u5FAA\u73AF\u7236\u5B50\u5173\u7CFB");
+    const hierarchy = this.getNoteHierarchySettings();
+    const children = this.getHierarchyChildren(parentPath);
+    if (!children.includes(childPath)) children.push(childPath);
+    hierarchy.childrenByParentPath[parentPath] = children;
+    await this.saveSettings();
+    this.refreshHierarchyViews();
+  }
+  async removeNoteHierarchyEdge(parentPath, childPath) {
+    const hierarchy = this.getNoteHierarchySettings();
+    const children = this.getHierarchyChildren(parentPath).filter((path) => path !== childPath);
+    if (children.length) hierarchy.childrenByParentPath[parentPath] = children;
+    else delete hierarchy.childrenByParentPath[parentPath];
+    if (hierarchy.displayNamesByParentPath[parentPath]) {
+      delete hierarchy.displayNamesByParentPath[parentPath][childPath];
+      if (!Object.keys(hierarchy.displayNamesByParentPath[parentPath]).length) {
+        delete hierarchy.displayNamesByParentPath[parentPath];
+      }
+    }
+    await this.saveSettings();
+    this.refreshHierarchyViews();
+  }
+  async moveHierarchyChild(parentPath, childPath, direction) {
+    const hierarchy = this.getNoteHierarchySettings();
+    const children = this.getHierarchyChildren(parentPath);
+    const index = children.indexOf(childPath);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= children.length) return;
+    [children[index], children[nextIndex]] = [children[nextIndex], children[index]];
+    hierarchy.childrenByParentPath[parentPath] = children;
+    await this.saveSettings();
+    this.refreshHierarchyViews();
+  }
+  getHierarchyDisplayName(parentPath, file) {
+    if (!(file instanceof import_obsidian11.TFile)) return "";
+    const selected = this.getNoteHierarchySettings().displayNamesByParentPath[parentPath] && this.getNoteHierarchySettings().displayNamesByParentPath[parentPath][file.path];
+    return selected && this.getNoteAliases(file).includes(selected) ? selected : file.basename;
+  }
+  async setHierarchyDisplayName(parentPath, file, displayName) {
+    if (!(file instanceof import_obsidian11.TFile) || !this.getHierarchyChildren(parentPath).includes(file.path)) return;
+    const hierarchy = this.getNoteHierarchySettings();
+    const selected = typeof displayName === "string" ? displayName.trim() : "";
+    if (selected && !this.getNoteAliases(file).includes(selected)) return;
+    if (selected) {
+      if (!hierarchy.displayNamesByParentPath[parentPath]) hierarchy.displayNamesByParentPath[parentPath] = {};
+      hierarchy.displayNamesByParentPath[parentPath][file.path] = selected;
+    } else if (hierarchy.displayNamesByParentPath[parentPath]) {
+      delete hierarchy.displayNamesByParentPath[parentPath][file.path];
+      if (!Object.keys(hierarchy.displayNamesByParentPath[parentPath]).length) {
+        delete hierarchy.displayNamesByParentPath[parentPath];
+      }
+    }
+    await this.saveSettings();
+    this.refreshHierarchyViews();
+  }
+  getHierarchyParentItems(query = "") {
+    const parsed = parseHierarchySearch(query);
+    if (!parsed.valid) return [];
+    const { parentQuery, childQuery } = parsed;
+    const hierarchy = this.getNoteHierarchySettings();
+    const items = [];
+    for (const [parentPath, childPaths] of Object.entries(hierarchy.childrenByParentPath)) {
+      const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
+      if (!(parentFile instanceof import_obsidian11.TFile) || parentFile.extension !== "md" || !Array.isArray(childPaths) || !childPaths.length) continue;
+      const parentNames = [parentFile.basename, ...this.getNoteAliases(parentFile)].map((name) => name.toLowerCase());
+      if (parentQuery && !parentNames.some((name) => name.includes(parentQuery))) continue;
+      const descendants = this.getHierarchyDescendants(parentPath);
+      const matchingPaths = childQuery ? descendants.filter((path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof import_obsidian11.TFile)) return false;
+        const directParents = this.getHierarchyParents(path);
+        const names = [file.basename, ...this.getNoteAliases(file)];
+        for (const directParent of directParents) {
+          names.push(this.getHierarchyDisplayName(directParent, file));
+        }
+        return names.some((name) => String(name).toLowerCase().includes(childQuery));
+      }) : [];
+      if (childQuery && !matchingPaths.length) continue;
+      const directCount = this.getHierarchyChildren(parentPath).filter((path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof import_obsidian11.TFile && file.extension === "md";
+      }).length;
+      const descendantCount = new Set(descendants.filter((path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof import_obsidian11.TFile && file.extension === "md";
+      })).size;
+      items.push({
+        parentPath,
+        parentFile,
+        directCount,
+        additionalCount: Math.max(0, descendantCount - directCount),
+        matchingPaths: new Set(matchingPaths),
+        forceExpand: !!childQuery
+      });
+    }
+    items.sort((a, b) => compareHierarchyParentItems(
+      { directCount: a.directCount, name: a.parentFile.basename },
+      { directCount: b.directCount, name: b.parentFile.basename }
+    ));
+    return items;
+  }
+  createHierarchySurfaceState() {
+    return {
+      query: "",
+      expandedParents: /* @__PURE__ */ new Set(),
+      expandedBranches: /* @__PURE__ */ new Set(),
+      activeMatchIndex: -1
+    };
+  }
+  renderNoteHierarchyPage(hostEl, state, options = {}) {
+    hostEl.empty();
+    hostEl.classList.add("puffs-note-hierarchy-page");
+    const headerEl = hostEl.createDiv({ cls: "puffs-note-hierarchy-header" });
+    headerEl.createEl("h3", { text: "\u7236\u5B50\u7B14\u8BB0", cls: "puffs-note-hierarchy-title" });
+    if (options.onBack) {
+      const backButton = headerEl.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "\u8FD4\u56DE\u6807\u7B7E\u7CFB\u7EDF" } });
+      (0, import_obsidian11.setIcon)(backButton, "tags");
+      backButton.addEventListener("click", options.onBack);
+    }
+    const searchEl = hostEl.createEl("input", {
+      type: "search",
+      cls: "puffs-note-hierarchy-search",
+      attr: { placeholder: "\u641C\u7D22\u7236\u7B14\u8BB0\uFF1B\u7236*\u5B50\uFF1B*\u5B50" }
+    });
+    searchEl.value = state.query || "";
+    const listEl = hostEl.createDiv({ cls: "puffs-note-hierarchy-list" });
+    const renderList = () => {
+      listEl.empty();
+      const items = this.getHierarchyParentItems(state.query);
+      if (!items.length) {
+        listEl.createDiv({ text: state.query ? "\u6CA1\u6709\u5339\u914D\u7684\u7236\u5B50\u5173\u7CFB\u3002" : "\u6682\u65E0\u7236\u5B50\u7B14\u8BB0\u5173\u7CFB\u3002", cls: "puffs-relation-empty" });
+        return;
+      }
+      for (const item of items) this.renderHierarchyParentItem(listEl, item, state, renderList, options.surface || "sidebar");
+    };
+    searchEl.addEventListener("input", () => {
+      state.query = searchEl.value;
+      state.activeMatchIndex = -1;
+      renderList();
+    });
+    searchEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      const matches = Array.from(listEl.querySelectorAll(".is-hierarchy-search-match"));
+      if (!matches.length) return;
+      state.activeMatchIndex = (state.activeMatchIndex + 1) % matches.length;
+      matches.forEach((el, index) => el.classList.toggle("is-active-match", index === state.activeMatchIndex));
+      matches[state.activeMatchIndex].scrollIntoView({ block: "nearest" });
+      event.preventDefault();
+    });
+    renderList();
+    state.inputEl = searchEl;
+  }
+  renderHierarchyParentItem(listEl, item, state, rerender, surface) {
+    const expanded = item.forceExpand || state.expandedParents.has(item.parentPath);
+    const treeEl = listEl.createDiv({ cls: "tree-item puffs-note-hierarchy-parent" });
+    const rowEl = treeEl.createDiv({ cls: "tree-item-self is-clickable mod-collapsible puffs-note-hierarchy-parent-row" });
+    const toggleEl = rowEl.createDiv({ cls: "tree-item-icon collapse-icon" });
+    toggleEl.classList.toggle("is-collapsed", !expanded);
+    (0, import_obsidian11.setIcon)(toggleEl, "right-triangle");
+    rowEl.createDiv({ text: item.parentFile.basename, cls: "tree-item-inner" });
+    rowEl.createSpan({
+      text: item.additionalCount > 0 ? `${item.directCount}+${item.additionalCount}` : String(item.directCount),
+      cls: "tree-item-flair tag-pane-tag-count"
+    });
+    rowEl.addEventListener("click", () => {
+      if (state.expandedParents.has(item.parentPath)) state.expandedParents.delete(item.parentPath);
+      else state.expandedParents.add(item.parentPath);
+      rerender();
+    });
+    rowEl.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      this.showHierarchyParentMenu(event, item.parentFile);
+    });
+    if (expanded) {
+      const childrenEl = treeEl.createDiv({ cls: "tree-item-children puffs-note-hierarchy-children" });
+      this.renderHierarchyChildren(childrenEl, item.parentPath, item.parentPath, state, item.matchingPaths, /* @__PURE__ */ new Set([item.parentPath]), rerender, surface, 0);
+    }
+  }
+  renderHierarchyChildren(containerEl, rootPath, parentPath, state, matchingPaths, branch, rerender, surface, depth) {
+    for (const childPath of this.getHierarchyChildren(parentPath)) {
+      if (branch.has(childPath)) continue;
+      const file = this.app.vault.getAbstractFileByPath(childPath);
+      if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md") continue;
+      const nextBranch = new Set(branch);
+      nextBranch.add(childPath);
+      const branchKey = `${rootPath}\0${parentPath}\0${childPath}`;
+      const hasChildren = this.getHierarchyChildren(childPath).length > 0;
+      const forceOpen = Array.from(matchingPaths).some((path) => path === childPath || this.getHierarchyDescendants(childPath).includes(path));
+      const expanded = forceOpen || state.expandedBranches.has(branchKey);
+      const itemEl = containerEl.createDiv({ cls: "tree-item puffs-tag-note-item puffs-note-hierarchy-child-item" });
+      const cardEl = itemEl.createDiv({ cls: "tree-item-self puffs-tag-note-card is-clickable puffs-note-hierarchy-child-card" });
+      cardEl.dataset.path = file.path;
+      cardEl.dataset.puffsHierarchyParent = parentPath;
+      cardEl.dataset.puffsSurface = surface;
+      if (matchingPaths.has(childPath)) cardEl.classList.add("is-hierarchy-search-match");
+      if (hasChildren) {
+        const toggleEl = cardEl.createDiv({ cls: "tree-item-icon collapse-icon" });
+        toggleEl.classList.toggle("is-collapsed", !expanded);
+        (0, import_obsidian11.setIcon)(toggleEl, "right-triangle");
+        toggleEl.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (state.expandedBranches.has(branchKey)) state.expandedBranches.delete(branchKey);
+          else state.expandedBranches.add(branchKey);
+          rerender();
+        });
+      }
+      cardEl.createDiv({ text: this.getHierarchyDisplayName(parentPath, file), cls: "tree-item-inner" });
+      cardEl.addEventListener("click", () => this.openFileInMainWorkspace(file));
+      cardEl.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.showHierarchyChildMenu(event, parentPath, file);
+      });
+      if (hasChildren && expanded) {
+        const nestedEl = itemEl.createDiv({ cls: "tree-item-children puffs-note-hierarchy-children" });
+        this.renderHierarchyChildren(nestedEl, rootPath, childPath, state, matchingPaths, nextBranch, rerender, surface, depth + 1);
+      }
+    }
+  }
+  showHierarchyParentMenu(event, file) {
+    const menu = new import_obsidian11.Menu();
+    menu.addItem((item) => item.setTitle("\u6253\u5F00\u7B14\u8BB0").setIcon("file-text").onClick(() => this.openFileInMainWorkspace(file)));
+    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => {
+      new NoteRelationModal(this.app, this, file.path, "child").open();
+    }));
+    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => {
+      new NoteRelationModal(this.app, this, file.path, "parent").open();
+    }));
+    menu.showAtMouseEvent(event);
+  }
+  showHierarchyChildMenu(event, parentPath, file) {
+    const menu = new import_obsidian11.Menu();
+    const children = this.getHierarchyChildren(parentPath);
+    const index = children.indexOf(file.path);
+    menu.addItem((item) => item.setTitle("\u4E0A\u79FB").setIcon("arrow-up").setDisabled(index <= 0).onClick(() => this.moveHierarchyChild(parentPath, file.path, -1)));
+    menu.addItem((item) => item.setTitle("\u4E0B\u79FB").setIcon("arrow-down").setDisabled(index < 0 || index >= children.length - 1).onClick(() => this.moveHierarchyChild(parentPath, file.path, 1)));
+    const aliases = this.getNoteAliases(file);
+    if (aliases.length) {
+      menu.addItem((item) => item.setTitle("\u66F4\u6362\u663E\u793A\u540D\u79F0").setIcon("text-cursor-input").onClick(() => {
+        const position = { x: event.clientX, y: event.clientY };
+        window.setTimeout(() => this.showHierarchyDisplayNameOptions(position, parentPath, file, aliases), 0);
+      }));
+    }
+    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => new NoteRelationModal(this.app, this, file.path, "child").open()));
+    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => new NoteRelationModal(this.app, this, file.path, "parent").open()));
+    menu.addItem((item) => item.setTitle("\u4ECE\u5F53\u524D\u7236\u7B14\u8BB0\u79FB\u9664").setIcon("unlink").onClick(() => this.removeNoteHierarchyEdge(parentPath, file.path)));
+    menu.showAtMouseEvent(event);
+  }
+  showHierarchyDisplayNameOptions(position, parentPath, file, aliases) {
+    const current = this.getHierarchyDisplayName(parentPath, file);
+    const menu = new import_obsidian11.Menu();
+    menu.addItem((item) => item.setTitle(file.basename).setChecked(current === file.basename).onClick(() => this.setHierarchyDisplayName(parentPath, file, "")));
+    for (const alias of aliases) {
+      menu.addItem((item) => item.setTitle(alias).setChecked(current === alias).onClick(() => this.setHierarchyDisplayName(parentPath, file, alias)));
+    }
+    menu.showAtPosition(position);
+  }
+  refreshHierarchyViews() {
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+  openHierarchyForNote(path, sourceEl) {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md") return;
+    const query = this.getHierarchyParents(path).length > 0 ? `*${file.basename}` : file.basename;
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (!view || !view.contentEl || !view.contentEl.contains(sourceEl)) continue;
+      view.hierarchyMode = true;
+      view.hierarchyState.query = query;
+      view.hierarchyState.activeMatchIndex = -1;
+      view.render();
+      window.setTimeout(() => view.hierarchyState.inputEl && view.hierarchyState.inputEl.focus(), 0);
+      return;
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType("tag")) {
+      const view = leaf.view;
+      if (!view || !view.containerEl || !view.containerEl.contains(sourceEl)) continue;
+      const patch = this.viewPatches.get(view) || this.patchTagView(view);
+      patch.hierarchyMode = true;
+      patch.hierarchyState.query = query;
+      patch.hierarchyState.activeMatchIndex = -1;
+      this.scheduleSyncView(view, 0);
+      window.setTimeout(() => patch.hierarchyState.inputEl && patch.hierarchyState.inputEl.focus(), 50);
+      return;
+    }
+  }
+  showNoteCardContextMenu(event, cardEl) {
+    const path = cardEl && cardEl.dataset.path;
+    const file = path && this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md") return false;
+    const hierarchyParent = cardEl.dataset.puffsHierarchyParent;
+    if (hierarchyParent) {
+      this.showHierarchyChildMenu(event, hierarchyParent, file);
+      return true;
+    }
+    const tag = normalizeTag(cardEl.dataset.puffsTag);
+    const menu = new import_obsidian11.Menu();
+    const inherited = tag && this.isInheritedFileForTag(tag, path);
+    if (inherited) {
+      menu.addItem((item) => item.setTitle(`\u4E0D\u5728 ${tag} \u4E2D\u7EE7\u627F\u663E\u793A`).setIcon("eye-off").onClick(() => this.excludeInheritedFile(tag, path).catch((error) => {
+        console.error("[Puffs Tag Enhance] Failed to exclude inherited note:", error);
+        new import_obsidian11.Notice("\u6392\u9664\u7EE7\u627F\u7B14\u8BB0\u5931\u8D25");
+      })));
+    }
+    const aliases = tag && !isNestedTag(tag) ? this.getNoteAliases(file) : [];
+    if (aliases.length > 0) {
+      menu.addItem((item) => item.setTitle("\u66F4\u6362\u663E\u793A\u540D\u79F0").setIcon("text-cursor-input").onClick(() => {
+        const position = { x: event.clientX, y: event.clientY };
+        window.setTimeout(() => this.showNoteDisplayNameOptions(position, tag, file, aliases), 0);
+      }));
+    }
+    if (inherited || aliases.length > 0) menu.addSeparator();
+    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => {
+      new NoteRelationModal(this.app, this, path, "parent").open();
+    }));
+    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => {
+      new NoteRelationModal(this.app, this, path, "child").open();
+    }));
+    if (this.getHierarchyParents(path).length > 0 || this.getHierarchyChildren(path).length > 0) {
+      menu.addItem((item) => item.setTitle("\u5B9A\u4F4D\u7236\u5B50\u5173\u7CFB").setIcon("locate-fixed").onClick(() => {
+        this.openHierarchyForNote(path, cardEl);
+      }));
+    }
+    menu.showAtMouseEvent(event);
+    return true;
+  }
+  getInheritanceChildren(tagValue) {
+    const tag = normalizeTag(tagValue);
+    return tag ? [...this.getTagInheritanceSettings().childrenByParent[tag] || []] : [];
+  }
+  getInheritanceParents(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag) return [];
+    return Object.entries(this.getTagInheritanceSettings().childrenByParent).filter(([, children]) => Array.isArray(children) && children.includes(tag)).map(([parent]) => parent);
+  }
+  getLogicalTagSet() {
+    const result = new Set(this.tagFileIndex.keys());
+    for (const [parent, children] of Object.entries(this.getTagInheritanceSettings().childrenByParent)) {
+      result.add(parent);
+      for (const child of children) result.add(child);
+    }
+    return result;
+  }
+  hasInheritanceChildren(tagValue) {
+    return this.getInheritanceChildren(tagValue).length > 0;
+  }
+  isTagInheritanceEnabled(tagValue) {
+    const tag = normalizeTag(tagValue);
+    return !!tag && this.getTagInheritanceSettings().enabledParents.includes(tag);
+  }
+  getTagDescendants(tagValue) {
+    const root = normalizeTag(tagValue);
+    if (!root) return [];
+    return collectDirectedDescendants(this.getTagInheritanceSettings().childrenByParent, root);
+  }
+  wouldCreateTagInheritanceCycle(parentValue, childValue) {
+    const parent = normalizeTag(parentValue);
+    const child = normalizeTag(childValue);
+    if (!parent || !child) return true;
+    return wouldCreateDirectedCycle(this.getTagInheritanceSettings().childrenByParent, parent, child);
+  }
+  reconcileRelationCycles() {
+    const inheritance = this.settings.relations && this.settings.relations.tagInheritance;
+    if (!inheritance) return;
+    inheritance.childrenByParent = sanitizeAcyclicAdjacency(inheritance.childrenByParent);
+    const hierarchy = this.settings.relations.noteHierarchy;
+    hierarchy.childrenByParentPath = sanitizeAcyclicAdjacency(hierarchy.childrenByParentPath);
+    for (const parentPath of Object.keys(hierarchy.displayNamesByParentPath)) {
+      const validChildren = new Set(hierarchy.childrenByParentPath[parentPath] || []);
+      for (const childPath of Object.keys(hierarchy.displayNamesByParentPath[parentPath])) {
+        if (!validChildren.has(childPath)) delete hierarchy.displayNamesByParentPath[parentPath][childPath];
+      }
+      if (!Object.keys(hierarchy.displayNamesByParentPath[parentPath]).length) {
+        delete hierarchy.displayNamesByParentPath[parentPath];
+      }
+    }
+  }
+  async setInheritanceChildren(parentValue, childValues) {
+    const parent = normalizeTag(parentValue);
+    if (!parent || isNestedTag(parent)) throw new Error("\u7236\u6807\u7B7E\u65E0\u6548");
+    const children = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const rawChild of childValues || []) {
+      const child = normalizeTag(rawChild);
+      if (!child || isNestedTag(child) || seen.has(child)) continue;
+      if (this.wouldCreateTagInheritanceCycle(parent, child)) {
+        throw new Error(`\u4E0D\u80FD\u5EFA\u7ACB\u5FAA\u73AF\u7EE7\u627F\uFF1A${getTagDisplayName(parent)} \u2192 ${getTagDisplayName(child)}`);
+      }
+      seen.add(child);
+      children.push(child);
+    }
+    const inheritance = this.getTagInheritanceSettings();
+    if (children.length > 0) inheritance.childrenByParent[parent] = children;
+    else {
+      delete inheritance.childrenByParent[parent];
+      inheritance.enabledParents = inheritance.enabledParents.filter((tag) => tag !== parent);
+      delete inheritance.excludedPathsByParent[parent];
+    }
+    await this.saveSettings();
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+  async addInheritanceParent(childValue, parentValue) {
+    const child = normalizeTag(childValue);
+    const parent = normalizeTag(parentValue);
+    if (!child || !parent || isNestedTag(child) || isNestedTag(parent)) throw new Error("\u6807\u7B7E\u65E0\u6548");
+    const children = this.getInheritanceChildren(parent);
+    if (!children.includes(child)) children.push(child);
+    await this.setInheritanceChildren(parent, children);
+  }
+  async toggleTagInheritance(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !this.hasInheritanceChildren(tag)) return;
+    const inheritance = this.getTagInheritanceSettings();
+    inheritance.enabledParents = inheritance.enabledParents.includes(tag) ? inheritance.enabledParents.filter((item) => item !== tag) : [...inheritance.enabledParents, tag];
+    await this.saveSettings();
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+  getTagBrowseData(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag) return { tag: null, files: [], exactFiles: [], inheritedFiles: [], sourcesByPath: /* @__PURE__ */ new Map() };
+    const exactFiles = this.getOrderedFilesForTag(tag, this.tagFileIndex.get(tag) || []);
+    const exactPaths = exactFiles.map((file) => file.path);
+    const orderedBranches = [];
+    const visit = (sourceTag, branch = /* @__PURE__ */ new Set([tag])) => {
+      if (branch.has(sourceTag)) return;
+      const nextBranch = new Set(branch);
+      nextBranch.add(sourceTag);
+      orderedBranches.push({
+        source: sourceTag,
+        paths: this.getOrderedFilesForTag(sourceTag, this.tagFileIndex.get(sourceTag) || []).map((file) => file.path)
+      });
+      for (const child of this.getInheritanceChildren(sourceTag)) visit(child, nextBranch);
+    };
+    if (this.isTagInheritanceEnabled(tag)) {
+      for (const child of this.getInheritanceChildren(tag)) visit(child);
+    }
+    const { inheritedPaths, sourcesByPath } = mergeInheritedPaths(
+      exactPaths,
+      orderedBranches,
+      this.getTagInheritanceSettings().excludedPathsByParent[tag] || []
+    );
+    const inheritedFiles = inheritedPaths.map((path) => this.app.vault.getAbstractFileByPath(path)).filter((file) => file instanceof import_obsidian11.TFile && file.extension === "md");
+    return {
+      tag,
+      exactFiles,
+      inheritedFiles,
+      files: exactFiles.concat(inheritedFiles),
+      sourcesByPath,
+      exactCount: exactFiles.length,
+      inheritedCount: inheritedFiles.length,
+      inheritanceEnabled: this.isTagInheritanceEnabled(tag),
+      hasInheritance: this.hasInheritanceChildren(tag)
+    };
+  }
+  isInheritedFileForTag(tagValue, path) {
+    return this.getTagBrowseData(tagValue).inheritedFiles.some((file) => file.path === path);
+  }
+  getInheritedFileSources(tagValue, path) {
+    return this.getTagBrowseData(tagValue).sourcesByPath.get(path) || [];
+  }
+  async excludeInheritedFile(parentValue, path) {
+    const parent = normalizeTag(parentValue);
+    if (!parent || !path || !this.isInheritedFileForTag(parent, path)) return;
+    const inheritance = this.getTagInheritanceSettings();
+    const paths = new Set(inheritance.excludedPathsByParent[parent] || []);
+    paths.add(path);
+    inheritance.excludedPathsByParent[parent] = Array.from(paths);
+    await this.saveSettings();
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+  async restoreInheritedFile(parentValue, path) {
+    const parent = normalizeTag(parentValue);
+    if (!parent || !path) return;
+    const inheritance = this.getTagInheritanceSettings();
+    const nextPaths = (inheritance.excludedPathsByParent[parent] || []).filter((item) => item !== path);
+    if (nextPaths.length > 0) inheritance.excludedPathsByParent[parent] = nextPaths;
+    else delete inheritance.excludedPathsByParent[parent];
+    await this.saveSettings();
+    this.refreshTagViews();
+    this.refreshTagShelfViews();
+  }
+  migrateTagRelations(oldTagValue, newTagValue) {
+    const oldTag = normalizeTag(oldTagValue);
+    const newTag = normalizeTag(newTagValue);
+    if (!oldTag || !newTag || oldTag === newTag) return;
+    const inheritance = this.getTagInheritanceSettings();
+    const oldChildren = inheritance.childrenByParent[oldTag] || [];
+    const newChildren = inheritance.childrenByParent[newTag] || [];
+    if (oldChildren.length || newChildren.length) {
+      inheritance.childrenByParent[newTag] = Array.from(/* @__PURE__ */ new Set([...oldChildren, ...newChildren])).filter((child) => child !== newTag);
+    }
+    delete inheritance.childrenByParent[oldTag];
+    for (const [parent, children] of Object.entries(inheritance.childrenByParent)) {
+      inheritance.childrenByParent[parent] = Array.from(new Set(children.map((child) => child === oldTag ? newTag : child))).filter((child) => child !== parent);
+    }
+    if (inheritance.enabledParents.includes(oldTag)) inheritance.enabledParents.push(newTag);
+    inheritance.enabledParents = Array.from(new Set(inheritance.enabledParents.filter((tag) => tag !== oldTag)));
+    const exclusions = Array.from(/* @__PURE__ */ new Set([
+      ...inheritance.excludedPathsByParent[oldTag] || [],
+      ...inheritance.excludedPathsByParent[newTag] || []
+    ]));
+    if (exclusions.length > 0) inheritance.excludedPathsByParent[newTag] = exclusions;
+    delete inheritance.excludedPathsByParent[oldTag];
+    this.reconcileRelationCycles();
+  }
+  handleRelationFileRename(file, oldPath) {
+    if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md" || !oldPath || !file.path) return;
+    const inheritance = this.getTagInheritanceSettings();
+    let changed = false;
+    for (const [parent, paths] of Object.entries(inheritance.excludedPathsByParent)) {
+      if (!paths.includes(oldPath)) continue;
+      inheritance.excludedPathsByParent[parent] = Array.from(new Set(paths.map((path) => path === oldPath ? file.path : path)));
+      changed = true;
+    }
+    const hierarchy = this.getNoteHierarchySettings();
+    if (hierarchy.childrenByParentPath[oldPath]) {
+      hierarchy.childrenByParentPath[file.path] = Array.from(/* @__PURE__ */ new Set([
+        ...hierarchy.childrenByParentPath[file.path] || [],
+        ...hierarchy.childrenByParentPath[oldPath]
+      ])).filter((path) => path !== file.path);
+      delete hierarchy.childrenByParentPath[oldPath];
+      changed = true;
+    }
+    for (const [parentPath, paths] of Object.entries(hierarchy.childrenByParentPath)) {
+      if (!paths.includes(oldPath)) continue;
+      hierarchy.childrenByParentPath[parentPath] = Array.from(new Set(paths.map((path) => path === oldPath ? file.path : path))).filter((path) => path !== parentPath);
+      changed = true;
+    }
+    if (hierarchy.displayNamesByParentPath[oldPath]) {
+      hierarchy.displayNamesByParentPath[file.path] = {
+        ...hierarchy.displayNamesByParentPath[oldPath] || {},
+        ...hierarchy.displayNamesByParentPath[file.path] || {}
+      };
+      delete hierarchy.displayNamesByParentPath[oldPath];
+      changed = true;
+    }
+    for (const [parentPath, entries] of Object.entries(hierarchy.displayNamesByParentPath)) {
+      if (!entries[oldPath]) continue;
+      if (!entries[file.path]) entries[file.path] = entries[oldPath];
+      delete entries[oldPath];
+      changed = true;
+    }
+    if (changed) this.saveSettings();
+  }
+  handleRelationFileDelete(file) {
+    if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md" || !file.path) return;
+    const inheritance = this.getTagInheritanceSettings();
+    let changed = false;
+    for (const [parent, paths] of Object.entries(inheritance.excludedPathsByParent)) {
+      const nextPaths = paths.filter((path) => path !== file.path);
+      if (nextPaths.length === paths.length) continue;
+      if (nextPaths.length) inheritance.excludedPathsByParent[parent] = nextPaths;
+      else delete inheritance.excludedPathsByParent[parent];
+      changed = true;
+    }
+    const hierarchy = this.getNoteHierarchySettings();
+    if (hierarchy.childrenByParentPath[file.path]) {
+      delete hierarchy.childrenByParentPath[file.path];
+      delete hierarchy.displayNamesByParentPath[file.path];
+      changed = true;
+    }
+    for (const [parentPath, paths] of Object.entries(hierarchy.childrenByParentPath)) {
+      const nextPaths = paths.filter((path) => path !== file.path);
+      if (nextPaths.length === paths.length) continue;
+      if (nextPaths.length) hierarchy.childrenByParentPath[parentPath] = nextPaths;
+      else {
+        delete hierarchy.childrenByParentPath[parentPath];
+        delete hierarchy.displayNamesByParentPath[parentPath];
+      }
+      if (hierarchy.displayNamesByParentPath[parentPath]) {
+        delete hierarchy.displayNamesByParentPath[parentPath][file.path];
+      }
+      changed = true;
+    }
+    if (changed) this.saveSettings();
+  }
+  showTagContextMenu(event, tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag) return false;
+    const menu = new import_obsidian11.Menu();
+    menu.addItem((item) => item.setTitle("\u4FEE\u6539\u6807\u7B7E").setIcon("pencil").onClick(() => this.openRenameTagModal(tag)));
+    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u7236\u6807\u7B7E").setIcon("corner-left-up").onClick(() => {
+      new AddParentTagModal(this.app, this, tag).open();
+    }));
+    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u5B50\u6807\u7B7E").setIcon("git-fork").onClick(() => {
+      new TagInheritanceModal(this.app, this, tag).open();
+    }));
+    menu.showAtMouseEvent(event);
+    return true;
+  }
+  showInheritedNoteMenu(event, tagValue, path) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !path || !this.isInheritedFileForTag(tag, path)) return false;
+    const menu = new import_obsidian11.Menu();
+    menu.addItem((item) => item.setTitle(`\u4E0D\u5728 ${tag} \u4E2D\u7EE7\u627F\u663E\u793A`).setIcon("eye-off").onClick(() => this.excludeInheritedFile(tag, path).catch((error) => {
+      console.error("[Puffs Tag Enhance] Failed to exclude inherited note:", error);
+      new import_obsidian11.Notice("\u6392\u9664\u7EE7\u627F\u7B14\u8BB0\u5931\u8D25");
+    })));
+    menu.showAtMouseEvent(event);
+    return true;
+  }
+};
+
 // src/main.ts
-var PuffsTagEnhancePlugin = class extends import_obsidian10.Plugin {
+var PuffsTagEnhancePlugin = class extends import_obsidian12.Plugin {
   constructor(app, manifest) {
     super(app, manifest);
     this.settings = { ...DEFAULT_SETTINGS };
@@ -3446,6 +4621,7 @@ var applyBehavior = (behavior) => {
   InteractionsBehavior,
   WorkspaceBehavior,
   TagIndexBehavior,
-  TagPaneBehavior
+  TagPaneBehavior,
+  RelationsBehavior
 ].forEach(applyBehavior);
 var main_default = PuffsTagEnhancePlugin;

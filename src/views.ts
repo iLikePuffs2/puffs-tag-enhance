@@ -24,6 +24,8 @@ class PuffsTagShelfView extends ItemView {
     this.listEl = null;
     this.summaryTagCountEl = null;
     this.summaryNoteCountEl = null;
+    this.hierarchyMode = false;
+    this.hierarchyState = this.plugin.createHierarchySurfaceState();
   }
 
   getViewType() {
@@ -65,6 +67,11 @@ class PuffsTagShelfView extends ItemView {
   }
 
   toggleSearch() {
+    if (this.hierarchyMode) {
+      if (this.hierarchyState.inputEl) this.hierarchyState.inputEl.focus();
+      return;
+    }
+
     const inputEl = this.searchComponent && this.searchComponent.inputEl;
     if (!inputEl) return;
 
@@ -108,6 +115,11 @@ class PuffsTagShelfView extends ItemView {
     this.contentEl.empty();
     this.contentEl.classList.add('puffs-tag-shelf-view');
 
+    if (this.hierarchyMode) {
+      this.renderHierarchyPage();
+      return;
+    }
+
     const pageEl = document.createElement('div');
     pageEl.className = 'puffs-tag-shelf-page';
     this.syncSidebarTreeStyles(pageEl);
@@ -119,7 +131,18 @@ class PuffsTagShelfView extends ItemView {
     titleEl.className = 'puffs-tag-shelf-title';
     titleEl.textContent = '标签系统';
 
+    const hierarchyButtonEl = document.createElement('button');
+    hierarchyButtonEl.type = 'button';
+    hierarchyButtonEl.className = 'clickable-icon puffs-note-hierarchy-button';
+    hierarchyButtonEl.setAttribute('aria-label', '打开父子笔记');
+    setIcon(hierarchyButtonEl, 'git-fork');
+    hierarchyButtonEl.addEventListener('click', () => {
+      this.hierarchyMode = true;
+      this.render();
+    });
+
     headerEl.appendChild(titleEl);
+    headerEl.appendChild(hierarchyButtonEl);
     pageEl.appendChild(headerEl);
 
     const summaryEl = document.createElement('div');
@@ -196,6 +219,24 @@ class PuffsTagShelfView extends ItemView {
 
     this.contentEl.appendChild(pageEl);
     this.renderTagList();
+  }
+
+  renderHierarchyPage() {
+    this.searchComponent = null;
+    this.listEl = null;
+    this.summaryTagCountEl = null;
+    this.summaryNoteCountEl = null;
+    const pageEl = document.createElement('div');
+    pageEl.className = 'puffs-tag-shelf-page puffs-note-hierarchy-shelf';
+    this.syncSidebarTreeStyles(pageEl);
+    this.contentEl.appendChild(pageEl);
+    this.plugin.renderNoteHierarchyPage(pageEl, this.hierarchyState, {
+      surface: 'shelf',
+      onBack: () => {
+        this.hierarchyMode = false;
+        this.render();
+      },
+    });
   }
 
   clearSearchCompositionHandlers() {
@@ -372,10 +413,29 @@ class PuffsTagShelfView extends ItemView {
 
     const countEl = document.createElement('span');
     countEl.className = 'tag-pane-tag-count tree-item-flair';
-    countEl.textContent = String(files.length);
+    countEl.textContent = item.inheritanceEnabled && item.inheritedCount > 0
+      ? `${item.exactCount}+${item.inheritedCount}`
+      : String(files.length);
 
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
+    let inheritanceButtonEl = null;
+    if (!isVirtual && item.hasInheritance) {
+      inheritanceButtonEl = document.createElement('button');
+      inheritanceButtonEl.type = 'button';
+      inheritanceButtonEl.className = 'clickable-icon puffs-tag-inheritance-button';
+      inheritanceButtonEl.classList.toggle('is-active', !!item.inheritanceEnabled);
+      inheritanceButtonEl.setAttribute('aria-label', item.inheritanceEnabled ? '隐藏后代标签笔记' : '显示后代标签笔记');
+      setIcon(inheritanceButtonEl, 'git-merge');
+      inheritanceButtonEl.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.plugin.toggleTagInheritance(tag).catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to toggle inheritance:', error);
+          new Notice('切换标签继承失败');
+        });
+      });
+    }
     if (isExpanded) {
       scrollBottomButtonEl = document.createElement('button');
       scrollBottomButtonEl.type = 'button';
@@ -411,6 +471,7 @@ class PuffsTagShelfView extends ItemView {
     tagEl.appendChild(innerEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
+    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
 
@@ -423,7 +484,7 @@ class PuffsTagShelfView extends ItemView {
     tagEl.addEventListener('contextmenu', (event) => {
       if (isVirtual) return;
       event.preventDefault();
-      this.plugin.openRenameTagModal(tag);
+      this.plugin.showTagContextMenu(event, tag);
     });
 
     if (isExpanded) {
@@ -431,6 +492,7 @@ class PuffsTagShelfView extends ItemView {
       notesEl.className = 'tree-item-children puffs-tag-note-list puffs-tag-shelf-notes';
 
       for (const [fileIndex, file] of files.entries()) {
+        const inherited = !isVirtual && this.plugin.isInheritedFileForTag(tag, file.path);
         const noteItemEl = document.createElement('div');
         noteItemEl.className = 'tree-item puffs-tag-note-item puffs-tag-shelf-note-item';
         noteItemEl.dataset.path = file.path;
@@ -446,21 +508,27 @@ class PuffsTagShelfView extends ItemView {
         if (!isVirtual) {
           noteCardEl.dataset.puffsTag = tag;
           noteCardEl.dataset.puffsSurface = 'shelf';
+          if (inherited) {
+            noteCardEl.dataset.puffsInherited = 'true';
+            noteCardEl.title = `继承自：${this.plugin.getInheritedFileSources(tag, file.path).join('、')}`;
+          }
 
-          const orderButtonEl = document.createElement('button');
-          orderButtonEl.type = 'button';
-          orderButtonEl.className = 'clickable-icon puffs-tag-note-order-button';
-          orderButtonEl.dataset.puffsTag = tag;
-          orderButtonEl.dataset.path = file.path;
-          orderButtonEl.dataset.puffsSurface = 'shelf';
-          setIcon(orderButtonEl, 'grip-vertical');
-          this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
-          orderButtonEl.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            this.plugin.toggleNoteOrderTarget(tag, file.path, 'shelf');
-          });
-          noteCardEl.appendChild(orderButtonEl);
+          if (!inherited) {
+            const orderButtonEl = document.createElement('button');
+            orderButtonEl.type = 'button';
+            orderButtonEl.className = 'clickable-icon puffs-tag-note-order-button';
+            orderButtonEl.dataset.puffsTag = tag;
+            orderButtonEl.dataset.path = file.path;
+            orderButtonEl.dataset.puffsSurface = 'shelf';
+            setIcon(orderButtonEl, 'grip-vertical');
+            this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
+            orderButtonEl.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              this.plugin.toggleNoteOrderTarget(tag, file.path, 'shelf');
+            });
+            noteCardEl.appendChild(orderButtonEl);
+          }
         }
 
         const noteInnerEl = document.createElement('div');
@@ -497,7 +565,8 @@ class PuffsTagShelfView extends ItemView {
           });
         });
         noteCardEl.addEventListener('contextmenu', (event) => {
-          if (!this.plugin.showNoteDisplayNameMenuForCard(event, noteCardEl)) return;
+          const handled = this.plugin.showNoteCardContextMenu(event, noteCardEl);
+          if (!handled) return;
           event.preventDefault();
           event.stopPropagation();
         });

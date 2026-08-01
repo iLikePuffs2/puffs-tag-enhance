@@ -7,6 +7,7 @@ import { InteractionsBehavior } from "./interactions";
 import { WorkspaceBehavior } from "./workspace";
 import { TagIndexBehavior } from "./tag-index";
 import { TagPaneBehavior } from "./tag-pane";
+import { RelationsBehavior } from "./relations";
 
 class PuffsTagEnhancePlugin extends Plugin {
   [key: string]: any;
@@ -92,7 +93,8 @@ const applyBehavior = (behavior: Function): void => {
   InteractionsBehavior,
   WorkspaceBehavior,
   TagIndexBehavior,
-  TagPaneBehavior
+  TagPaneBehavior,
+  RelationsBehavior
 ].forEach(applyBehavior);
 
 export default PuffsTagEnhancePlugin;

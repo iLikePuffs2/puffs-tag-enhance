@@ -42,7 +42,8 @@
 
 .puffs-tag-scroll-bottom-button,
 .puffs-tag-pin-button,
-.puffs-tag-scroll-top-button {
+.puffs-tag-scroll-top-button,
+.puffs-tag-inheritance-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -60,14 +61,16 @@
 
 .puffs-tag-scroll-bottom-button:hover,
 .puffs-tag-pin-button:hover,
-.puffs-tag-scroll-top-button:hover {
+.puffs-tag-scroll-top-button:hover,
+.puffs-tag-inheritance-button:hover {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
 
 .puffs-tag-scroll-bottom-button svg,
 .puffs-tag-pin-button svg,
-.puffs-tag-scroll-top-button svg {
+.puffs-tag-scroll-top-button svg,
+.puffs-tag-inheritance-button svg {
   width: 14px;
   height: 14px;
 }
@@ -78,8 +81,187 @@
   box-shadow: none;
 }
 
+.puffs-tag-inheritance-button.is-active {
+  background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
+  color: var(--interactive-accent);
+}
+
+.modal-container .puffs-relation-modal {
+  width: 620px;
+  max-width: calc(100vw - 32px);
+}
+
+.puffs-relation-modal-title {
+  margin: 0 0 14px;
+}
+
+.puffs-relation-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.puffs-relation-add-row,
+.puffs-relation-manage-row,
+.puffs-relation-modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.puffs-relation-add-row {
+  margin-bottom: 12px;
+}
+
+.puffs-relation-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.puffs-relation-manage-row {
+  min-height: 34px;
+  padding: 4px 6px;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+}
+
+.puffs-relation-manage-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.puffs-relation-empty {
+  padding: 16px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.puffs-relation-modal-footer {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .puffs-tag-hidden {
   display: none !important;
+}
+
+.puffs-note-hierarchy-button {
+  flex: 0 0 auto;
+}
+
+.puffs-note-hierarchy-page {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.puffs-note-hierarchy-sidebar {
+  min-height: 100%;
+  padding: 8px 0 12px;
+}
+
+.puffs-note-hierarchy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.puffs-note-hierarchy-title {
+  margin: 0;
+  color: var(--text-normal);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.puffs-note-hierarchy-sidebar .puffs-note-hierarchy-header,
+.puffs-note-hierarchy-sidebar .puffs-note-hierarchy-search {
+  margin-inline: 10px;
+}
+
+.puffs-note-hierarchy-sidebar .puffs-note-hierarchy-title {
+  font-size: var(--font-ui-medium);
+}
+
+.puffs-note-hierarchy-search {
+  box-sizing: border-box;
+  width: calc(100% - 20px);
+  margin: 0 10px 12px;
+}
+
+.puffs-note-hierarchy-shelf .puffs-note-hierarchy-search {
+  width: min(420px, 100%);
+  margin: 0 0 18px;
+}
+
+.puffs-note-hierarchy-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.puffs-note-hierarchy-parent-row,
+.puffs-note-hierarchy-child-card {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 28px;
+}
+
+.puffs-note-hierarchy-parent-row .tree-item-inner,
+.puffs-note-hierarchy-child-card .tree-item-inner {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.puffs-note-hierarchy-children {
+  display: block;
+}
+
+.puffs-note-hierarchy-child-card.is-hierarchy-search-match {
+  background: color-mix(in srgb, var(--interactive-accent) 13%, transparent);
+}
+
+.puffs-note-hierarchy-child-card.is-active-match {
+  background: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 52%, transparent);
+}
+
+.puffs-relation-note-results {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 52vh;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+
+.puffs-relation-note-result {
+  padding: 7px 9px;
+  border-radius: var(--radius-s);
+}
+
+.puffs-relation-note-result:hover {
+  background: var(--background-modifier-hover);
+}
+
+.puffs-relation-note-result-name {
+  color: var(--text-normal);
+}
+
+.puffs-relation-note-result-path {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modal-container .puffs-tag-rename-modal {

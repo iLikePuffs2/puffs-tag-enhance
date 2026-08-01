@@ -47,6 +47,13 @@ export class TagPaneBehavior {
   }
 
   toggleTagSearch(view) {
+    const patch = this.viewPatches.get(view);
+    if (patch && patch.hierarchyMode) {
+      const inputEl = patch.hierarchyState && patch.hierarchyState.inputEl;
+      if (inputEl) inputEl.focus();
+      return;
+    }
+
     const isShowingSearch = !!view.isShowingSearch;
 
     if (isShowingSearch) {
@@ -131,6 +138,12 @@ export class TagPaneBehavior {
       autoExpandedWasAlreadyExpanded: false,
       noteCardSearchState: createNoteCardSearchState(),
       lastRenderedSearchQuery: this.getTagSearchValue(view),
+      hierarchyMode: false,
+      hierarchyState: this.createHierarchySurfaceState(),
+      hierarchyPageEl: null,
+      hierarchyButtonEl: null,
+      scrollBottomButtonEl: null,
+      scrollTopButtonEl: null,
     };
 
     const searchInputEl = view.searchComponent && view.searchComponent.inputEl;
@@ -194,6 +207,15 @@ export class TagPaneBehavior {
       setIcon(scrollTopButtonEl, 'arrow-up-to-line');
       scrollBottomButtonEl.insertAdjacentElement('afterend', scrollTopButtonEl);
 
+      const hierarchyButtonEl = document.createElement('div');
+      hierarchyButtonEl.className = 'clickable-icon nav-action-button puffs-note-hierarchy-button';
+      hierarchyButtonEl.setAttribute('aria-label', '打开父子笔记');
+      setIcon(hierarchyButtonEl, 'git-fork');
+      scrollTopButtonEl.insertAdjacentElement('afterend', hierarchyButtonEl);
+      patch.hierarchyButtonEl = hierarchyButtonEl;
+      patch.scrollBottomButtonEl = scrollBottomButtonEl;
+      patch.scrollTopButtonEl = scrollTopButtonEl;
+
       const onTagSystemButtonClick = (evt) => {
         if (evt.button !== 0) return;
         evt.preventDefault();
@@ -227,16 +249,28 @@ export class TagPaneBehavior {
         scrollTagPaneTo('top');
       };
 
+      const onHierarchyButtonClick = (evt) => {
+        if (evt.button !== 0) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        patch.hierarchyMode = !patch.hierarchyMode;
+        this.scheduleSyncView(view, 0);
+      };
+
       tagSystemButtonEl.addEventListener('click', onTagSystemButtonClick, true);
       scrollBottomButtonEl.addEventListener('click', onScrollBottomButtonClick, true);
       scrollTopButtonEl.addEventListener('click', onScrollTopButtonClick, true);
+      hierarchyButtonEl.addEventListener('click', onHierarchyButtonClick, true);
       patch.cleanup.push(() => {
         tagSystemButtonEl.removeEventListener('click', onTagSystemButtonClick, true);
         scrollBottomButtonEl.removeEventListener('click', onScrollBottomButtonClick, true);
         scrollTopButtonEl.removeEventListener('click', onScrollTopButtonClick, true);
+        hierarchyButtonEl.removeEventListener('click', onHierarchyButtonClick, true);
         tagSystemButtonEl.remove();
         scrollBottomButtonEl.remove();
         scrollTopButtonEl.remove();
+        hierarchyButtonEl.remove();
       });
     }
 
@@ -253,6 +287,18 @@ export class TagPaneBehavior {
         evt.stopImmediatePropagation();
         this.togglePinnedTag(pinButtonEl.dataset.puffsTag).catch((error) => {
           console.error('[Puffs Tag Enhance] Failed to toggle pinned tag:', error);
+        });
+        return;
+      }
+
+      const inheritanceButtonEl = target.closest('.puffs-tag-inheritance-button');
+      if (inheritanceButtonEl) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        this.toggleTagInheritance(inheritanceButtonEl.dataset.puffsTag).catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to toggle tag inheritance:', error);
+          new Notice('切换标签继承失败');
         });
         return;
       }
@@ -318,7 +364,8 @@ export class TagPaneBehavior {
       if (!target || !view.containerEl.contains(target)) return;
       const noteCardEl = target.closest('.puffs-tag-note-card');
       if (noteCardEl) {
-        if (!this.showNoteDisplayNameMenuForCard(evt, noteCardEl)) return;
+        const handled = this.showNoteCardContextMenu(evt, noteCardEl);
+        if (!handled) return;
         evt.preventDefault();
         evt.stopPropagation();
         evt.stopImmediatePropagation();
@@ -335,7 +382,7 @@ export class TagPaneBehavior {
       evt.preventDefault();
       evt.stopPropagation();
       evt.stopImmediatePropagation();
-      this.openRenameTagModal(tag);
+      this.showTagContextMenu(evt, tag);
     };
 
     view.containerEl.addEventListener('contextmenu', onTagPaneContextMenu, true);
@@ -476,6 +523,13 @@ export class TagPaneBehavior {
         return;
       }
 
+      if (patch.hierarchyMode) {
+        this.renderSidebarHierarchyPage(view, patch);
+        return;
+      }
+
+      this.hideSidebarHierarchyPage(view, patch);
+
       this.renderListMode(view);
       this.updateListModeExpandAllButton(view);
     } finally {
@@ -528,6 +582,62 @@ export class TagPaneBehavior {
     buttonEl.setAttribute('aria-hidden', 'true');
   }
 
+  renderSidebarHierarchyPage(view, patch) {
+    const tagPaneEl = view.tagPaneEl || view.containerEl.querySelector('.tag-container');
+    if (!tagPaneEl) return;
+    view.containerEl.classList.add('puffs-tag-list-mode-enabled', 'puffs-note-hierarchy-mode');
+    const listEl = tagPaneEl.querySelector(':scope > .puffs-tag-list-container:not(.puffs-note-hierarchy-sidebar)');
+    if (listEl) listEl.classList.add('puffs-tag-hidden');
+    if (!patch.hierarchyPageEl || !patch.hierarchyPageEl.isConnected) {
+      patch.hierarchyPageEl = document.createElement('div');
+      patch.hierarchyPageEl.className = 'puffs-tag-list-container puffs-note-hierarchy-sidebar';
+      tagPaneEl.appendChild(patch.hierarchyPageEl);
+    }
+    patch.hierarchyPageEl.classList.remove('puffs-tag-hidden');
+    const relationSignature = JSON.stringify(this.getNoteHierarchySettings());
+    if (
+      patch.hierarchyPageEl.dataset.puffsRelationSignature !== relationSignature ||
+      !patch.hierarchyState.inputEl ||
+      !patch.hierarchyState.inputEl.isConnected
+    ) {
+      this.renderNoteHierarchyPage(patch.hierarchyPageEl, patch.hierarchyState, {
+        surface: 'sidebar',
+        onBack: () => {
+          patch.hierarchyMode = false;
+          this.scheduleSyncView(view, 0);
+        },
+      });
+      patch.hierarchyPageEl.dataset.puffsRelationSignature = relationSignature;
+    }
+    if (patch.hierarchyButtonEl) {
+      patch.hierarchyButtonEl.setAttribute('aria-label', '返回标签列表');
+      setIcon(patch.hierarchyButtonEl, 'tags');
+    }
+    if (view.collapseOrExpandAllEl) view.collapseOrExpandAllEl.classList.add('puffs-tag-hidden');
+    if (patch.scrollBottomButtonEl) patch.scrollBottomButtonEl.classList.add('puffs-tag-hidden');
+    if (patch.scrollTopButtonEl) patch.scrollTopButtonEl.classList.add('puffs-tag-hidden');
+    if (view.searchComponent && view.searchComponent.containerEl) {
+      view.searchComponent.containerEl.classList.add('puffs-tag-hidden');
+    }
+  }
+
+  hideSidebarHierarchyPage(view, patch) {
+    view.containerEl.classList.remove('puffs-note-hierarchy-mode');
+    if (patch.hierarchyPageEl) patch.hierarchyPageEl.classList.add('puffs-tag-hidden');
+    const tagPaneEl = view.tagPaneEl || view.containerEl.querySelector('.tag-container');
+    const listEl = tagPaneEl && tagPaneEl.querySelector(':scope > .puffs-tag-list-container:not(.puffs-note-hierarchy-sidebar)');
+    if (listEl) listEl.classList.remove('puffs-tag-hidden');
+    if (patch.hierarchyButtonEl) {
+      patch.hierarchyButtonEl.setAttribute('aria-label', '打开父子笔记');
+      setIcon(patch.hierarchyButtonEl, 'git-fork');
+    }
+    if (patch.scrollBottomButtonEl) patch.scrollBottomButtonEl.classList.remove('puffs-tag-hidden');
+    if (patch.scrollTopButtonEl) patch.scrollTopButtonEl.classList.remove('puffs-tag-hidden');
+    if (view.searchComponent && view.searchComponent.containerEl) {
+      view.searchComponent.containerEl.classList.remove('puffs-tag-hidden');
+    }
+  }
+
   renderListMode(view) {
     const listEl = this.ensureListModeContainer(view);
     if (!listEl) return;
@@ -566,6 +676,9 @@ export class TagPaneBehavior {
         item.displayName,
         item.isVirtual,
         item.files.length,
+        item.exactCount,
+        item.inheritedCount,
+        item.inheritanceEnabled,
         this.settings.pinnedTag === item.tag,
         this.expandedTags.has(item.tag),
         this.expandedTags.has(item.tag) ? item.files.map((file) => file.path).join('\n') : '',
@@ -638,7 +751,7 @@ export class TagPaneBehavior {
 
     view.containerEl.classList.add('puffs-tag-list-mode-enabled');
 
-    let listEl = tagPaneEl.querySelector(':scope > .puffs-tag-list-container');
+    let listEl = tagPaneEl.querySelector(':scope > .puffs-tag-list-container:not(.puffs-note-hierarchy-sidebar)');
     if (!listEl) {
       listEl = document.createElement('div');
       listEl.className = 'puffs-tag-list-container';
@@ -665,8 +778,8 @@ export class TagPaneBehavior {
     const seen = new Set();
 
     const shouldShowTag = (tag) => {
-      const files = this.tagFileIndex.get(tag) || [];
-      if (isNestedTag(tag) || files.length === 0) return false;
+      const browseData = this.getTagBrowseData(tag);
+      if (isNestedTag(tag) || (browseData.files.length === 0 && !browseData.hasInheritance)) return false;
       return unionTerms
         ? tagMatchesAnySearchTerm(tag, unionTerms)
         : tagMatchesSearchText(tag, query);
@@ -677,11 +790,17 @@ export class TagPaneBehavior {
       if (!normalizedTag || seen.has(normalizedTag) || !shouldShowTag(normalizedTag)) return;
 
       seen.add(normalizedTag);
+      const browseData = this.getTagBrowseData(normalizedTag);
       items.push({
         tag: normalizedTag,
         displayName: getTagDisplayName(normalizedTag),
         isVirtual: false,
-        files: this.getOrderedFilesForTag(normalizedTag, this.tagFileIndex.get(normalizedTag) || []),
+        files: browseData.files,
+        exactCount: browseData.exactCount,
+        inheritedCount: browseData.inheritedCount,
+        inheritanceEnabled: browseData.inheritanceEnabled,
+        hasInheritance: browseData.hasInheritance,
+        sourcesByPath: browseData.sourcesByPath,
       });
     };
 
@@ -689,10 +808,10 @@ export class TagPaneBehavior {
       pushTag((tagDom && tagDom.tag) || tag);
     }
 
-    const fallbackTags = Array.from(this.tagFileIndex.keys())
+    const fallbackTags = Array.from(this.getLogicalTagSet())
       .filter((tag) => !seen.has(tag))
       .sort((a, b) => {
-        const countDiff = (this.tagFileIndex.get(b) || []).length - (this.tagFileIndex.get(a) || []).length;
+        const countDiff = this.getTagBrowseData(b).files.length - this.getTagBrowseData(a).files.length;
         return countDiff || getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN');
       });
 
@@ -813,10 +932,22 @@ export class TagPaneBehavior {
 
     const countEl = document.createElement('span');
     countEl.className = 'tag-pane-tag-count tree-item-flair';
-    countEl.textContent = String(files.length);
+    countEl.textContent = item.inheritanceEnabled && item.inheritedCount > 0
+      ? `${item.exactCount}+${item.inheritedCount}`
+      : String(files.length);
 
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
+    let inheritanceButtonEl = null;
+    if (!isVirtual && item.hasInheritance) {
+      inheritanceButtonEl = document.createElement('button');
+      inheritanceButtonEl.type = 'button';
+      inheritanceButtonEl.className = 'clickable-icon puffs-tag-inheritance-button';
+      inheritanceButtonEl.dataset.puffsTag = tag;
+      inheritanceButtonEl.classList.toggle('is-active', !!item.inheritanceEnabled);
+      inheritanceButtonEl.setAttribute('aria-label', item.inheritanceEnabled ? '隐藏后代标签笔记' : '显示后代标签笔记');
+      setIcon(inheritanceButtonEl, 'git-merge');
+    }
     if (isExpanded) {
       scrollBottomButtonEl = document.createElement('button');
       scrollBottomButtonEl.type = 'button';
@@ -840,6 +971,7 @@ export class TagPaneBehavior {
     tagEl.appendChild(innerEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
+    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
 
@@ -939,8 +1071,10 @@ export class TagPaneBehavior {
     listEl.empty();
 
     const tag = normalizeTag(tagValue);
-    const canReorder = !!tag && !isVirtual && !isNestedTag(tag);
+    const browseData = tag && !isVirtual ? this.getTagBrowseData(tag) : null;
     for (const [fileIndex, file] of files.entries()) {
+      const inherited = !!(browseData && browseData.inheritedFiles.some((candidate) => candidate.path === file.path));
+      const canReorder = !!tag && !isVirtual && !isNestedTag(tag) && !inherited;
       const itemEl = document.createElement('div');
       itemEl.className = 'tree-item puffs-tag-note-item';
       itemEl.dataset.path = file.path;
@@ -952,13 +1086,18 @@ export class TagPaneBehavior {
       const cardEl = document.createElement('div');
       cardEl.className = 'tree-item-self puffs-tag-note-card is-clickable';
       cardEl.dataset.path = file.path;
+      if (tag) cardEl.dataset.puffsTag = tag;
+      if (inherited) {
+        cardEl.dataset.puffsInherited = 'true';
+        const sources = this.getInheritedFileSources(tag, file.path);
+        cardEl.title = `继承自：${sources.join('、')}`;
+      }
       cardEl.style.marginInlineStart = '-17px';
       cardEl.style.setProperty('margin-inline-start', '-17px', 'important');
       cardEl.style.paddingInlineStart = canReorder ? '17px' : '41px';
       cardEl.style.setProperty('padding-inline-start', canReorder ? '17px' : '41px', 'important');
 
       if (canReorder) {
-        cardEl.dataset.puffsTag = tag;
         cardEl.dataset.puffsSurface = 'sidebar';
 
         const orderButtonEl = document.createElement('button');

@@ -58,6 +58,7 @@ export class PersistenceBehavior {
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
     }
+    this.normalizeRelationSettings(this.settings.relations);
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
     delete this.settings.backupFileName;
@@ -99,6 +100,7 @@ export class PersistenceBehavior {
     if (this.settings.pinnedTag && isNestedTag(this.settings.pinnedTag)) {
       this.settings.pinnedTag = null;
     }
+    this.normalizeRelationSettings(this.settings.relations);
     delete this.settings.tagOrder;
     delete this.settings.backupFileName;
     await this.saveSettings();

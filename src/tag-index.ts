@@ -43,6 +43,7 @@ export class TagIndexBehavior {
       this.handlePreferredFileRename(file, oldPath);
       this.handleNoteOrderFileRename(file, oldPath);
       this.handleNoteDisplayNameFileRename(file, oldPath);
+      this.handleRelationFileRename(file, oldPath);
       this.refreshTagViews();
       this.refreshTagShelfViews();
     }));
@@ -50,6 +51,7 @@ export class TagIndexBehavior {
       this.handlePreferredFileDelete(file);
       this.handleNoteOrderFileDelete(file);
       this.handleNoteDisplayNameFileDelete(file);
+      this.handleRelationFileDelete(file);
       scheduleRefresh(file);
     }));
   }
@@ -383,6 +385,7 @@ export class TagIndexBehavior {
       if (this.settings.pinnedTag === oldTag) {
         this.settings.pinnedTag = newTag;
       }
+      this.migrateTagRelations(oldTag, newTag);
 
       if (migratedOrder.length > 0) {
         this.settings.noteOrderByTag[newTag] = migratedOrder;

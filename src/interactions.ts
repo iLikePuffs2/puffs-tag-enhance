@@ -190,7 +190,8 @@ export class InteractionsBehavior {
 
   getPinnedTagItem() {
     const tag = normalizeTag(this.settings.pinnedTag);
-    const files = tag && !isNestedTag(tag) ? this.tagFileIndex.get(tag) || [] : [];
+    const browseData = tag && !isNestedTag(tag) ? this.getTagBrowseData(tag) : null;
+    const files = browseData ? browseData.files : [];
     if (!tag || files.length === 0) return null;
 
     return {
@@ -198,7 +199,11 @@ export class InteractionsBehavior {
       displayName: getTagDisplayName(tag),
       isVirtual: false,
       isPinnedExtra: true,
-      files: this.getOrderedFilesForTag(tag, files),
+      files,
+      exactCount: browseData.exactCount,
+      inheritedCount: browseData.inheritedCount,
+      inheritanceEnabled: browseData.inheritanceEnabled,
+      hasInheritance: browseData.hasInheritance,
     };
   }
 
@@ -220,7 +225,7 @@ export class InteractionsBehavior {
 
   async togglePinnedTag(tagValue) {
     const tag = normalizeTag(tagValue);
-    if (!tag || isNestedTag(tag) || !(this.tagFileIndex.get(tag) || []).length) return;
+    if (!tag || isNestedTag(tag) || this.getTagBrowseData(tag).files.length === 0) return;
 
     this.settings.pinnedTag = this.settings.pinnedTag === tag ? null : tag;
     await this.saveSettings();
@@ -237,14 +242,23 @@ export class InteractionsBehavior {
     }
 
     const unionTerms = splitUnionSearchTerms(tagQuery);
-    const items = Array.from(this.tagFileIndex.entries())
-      .filter(([tag, files]) => !isNestedTag(tag) && files.length > 0)
-      .map(([tag, files]) => ({
+    const items = Array.from(this.getLogicalTagSet())
+      .filter((tag) => !isNestedTag(tag))
+      .map((tag) => {
+        const browseData = this.getTagBrowseData(tag);
+        return {
         tag,
         displayName: getTagDisplayName(tag),
         isVirtual: false,
-        files: this.getOrderedFilesForTag(tag, files),
-      }))
+        files: browseData.files,
+        exactCount: browseData.exactCount,
+        inheritedCount: browseData.inheritedCount,
+        inheritanceEnabled: browseData.inheritanceEnabled,
+        hasInheritance: browseData.hasInheritance,
+        sourcesByPath: browseData.sourcesByPath,
+      };
+      })
+      .filter((item) => item.files.length > 0 || item.hasInheritance)
       .sort((a, b) => {
         const countDiff = b.files.length - a.files.length;
         return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');

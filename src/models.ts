@@ -30,6 +30,18 @@ const DEFAULT_SETTINGS = {
   backupFolderPath: '',
   pinnedTag: null,
   scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
+  relations: {
+    version: 1,
+    tagInheritance: {
+      childrenByParent: {},
+      enabledParents: [],
+      excludedPathsByParent: {},
+    },
+    noteHierarchy: {
+      childrenByParentPath: {},
+      displayNamesByParentPath: {},
+    },
+  },
 };
 
 function normalizeTag(rawTag) {
