@@ -1081,7 +1081,7 @@ export class TagPaneBehavior {
       inheritanceButtonEl.setAttribute('aria-label', item.inheritanceEnabled ? '隐藏后代标签笔记' : '显示后代标签笔记');
       setIcon(inheritanceButtonEl, 'git-merge');
     }
-    if (isExpanded) {
+    if (isExpanded && files.length > 0) {
       scrollBottomButtonEl = document.createElement('button');
       scrollBottomButtonEl.type = 'button';
       scrollBottomButtonEl.className = 'clickable-icon puffs-tag-scroll-bottom-button';
@@ -1102,9 +1102,9 @@ export class TagPaneBehavior {
     flairOuterEl.appendChild(countEl);
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
+    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
-    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
 

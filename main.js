@@ -828,7 +828,7 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
         });
       });
     }
-    if (isExpanded) {
+    if (isExpanded && files.length > 0) {
       scrollBottomButtonEl = document.createElement("button");
       scrollBottomButtonEl.type = "button";
       scrollBottomButtonEl.className = "clickable-icon puffs-tag-scroll-bottom-button";
@@ -859,9 +859,9 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     flairOuterEl.appendChild(countEl);
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
+    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
-    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
     tagEl.addEventListener("click", () => {
@@ -4034,7 +4034,7 @@ var TagPaneBehavior = class {
       inheritanceButtonEl.setAttribute("aria-label", item.inheritanceEnabled ? "\u9690\u85CF\u540E\u4EE3\u6807\u7B7E\u7B14\u8BB0" : "\u663E\u793A\u540E\u4EE3\u6807\u7B7E\u7B14\u8BB0");
       (0, import_obsidian10.setIcon)(inheritanceButtonEl, "git-merge");
     }
-    if (isExpanded) {
+    if (isExpanded && files.length > 0) {
       scrollBottomButtonEl = document.createElement("button");
       scrollBottomButtonEl.type = "button";
       scrollBottomButtonEl.className = "clickable-icon puffs-tag-scroll-bottom-button";
@@ -4053,9 +4053,9 @@ var TagPaneBehavior = class {
     flairOuterEl.appendChild(countEl);
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
+    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
-    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
     if (isExpanded) {

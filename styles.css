@@ -75,15 +75,11 @@
   height: 14px;
 }
 
-.puffs-tag-pin-button.is-active {
+.puffs-tag-pin-button.is-active,
+.puffs-tag-inheritance-button.is-active {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
   box-shadow: none;
-}
-
-.puffs-tag-inheritance-button.is-active {
-  background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
-  color: var(--interactive-accent);
 }
 
 .modal-container .puffs-relation-modal {
