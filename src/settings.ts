@@ -45,7 +45,7 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
           });
       });
 
-    const keywordDescription = '固定语法：=；=父笔记；==子笔记；=父笔记*子笔记';
+    const keywordDescription = '固定语法：=；==（当前笔记关系）；=父笔记；==子笔记；=父笔记*子笔记';
     new Setting(containerEl)
       .setName('父子笔记搜索关键字')
       .setDesc(keywordDescription)

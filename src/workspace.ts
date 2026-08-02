@@ -30,6 +30,37 @@ export class WorkspaceBehavior {
     }
   }
 
+  refreshCurrentNoteHierarchySearchViews() {
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []) {
+      const view = leaf.view;
+      if (!view || this.getHierarchySearchContext(this.getTagSearchValue(view)).mode !== 'current-note') continue;
+      this.scheduleSyncView(view, 0);
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE) || []) {
+      const view = leaf.view;
+      if (!view || this.getHierarchySearchContext(view.searchQuery).mode !== 'current-note') continue;
+      if (typeof view.renderTagList === 'function') view.renderTagList();
+      else if (typeof view.refresh === 'function') view.refresh();
+    }
+  }
+
+  updateCurrentMainFilePath(filePath) {
+    const nextPath = filePath || null;
+    if (nextPath === this.currentMainFilePath) return false;
+    this.currentMainFilePath = nextPath;
+    this.refreshCurrentNoteHierarchySearchViews();
+    return true;
+  }
+
+  handleWorkspaceFileOpen(_file) {
+    const editorLeaf = this.app.workspace.activeEditor?.leaf;
+    if (!this.isMarkdownMainLeaf(editorLeaf)) return;
+    this.rememberMainLeaf(editorLeaf);
+    const filePath = getLeafFilePath(editorLeaf);
+    if (!filePath) return;
+    if (this.updateCurrentMainFilePath(filePath)) this.applySidebarPreferenceForCurrentFile();
+  }
+
   getVisibleTagLeaf() {
     return (this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []).find((leaf) => {
       if (typeof leaf.isVisible === 'function') return leaf.isVisible();
@@ -277,7 +308,7 @@ export class WorkspaceBehavior {
       const filePath = getLeafFilePath(leaf);
       const filePathChanged = filePath !== this.currentMainFilePath;
       this.rememberMainLeaf(leaf);
-      this.currentMainFilePath = filePath;
+      this.updateCurrentMainFilePath(filePath);
       if (filePathChanged) {
         this.applySidebarPreferenceForCurrentFile();
       }
@@ -471,7 +502,7 @@ export class WorkspaceBehavior {
     this.settings.tagSidebarPreferredFiles[file.path] = true;
 
     if (this.currentMainFilePath === oldPath) {
-      this.currentMainFilePath = file.path;
+      this.updateCurrentMainFilePath(file.path);
     }
 
     this.saveSettings();
@@ -483,7 +514,7 @@ export class WorkspaceBehavior {
 
     delete this.settings.tagSidebarPreferredFiles[file.path];
     if (this.currentMainFilePath === file.path) {
-      this.currentMainFilePath = null;
+      this.updateCurrentMainFilePath(null);
     }
 
     this.saveSettings();
@@ -707,10 +738,16 @@ export class WorkspaceBehavior {
   rememberCurrentMainLeaf() {
     const activeLeaf = this.app.workspace.activeLeaf;
     const editorLeaf = this.app.workspace.activeEditor?.leaf;
-    const leaf = this.isMarkdownMainLeaf(activeLeaf) ? activeLeaf : editorLeaf;
+    let leaf = this.isMarkdownMainLeaf(activeLeaf) ? activeLeaf : editorLeaf;
+    if (!this.isMarkdownMainLeaf(leaf)) {
+      this.app.workspace.iterateAllLeaves((candidate) => {
+        if (!this.isMarkdownMainLeaf(candidate)) return;
+        if (!leaf || (leaf.activeTime || 0) < (candidate.activeTime || 0)) leaf = candidate;
+      });
+    }
     this.rememberMainLeaf(leaf);
     if (this.isMarkdownMainLeaf(leaf)) {
-      this.currentMainFilePath = getLeafFilePath(leaf);
+      this.updateCurrentMainFilePath(getLeafFilePath(leaf));
     }
   }
 

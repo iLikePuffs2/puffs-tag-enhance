@@ -57,15 +57,16 @@ describe('父子笔记搜索和排序', () => {
   });
 
   it('仅用固定等号语法进入父子搜索', () => {
-    expect(parseUnifiedHierarchySearch('=')).toEqual({ matched: true, query: '' });
-    expect(parseUnifiedHierarchySearch('=父笔记')).toEqual({ matched: true, query: '父笔记' });
-    expect(parseUnifiedHierarchySearch('==子笔记')).toEqual({ matched: true, query: '*子笔记' });
-    expect(parseUnifiedHierarchySearch('=父笔记*子笔记')).toEqual({ matched: true, query: '父笔记*子笔记' });
+    expect(parseUnifiedHierarchySearch('=')).toEqual({ matched: true, query: '', mode: 'query' });
+    expect(parseUnifiedHierarchySearch('=父笔记')).toEqual({ matched: true, query: '父笔记', mode: 'query' });
+    expect(parseUnifiedHierarchySearch('==')).toEqual({ matched: true, query: '', mode: 'current-note' });
+    expect(parseUnifiedHierarchySearch('==子笔记')).toEqual({ matched: true, query: '*子笔记', mode: 'query' });
+    expect(parseUnifiedHierarchySearch('=父笔记*子笔记')).toEqual({ matched: true, query: '父笔记*子笔记', mode: 'query' });
   });
 
   it('拒绝旧语法、全角等号与格式错误的新语法', () => {
-    for (const query of ['父', '父*父笔记', '=*子笔记', '=父*子*孙', '=父*', '==', '==子*孙', '＝']) {
-      expect(parseUnifiedHierarchySearch(query)).toEqual({ matched: false, query: '' });
+    for (const query of ['父', '父*父笔记', '=*子笔记', '=父*子*孙', '=父*', '==子*孙', '＝']) {
+      expect(parseUnifiedHierarchySearch(query)).toEqual({ matched: false, query: '', mode: 'query' });
     }
   });
 

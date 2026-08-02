@@ -244,6 +244,45 @@ describe('批量父子关系', () => {
     expect(parentAndChild[0]).not.toHaveProperty('parentMatch');
   });
 
+  it('按当前笔记路径合并其父级分支与自身子树，并只高亮当前子卡片', () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: {
+        '祖.md': ['目录/当前.md'],
+        '目录/当前.md': ['子.md'],
+      },
+      displayNamesByParentPath: {},
+    }), ['祖.md', '目录/当前.md', '子.md']);
+
+    const items = behavior.getHierarchyParentItems('', '目录/当前.md');
+    expect(items.map((item: any) => item.parentPath).sort()).toEqual(['祖.md', '目录/当前.md'].sort());
+    expect(Array.from(items.find((item: any) => item.parentPath === '祖.md').matchingPaths)).toEqual(['目录/当前.md']);
+    expect(items.find((item: any) => item.parentPath === '祖.md').forceExpand).toBe(true);
+    expect(items.find((item: any) => item.parentPath === '目录/当前.md').matchingPaths.size).toBe(0);
+  });
+
+  it('当前笔记关系只按完整路径匹配，同名笔记不混入结果', () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: {
+        '父甲.md': ['甲/同名.md'],
+        '父乙.md': ['乙/同名.md'],
+      },
+      displayNamesByParentPath: {},
+    }), ['父甲.md', '父乙.md', '甲/同名.md', '乙/同名.md']);
+
+    const items = behavior.getHierarchyParentItems('', '甲/同名.md');
+    expect(items.map((item: any) => item.parentPath)).toEqual(['父甲.md']);
+    expect(Array.from(items[0].matchingPaths)).toEqual(['甲/同名.md']);
+  });
+
+  it('没有当前笔记路径时退化为全部父子关系', () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: { '父甲.md': ['子甲.md'], '父乙.md': ['子乙.md'] },
+      displayNamesByParentPath: {},
+    }), ['父甲.md', '子甲.md', '父乙.md', '子乙.md']);
+
+    expect(behavior.getHierarchyParentItems('', '').map((item: any) => item.parentPath).sort()).toEqual(['父甲.md', '父乙.md'].sort());
+  });
+
   it('右键目标子笔记时仅在同一父级内移动到其下方', async () => {
     const behavior = attachFiles(createBehavior({
       childrenByParentPath: {

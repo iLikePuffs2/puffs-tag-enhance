@@ -143,21 +143,22 @@ function normalizeHierarchySearchKeyword(_value, _fallback = DEFAULT_NOTE_HIERAR
 }
 function parseUnifiedHierarchySearch(value, _keywordValue) {
   const text = String(value != null ? value : "").trim();
-  if (text === "=") return { matched: true, query: "" };
-  if (!text.startsWith("=")) return { matched: false, query: "" };
+  if (text === "=") return { matched: true, query: "", mode: "query" };
+  if (text === "==") return { matched: true, query: "", mode: "current-note" };
+  if (!text.startsWith("=")) return { matched: false, query: "", mode: "query" };
   if (text.startsWith("==")) {
     const childQuery = text.slice(2).trim();
-    if (!childQuery || childQuery.includes("=") || childQuery.includes("*")) {
-      return { matched: false, query: "" };
+    if (childQuery.includes("=") || childQuery.includes("*")) {
+      return { matched: false, query: "", mode: "query" };
     }
-    return { matched: true, query: `*${childQuery}` };
+    return { matched: true, query: `*${childQuery}`, mode: "query" };
   }
   const query = text.slice(1).trim();
   const delimiter = query.indexOf("*");
   if (!query || query.includes("=") || delimiter === 0 || delimiter >= 0 && (delimiter !== query.lastIndexOf("*") || !query.slice(delimiter + 1).trim())) {
-    return { matched: false, query: "" };
+    return { matched: false, query: "", mode: "query" };
   }
-  return { matched: true, query };
+  return { matched: true, query, mode: "query" };
 }
 function buildVisibleHierarchyForest(orderedPaths, adjacency) {
   const paths = Array.from(new Set((orderedPaths || []).filter(Boolean)));
@@ -806,6 +807,7 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
       this.clearAutoExpandedTag();
       this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
       this.hierarchyState.query = hierarchySearch.query;
+      this.hierarchyState.currentNotePath = hierarchySearch.currentNotePath;
       this.hierarchyState.activeMatchIndex = -1;
       this.summaryTagCountEl.textContent = "0 \u4E2A";
       this.summaryNoteCountEl.textContent = "0 \u7BC7";
@@ -1024,7 +1026,7 @@ var PuffsTagEnhanceSettingTab = class extends import_obsidian3.PluginSettingTab 
         await this.plugin.updateSettings({ freezeSearchWhileComposing: value });
       });
     });
-    const keywordDescription = "\u56FA\u5B9A\u8BED\u6CD5\uFF1A=\uFF1B=\u7236\u7B14\u8BB0\uFF1B==\u5B50\u7B14\u8BB0\uFF1B=\u7236\u7B14\u8BB0*\u5B50\u7B14\u8BB0";
+    const keywordDescription = "\u56FA\u5B9A\u8BED\u6CD5\uFF1A=\uFF1B==\uFF08\u5F53\u524D\u7B14\u8BB0\u5173\u7CFB\uFF09\uFF1B=\u7236\u7B14\u8BB0\uFF1B==\u5B50\u7B14\u8BB0\uFF1B=\u7236\u7B14\u8BB0*\u5B50\u7B14\u8BB0";
     new import_obsidian3.Setting(containerEl).setName("\u7236\u5B50\u7B14\u8BB0\u641C\u7D22\u5173\u952E\u5B57").setDesc(keywordDescription).addText((text) => {
       text.setValue(DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD).setPlaceholder(DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD).setDisabled(true);
     });
@@ -1852,6 +1854,35 @@ var WorkspaceBehavior = class {
       }
     }
   }
+  refreshCurrentNoteHierarchySearchViews() {
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []) {
+      const view = leaf.view;
+      if (!view || this.getHierarchySearchContext(this.getTagSearchValue(view)).mode !== "current-note") continue;
+      this.scheduleSyncView(view, 0);
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE) || []) {
+      const view = leaf.view;
+      if (!view || this.getHierarchySearchContext(view.searchQuery).mode !== "current-note") continue;
+      if (typeof view.renderTagList === "function") view.renderTagList();
+      else if (typeof view.refresh === "function") view.refresh();
+    }
+  }
+  updateCurrentMainFilePath(filePath) {
+    const nextPath = filePath || null;
+    if (nextPath === this.currentMainFilePath) return false;
+    this.currentMainFilePath = nextPath;
+    this.refreshCurrentNoteHierarchySearchViews();
+    return true;
+  }
+  handleWorkspaceFileOpen(_file) {
+    var _a;
+    const editorLeaf = (_a = this.app.workspace.activeEditor) == null ? void 0 : _a.leaf;
+    if (!this.isMarkdownMainLeaf(editorLeaf)) return;
+    this.rememberMainLeaf(editorLeaf);
+    const filePath = getLeafFilePath(editorLeaf);
+    if (!filePath) return;
+    if (this.updateCurrentMainFilePath(filePath)) this.applySidebarPreferenceForCurrentFile();
+  }
   getVisibleTagLeaf() {
     return (this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []).find((leaf) => {
       if (typeof leaf.isVisible === "function") return leaf.isVisible();
@@ -2052,7 +2083,7 @@ var WorkspaceBehavior = class {
       const filePath = getLeafFilePath(leaf);
       const filePathChanged = filePath !== this.currentMainFilePath;
       this.rememberMainLeaf(leaf);
-      this.currentMainFilePath = filePath;
+      this.updateCurrentMainFilePath(filePath);
       if (filePathChanged) {
         this.applySidebarPreferenceForCurrentFile();
       }
@@ -2190,7 +2221,7 @@ var WorkspaceBehavior = class {
     delete this.settings.tagSidebarPreferredFiles[oldPath];
     this.settings.tagSidebarPreferredFiles[file.path] = true;
     if (this.currentMainFilePath === oldPath) {
-      this.currentMainFilePath = file.path;
+      this.updateCurrentMainFilePath(file.path);
     }
     this.saveSettings();
   }
@@ -2199,7 +2230,7 @@ var WorkspaceBehavior = class {
     if (!this.settings.tagSidebarPreferredFiles[file.path]) return;
     delete this.settings.tagSidebarPreferredFiles[file.path];
     if (this.currentMainFilePath === file.path) {
-      this.currentMainFilePath = null;
+      this.updateCurrentMainFilePath(null);
     }
     this.saveSettings();
   }
@@ -2370,10 +2401,16 @@ var WorkspaceBehavior = class {
     var _a;
     const activeLeaf = this.app.workspace.activeLeaf;
     const editorLeaf = (_a = this.app.workspace.activeEditor) == null ? void 0 : _a.leaf;
-    const leaf = this.isMarkdownMainLeaf(activeLeaf) ? activeLeaf : editorLeaf;
+    let leaf = this.isMarkdownMainLeaf(activeLeaf) ? activeLeaf : editorLeaf;
+    if (!this.isMarkdownMainLeaf(leaf)) {
+      this.app.workspace.iterateAllLeaves((candidate) => {
+        if (!this.isMarkdownMainLeaf(candidate)) return;
+        if (!leaf || (leaf.activeTime || 0) < (candidate.activeTime || 0)) leaf = candidate;
+      });
+    }
     this.rememberMainLeaf(leaf);
     if (this.isMarkdownMainLeaf(leaf)) {
-      this.currentMainFilePath = getLeafFilePath(leaf);
+      this.updateCurrentMainFilePath(getLeafFilePath(leaf));
     }
   }
   rememberMainLeaf(leaf) {
@@ -2400,6 +2437,9 @@ var TagIndexBehavior = class {
         this.syncSelectedSidebarState();
         this.refreshTagViews();
       })
+    );
+    this.registerEvent(
+      this.app.workspace.on("file-open", (file) => this.handleWorkspaceFileOpen(file))
     );
   }
   registerMetadataHandlers() {
@@ -3266,6 +3306,7 @@ var TagPaneBehavior = class {
       if (hierarchySearch.matched) {
         if (!hierarchyWasActive) patch.hierarchyState.groupExpanded = true;
         patch.hierarchyState.query = hierarchySearch.query;
+        patch.hierarchyState.currentNotePath = hierarchySearch.currentNotePath;
         patch.hierarchyState.activeMatchIndex = -1;
         view.searchQuery = createMultiTagSearchQuery(rawQuery, []);
         if (typeof view.updateTags === "function") view.updateTags();
@@ -3371,6 +3412,7 @@ var TagPaneBehavior = class {
       patch.hierarchySearchActive = hierarchySearch.matched;
       if (patch.hierarchySearchActive && !hierarchyWasActive) patch.hierarchyState.groupExpanded = true;
       patch.hierarchyState.query = hierarchySearch.query;
+      patch.hierarchyState.currentNotePath = hierarchySearch.currentNotePath;
       if (patch.hierarchySearchActive) {
         this.renderSidebarHierarchyPage(view, patch);
         return;
@@ -4549,46 +4591,71 @@ var RelationsBehavior = class {
     await this.saveSettings();
     this.refreshHierarchyViews();
   }
-  getHierarchyParentItems(query = "") {
+  createHierarchyParentItem(parentPath, matchingPaths = [], forceExpand = false) {
+    const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
+    const childPaths = this.getNoteHierarchySettings().childrenByParentPath[parentPath];
+    if (!(parentFile instanceof import_obsidian11.TFile) || parentFile.extension !== "md" || !Array.isArray(childPaths) || !childPaths.length) return null;
+    const descendants = this.getHierarchyDescendants(parentPath);
+    const directCount = this.getHierarchyChildren(parentPath).filter((path) => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      return file instanceof import_obsidian11.TFile && file.extension === "md";
+    }).length;
+    const descendantCount = new Set(descendants.filter((path) => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      return file instanceof import_obsidian11.TFile && file.extension === "md";
+    })).size;
+    return {
+      parentPath,
+      parentFile,
+      directCount,
+      descendantCount,
+      additionalCount: Math.max(0, descendantCount - directCount),
+      matchingPaths: new Set(matchingPaths),
+      forceExpand
+    };
+  }
+  getHierarchyParentItems(query = "", currentNotePath = "") {
     const parsed = parseHierarchySearch(query);
     if (!parsed.valid) return [];
-    const { parentQuery, childQuery } = parsed;
     const hierarchy = this.getNoteHierarchySettings();
     const items = [];
-    for (const [parentPath, childPaths] of Object.entries(hierarchy.childrenByParentPath)) {
-      const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
-      if (!(parentFile instanceof import_obsidian11.TFile) || parentFile.extension !== "md" || !Array.isArray(childPaths) || !childPaths.length) continue;
-      const parentNames = [parentFile.basename, ...this.getNoteAliases(parentFile)].map((name) => name.toLowerCase());
-      if (parentQuery && !parentNames.some((name) => name.includes(parentQuery))) continue;
-      const descendants = this.getHierarchyDescendants(parentPath);
-      const matchingPaths = childQuery ? descendants.filter((path) => {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (!(file instanceof import_obsidian11.TFile)) return false;
-        const directParents = this.getHierarchyParents(path);
-        const names = [file.basename, ...this.getNoteAliases(file)];
-        for (const directParent of directParents) {
-          names.push(this.getHierarchyDisplayName(directParent, file));
-        }
-        return names.some((name) => String(name).toLowerCase().includes(childQuery));
-      }) : [];
-      if (childQuery && !matchingPaths.length) continue;
-      const directCount = this.getHierarchyChildren(parentPath).filter((path) => {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        return file instanceof import_obsidian11.TFile && file.extension === "md";
-      }).length;
-      const descendantCount = new Set(descendants.filter((path) => {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        return file instanceof import_obsidian11.TFile && file.extension === "md";
-      })).size;
-      items.push({
-        parentPath,
-        parentFile,
-        directCount,
-        descendantCount,
-        additionalCount: Math.max(0, descendantCount - directCount),
-        matchingPaths: new Set(matchingPaths),
-        forceExpand: !!childQuery
-      });
+    const currentFile = currentNotePath && this.app.vault.getAbstractFileByPath(currentNotePath);
+    if (!(currentFile instanceof import_obsidian11.TFile) || currentFile.extension !== "md") currentNotePath = "";
+    if (currentNotePath) {
+      const parentPaths = /* @__PURE__ */ new Set();
+      if (this.getHierarchyChildren(currentNotePath).length) parentPaths.add(currentNotePath);
+      for (const parentPath of this.getHierarchyParents(currentNotePath)) parentPaths.add(parentPath);
+      for (const parentPath of parentPaths) {
+        const isCurrentChild = parentPath !== currentNotePath && this.getHierarchyChildren(parentPath).includes(currentNotePath);
+        const item = this.createHierarchyParentItem(
+          parentPath,
+          isCurrentChild ? [currentNotePath] : [],
+          isCurrentChild
+        );
+        if (item) items.push(item);
+      }
+    } else {
+      const { parentQuery, childQuery } = parsed;
+      for (const [parentPath, childPaths] of Object.entries(hierarchy.childrenByParentPath)) {
+        const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
+        if (!(parentFile instanceof import_obsidian11.TFile) || parentFile.extension !== "md" || !Array.isArray(childPaths) || !childPaths.length) continue;
+        const parentNames = [parentFile.basename, ...this.getNoteAliases(parentFile)].map((name) => name.toLowerCase());
+        if (parentQuery && !parentNames.some((name) => name.includes(parentQuery))) continue;
+        const descendants = this.getHierarchyDescendants(parentPath);
+        const matchingPaths = childQuery ? descendants.filter((path) => {
+          const file = this.app.vault.getAbstractFileByPath(path);
+          if (!(file instanceof import_obsidian11.TFile)) return false;
+          const directParents = this.getHierarchyParents(path);
+          const names = [file.basename, ...this.getNoteAliases(file)];
+          for (const directParent of directParents) {
+            names.push(this.getHierarchyDisplayName(directParent, file));
+          }
+          return names.some((name) => String(name).toLowerCase().includes(childQuery));
+        }) : [];
+        if (childQuery && !matchingPaths.length) continue;
+        const item = this.createHierarchyParentItem(parentPath, matchingPaths, !!childQuery);
+        if (item) items.push(item);
+      }
     }
     items.sort((a, b) => compareHierarchyParentItems(
       { directCount: a.directCount, name: a.parentFile.basename },
@@ -4599,6 +4666,7 @@ var RelationsBehavior = class {
   createHierarchySurfaceState() {
     return {
       query: "",
+      currentNotePath: "",
       allExpanded: true,
       expandedParents: /* @__PURE__ */ new Set(),
       expandedBranches: /* @__PURE__ */ new Set(),
@@ -4609,7 +4677,13 @@ var RelationsBehavior = class {
     };
   }
   getHierarchySearchContext(value) {
-    return parseUnifiedHierarchySearch(value);
+    const context = parseUnifiedHierarchySearch(value);
+    if (context.mode !== "current-note") return { ...context, currentNotePath: "" };
+    const file = this.currentMainFilePath && this.app.vault.getAbstractFileByPath(this.currentMainFilePath);
+    return {
+      ...context,
+      currentNotePath: file instanceof import_obsidian11.TFile && file.extension === "md" ? file.path : ""
+    };
   }
   getHierarchyEdgeCount() {
     let count = 0;
@@ -4897,7 +4971,7 @@ var RelationsBehavior = class {
     const listEl = hostEl.createDiv({ cls: "puffs-note-hierarchy-list" });
     const renderList = () => {
       listEl.empty();
-      const items = this.getHierarchyParentItems(state.query);
+      const items = this.getHierarchyParentItems(state.query, state.currentNotePath);
       if (!items.length) {
         listEl.createDiv({ text: state.query ? "\u6CA1\u6709\u5339\u914D\u7684\u7236\u5B50\u5173\u7CFB\u3002" : "\u6682\u65E0\u7236\u5B50\u7B14\u8BB0\u5173\u7CFB\u3002", cls: "puffs-relation-empty" });
         return;

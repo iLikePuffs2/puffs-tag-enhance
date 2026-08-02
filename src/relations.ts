@@ -273,46 +273,73 @@ export class RelationsBehavior {
     this.refreshHierarchyViews();
   }
 
-  getHierarchyParentItems(query = '') {
+  createHierarchyParentItem(parentPath, matchingPaths = [], forceExpand = false) {
+    const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
+    const childPaths = this.getNoteHierarchySettings().childrenByParentPath[parentPath];
+    if (!(parentFile instanceof TFile) || parentFile.extension !== 'md' || !Array.isArray(childPaths) || !childPaths.length) return null;
+    const descendants = this.getHierarchyDescendants(parentPath);
+    const directCount = this.getHierarchyChildren(parentPath).filter((path) => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      return file instanceof TFile && file.extension === 'md';
+    }).length;
+    const descendantCount = new Set(descendants.filter((path) => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      return file instanceof TFile && file.extension === 'md';
+    })).size;
+    return {
+      parentPath,
+      parentFile,
+      directCount,
+      descendantCount,
+      additionalCount: Math.max(0, descendantCount - directCount),
+      matchingPaths: new Set(matchingPaths),
+      forceExpand,
+    };
+  }
+
+  getHierarchyParentItems(query = '', currentNotePath = '') {
     const parsed = parseHierarchySearch(query);
     if (!parsed.valid) return [];
-    const { parentQuery, childQuery } = parsed;
     const hierarchy = this.getNoteHierarchySettings();
     const items = [];
-    for (const [parentPath, childPaths] of Object.entries(hierarchy.childrenByParentPath)) {
-      const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
-      if (!(parentFile instanceof TFile) || parentFile.extension !== 'md' || !Array.isArray(childPaths) || !childPaths.length) continue;
-      const parentNames = [parentFile.basename, ...this.getNoteAliases(parentFile)].map((name) => name.toLowerCase());
-      if (parentQuery && !parentNames.some((name) => name.includes(parentQuery))) continue;
-      const descendants = this.getHierarchyDescendants(parentPath);
-      const matchingPaths = childQuery ? descendants.filter((path) => {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (!(file instanceof TFile)) return false;
-        const directParents = this.getHierarchyParents(path);
-        const names = [file.basename, ...this.getNoteAliases(file)];
-        for (const directParent of directParents) {
-          names.push(this.getHierarchyDisplayName(directParent, file));
-        }
-        return names.some((name) => String(name).toLowerCase().includes(childQuery));
-      }) : [];
-      if (childQuery && !matchingPaths.length) continue;
-      const directCount = this.getHierarchyChildren(parentPath).filter((path) => {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        return file instanceof TFile && file.extension === 'md';
-      }).length;
-      const descendantCount = new Set(descendants.filter((path) => {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        return file instanceof TFile && file.extension === 'md';
-      })).size;
-      items.push({
-        parentPath,
-        parentFile,
-        directCount,
-        descendantCount,
-        additionalCount: Math.max(0, descendantCount - directCount),
-        matchingPaths: new Set(matchingPaths),
-        forceExpand: !!childQuery,
-      });
+    const currentFile = currentNotePath && this.app.vault.getAbstractFileByPath(currentNotePath);
+    if (!(currentFile instanceof TFile) || currentFile.extension !== 'md') currentNotePath = '';
+
+    if (currentNotePath) {
+      const parentPaths = new Set();
+      if (this.getHierarchyChildren(currentNotePath).length) parentPaths.add(currentNotePath);
+      for (const parentPath of this.getHierarchyParents(currentNotePath)) parentPaths.add(parentPath);
+      for (const parentPath of parentPaths) {
+        const isCurrentChild = parentPath !== currentNotePath && this.getHierarchyChildren(parentPath).includes(currentNotePath);
+        const item = this.createHierarchyParentItem(
+          parentPath,
+          isCurrentChild ? [currentNotePath] : [],
+          isCurrentChild
+        );
+        if (item) items.push(item);
+      }
+    } else {
+      const { parentQuery, childQuery } = parsed;
+      for (const [parentPath, childPaths] of Object.entries(hierarchy.childrenByParentPath)) {
+        const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
+        if (!(parentFile instanceof TFile) || parentFile.extension !== 'md' || !Array.isArray(childPaths) || !childPaths.length) continue;
+        const parentNames = [parentFile.basename, ...this.getNoteAliases(parentFile)].map((name) => name.toLowerCase());
+        if (parentQuery && !parentNames.some((name) => name.includes(parentQuery))) continue;
+        const descendants = this.getHierarchyDescendants(parentPath);
+        const matchingPaths = childQuery ? descendants.filter((path) => {
+          const file = this.app.vault.getAbstractFileByPath(path);
+          if (!(file instanceof TFile)) return false;
+          const directParents = this.getHierarchyParents(path);
+          const names = [file.basename, ...this.getNoteAliases(file)];
+          for (const directParent of directParents) {
+            names.push(this.getHierarchyDisplayName(directParent, file));
+          }
+          return names.some((name) => String(name).toLowerCase().includes(childQuery));
+        }) : [];
+        if (childQuery && !matchingPaths.length) continue;
+        const item = this.createHierarchyParentItem(parentPath, matchingPaths, !!childQuery);
+        if (item) items.push(item);
+      }
     }
     items.sort((a, b) => compareHierarchyParentItems(
       { directCount: a.directCount, name: a.parentFile.basename },
@@ -324,6 +351,7 @@ export class RelationsBehavior {
   createHierarchySurfaceState() {
     return {
       query: '',
+      currentNotePath: '',
       allExpanded: true,
       expandedParents: new Set(),
       expandedBranches: new Set(),
@@ -335,7 +363,13 @@ export class RelationsBehavior {
   }
 
   getHierarchySearchContext(value) {
-    return parseUnifiedHierarchySearch(value);
+    const context = parseUnifiedHierarchySearch(value);
+    if (context.mode !== 'current-note') return { ...context, currentNotePath: '' };
+    const file = this.currentMainFilePath && this.app.vault.getAbstractFileByPath(this.currentMainFilePath);
+    return {
+      ...context,
+      currentNotePath: file instanceof TFile && file.extension === 'md' ? file.path : '',
+    };
   }
 
   getHierarchyEdgeCount() {
@@ -646,7 +680,7 @@ export class RelationsBehavior {
     const listEl = hostEl.createDiv({ cls: 'puffs-note-hierarchy-list' });
     const renderList = () => {
       listEl.empty();
-      const items = this.getHierarchyParentItems(state.query);
+      const items = this.getHierarchyParentItems(state.query, state.currentNotePath);
       if (!items.length) {
         listEl.createDiv({ text: state.query ? '没有匹配的父子关系。' : '暂无父子笔记关系。', cls: 'puffs-relation-empty' });
         return;

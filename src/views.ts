@@ -323,6 +323,7 @@ class PuffsTagShelfView extends ItemView {
       this.clearAutoExpandedTag();
       this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
       this.hierarchyState.query = hierarchySearch.query;
+      this.hierarchyState.currentNotePath = hierarchySearch.currentNotePath;
       this.hierarchyState.activeMatchIndex = -1;
       this.summaryTagCountEl.textContent = '0 个';
       this.summaryNoteCountEl.textContent = '0 篇';

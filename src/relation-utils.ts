@@ -68,17 +68,19 @@ export function getHierarchySearchKeywordError(_value: unknown, _tagValues: Iter
 export function parseUnifiedHierarchySearch(value: unknown, _keywordValue?: unknown): {
   matched: boolean;
   query: string;
+  mode: 'query' | 'current-note';
 } {
   const text = String(value ?? '').trim();
-  if (text === '=') return { matched: true, query: '' };
-  if (!text.startsWith('=')) return { matched: false, query: '' };
+  if (text === '=') return { matched: true, query: '', mode: 'query' };
+  if (text === '==') return { matched: true, query: '', mode: 'current-note' };
+  if (!text.startsWith('=')) return { matched: false, query: '', mode: 'query' };
 
   if (text.startsWith('==')) {
     const childQuery = text.slice(2).trim();
-    if (!childQuery || childQuery.includes('=') || childQuery.includes('*')) {
-      return { matched: false, query: '' };
+    if (childQuery.includes('=') || childQuery.includes('*')) {
+      return { matched: false, query: '', mode: 'query' };
     }
-    return { matched: true, query: `*${childQuery}` };
+    return { matched: true, query: `*${childQuery}`, mode: 'query' };
   }
 
   const query = text.slice(1).trim();
@@ -89,9 +91,9 @@ export function parseUnifiedHierarchySearch(value: unknown, _keywordValue?: unkn
     delimiter === 0 ||
     (delimiter >= 0 && (delimiter !== query.lastIndexOf('*') || !query.slice(delimiter + 1).trim()))
   ) {
-    return { matched: false, query: '' };
+    return { matched: false, query: '', mode: 'query' };
   }
-  return { matched: true, query };
+  return { matched: true, query, mode: 'query' };
 }
 
 export type VisibleHierarchyForest = {

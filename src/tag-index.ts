@@ -32,6 +32,10 @@ export class TagIndexBehavior {
         this.refreshTagViews();
       })
     );
+
+    this.registerEvent(
+      this.app.workspace.on('file-open', (file) => this.handleWorkspaceFileOpen(file))
+    );
   }
 
   registerMetadataHandlers() {

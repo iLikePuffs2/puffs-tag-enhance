@@ -431,6 +431,7 @@ export class TagPaneBehavior {
       if (hierarchySearch.matched) {
         if (!hierarchyWasActive) patch.hierarchyState.groupExpanded = true;
         patch.hierarchyState.query = hierarchySearch.query;
+        patch.hierarchyState.currentNotePath = hierarchySearch.currentNotePath;
         patch.hierarchyState.activeMatchIndex = -1;
         view.searchQuery = createMultiTagSearchQuery(rawQuery, []);
         if (typeof view.updateTags === 'function') view.updateTags();
@@ -563,6 +564,7 @@ export class TagPaneBehavior {
       patch.hierarchySearchActive = hierarchySearch.matched;
       if (patch.hierarchySearchActive && !hierarchyWasActive) patch.hierarchyState.groupExpanded = true;
       patch.hierarchyState.query = hierarchySearch.query;
+      patch.hierarchyState.currentNotePath = hierarchySearch.currentNotePath;
       if (patch.hierarchySearchActive) {
         this.renderSidebarHierarchyPage(view, patch);
         return;
