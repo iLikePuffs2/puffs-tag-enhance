@@ -2,6 +2,13 @@
 import { Modal, Notice, TFile, setIcon } from "obsidian";
 import { getTagDisplayName, normalizeTag } from "./models";
 
+function getDirectionalInputSide(activeSide, key, visibleSides) {
+  if (!Array.isArray(visibleSides) || visibleSides.length < 2) return null;
+  if (key === 'ArrowDown' && activeSide === 'parent' && visibleSides.includes('child')) return 'child';
+  if (key === 'ArrowUp' && activeSide === 'child' && visibleSides.includes('parent')) return 'parent';
+  return null;
+}
+
 class AddParentTagModal extends Modal {
   constructor(app, plugin, childTag) {
     super(app);
@@ -315,6 +322,17 @@ class NoteRelationModal extends Modal {
     for (const side of visibleSides) {
       inputBySide[side].addEventListener('keydown', (event) => {
         if (this.isComposing || event.isComposing) return;
+        if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && visibleSides.length > 1) {
+          const focusSide = getDirectionalInputSide(this.activeSide, event.key, visibleSides);
+          event.preventDefault();
+          event.stopPropagation();
+          if (focusSide) {
+            this.activeSide = focusSide;
+            this.activeIndex = 0;
+            inputBySide[focusSide].focus();
+          }
+          return;
+        }
         const rows = Array.from(resultsEl.querySelectorAll('.puffs-relation-note-result'));
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && rows.length) {
           const delta = event.key === 'ArrowDown' ? 1 : -1;
@@ -344,4 +362,4 @@ class NoteRelationModal extends Modal {
   }
 }
 
-export { AddParentTagModal, NoteRelationModal, TagInheritanceModal };
+export { AddParentTagModal, NoteRelationModal, TagInheritanceModal, getDirectionalInputSide };

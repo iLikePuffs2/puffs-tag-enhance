@@ -3481,6 +3481,7 @@ var TagPaneBehavior = class {
     if (!buttonEl) return;
     (0, import_obsidian9.setIcon)(buttonEl, patch.hierarchyState.allExpanded ? "chevrons-down-up" : "chevrons-up-down");
     buttonEl.setAttribute("aria-label", patch.hierarchyState.allExpanded ? "\u5168\u90E8\u6536\u8D77" : "\u5168\u90E8\u5C55\u5F00");
+    buttonEl.removeAttribute("aria-disabled");
   }
   renderSidebarHierarchyPage(view, patch) {
     const tagPaneEl = view.tagPaneEl || view.containerEl.querySelector(".tag-container");
@@ -3990,6 +3991,12 @@ var import_obsidian11 = require("obsidian");
 
 // src/relation-modals.ts
 var import_obsidian10 = require("obsidian");
+function getDirectionalInputSide(activeSide, key, visibleSides) {
+  if (!Array.isArray(visibleSides) || visibleSides.length < 2) return null;
+  if (key === "ArrowDown" && activeSide === "parent" && visibleSides.includes("child")) return "child";
+  if (key === "ArrowUp" && activeSide === "child" && visibleSides.includes("parent")) return "parent";
+  return null;
+}
 var AddParentTagModal = class extends import_obsidian10.Modal {
   constructor(app, plugin, childTag) {
     super(app);
@@ -4284,6 +4291,17 @@ var NoteRelationModal = class extends import_obsidian10.Modal {
     for (const side of visibleSides) {
       inputBySide[side].addEventListener("keydown", (event) => {
         if (this.isComposing || event.isComposing) return;
+        if ((event.key === "ArrowDown" || event.key === "ArrowUp") && visibleSides.length > 1) {
+          const focusSide = getDirectionalInputSide(this.activeSide, event.key, visibleSides);
+          event.preventDefault();
+          event.stopPropagation();
+          if (focusSide) {
+            this.activeSide = focusSide;
+            this.activeIndex = 0;
+            inputBySide[focusSide].focus();
+          }
+          return;
+        }
         const rows = Array.from(resultsEl.querySelectorAll(".puffs-relation-note-result"));
         if ((event.key === "ArrowDown" || event.key === "ArrowUp") && rows.length) {
           const delta = event.key === "ArrowDown" ? 1 : -1;
@@ -4584,6 +4602,8 @@ var RelationsBehavior = class {
       allExpanded: true,
       expandedParents: /* @__PURE__ */ new Set(),
       expandedBranches: /* @__PURE__ */ new Set(),
+      collapsedParents: /* @__PURE__ */ new Set(),
+      collapsedBranches: /* @__PURE__ */ new Set(),
       activeMatchIndex: -1,
       groupExpanded: true
     };
@@ -4814,10 +4834,13 @@ var RelationsBehavior = class {
     }
   }
   resetHierarchyExpansionState(state) {
+    var _a, _b;
     if (!state) return;
     state.allExpanded = true;
     state.expandedParents.clear();
     state.expandedBranches.clear();
+    (_a = state.collapsedParents) == null ? void 0 : _a.clear();
+    (_b = state.collapsedBranches) == null ? void 0 : _b.clear();
   }
   toggleHierarchyGroup(state) {
     if (!state) return false;
@@ -4826,11 +4849,32 @@ var RelationsBehavior = class {
     return state.groupExpanded;
   }
   toggleAllHierarchyItems(state) {
+    var _a, _b;
     state.allExpanded = !state.allExpanded;
     state.expandedParents.clear();
     state.expandedBranches.clear();
+    (_a = state.collapsedParents) == null ? void 0 : _a.clear();
+    (_b = state.collapsedBranches) == null ? void 0 : _b.clear();
     if (typeof state.renderList === "function") state.renderList();
     return state.allExpanded;
+  }
+  isHierarchyItemExpanded(state, key, kind, forceExpanded = false) {
+    if (forceExpanded) return true;
+    const expandedSet = kind === "parent" ? state.expandedParents : state.expandedBranches;
+    const collapsedSet = kind === "parent" ? state.collapsedParents || (state.collapsedParents = /* @__PURE__ */ new Set()) : state.collapsedBranches || (state.collapsedBranches = /* @__PURE__ */ new Set());
+    return state.allExpanded ? !collapsedSet.has(key) : expandedSet.has(key);
+  }
+  toggleHierarchyItemExpansion(state, key, kind) {
+    const expandedSet = kind === "parent" ? state.expandedParents : state.expandedBranches;
+    const collapsedSet = kind === "parent" ? state.collapsedParents || (state.collapsedParents = /* @__PURE__ */ new Set()) : state.collapsedBranches || (state.collapsedBranches = /* @__PURE__ */ new Set());
+    if (state.allExpanded) {
+      if (collapsedSet.has(key)) collapsedSet.delete(key);
+      else collapsedSet.add(key);
+      return !collapsedSet.has(key);
+    }
+    if (expandedSet.has(key)) expandedSet.delete(key);
+    else expandedSet.add(key);
+    return expandedSet.has(key);
   }
   renderNoteHierarchyPage(hostEl, state, options = {}) {
     hostEl.empty();
@@ -4883,7 +4927,7 @@ var RelationsBehavior = class {
     state.handleSearchEnter = handleSearchEnter;
   }
   renderHierarchyParentItem(listEl, item, state, rerender, surface) {
-    const expanded = item.forceExpand || state.allExpanded || state.expandedParents.has(item.parentPath);
+    const expanded = this.isHierarchyItemExpanded(state, item.parentPath, "parent", item.forceExpand);
     const treeEl = listEl.createDiv({ cls: "tree-item puffs-note-hierarchy-parent" });
     const rowEl = treeEl.createDiv({ cls: "tree-item-self is-clickable mod-collapsible puffs-note-hierarchy-parent-row" });
     const toggleEl = rowEl.createDiv({ cls: "tree-item-icon collapse-icon" });
@@ -4903,8 +4947,7 @@ var RelationsBehavior = class {
       cls: "tree-item-flair tag-pane-tag-count"
     });
     rowEl.addEventListener("click", () => {
-      if (state.expandedParents.has(item.parentPath)) state.expandedParents.delete(item.parentPath);
-      else state.expandedParents.add(item.parentPath);
+      this.toggleHierarchyItemExpansion(state, item.parentPath, "parent");
       rerender();
     });
     rowEl.addEventListener("contextmenu", (event) => {
@@ -4926,7 +4969,7 @@ var RelationsBehavior = class {
       const branchKey = `${rootPath}\0${parentPath}\0${childPath}`;
       const hasChildren = this.getHierarchyChildren(childPath).length > 0;
       const forceOpen = Array.from(matchingPaths).some((path) => path === childPath || this.getHierarchyDescendants(childPath).includes(path));
-      const expanded = forceOpen || state.allExpanded || state.expandedBranches.has(branchKey);
+      const expanded = this.isHierarchyItemExpanded(state, branchKey, "branch", forceOpen);
       const itemEl = containerEl.createDiv({ cls: "tree-item puffs-tag-note-item puffs-note-hierarchy-child-item" });
       const cardEl = itemEl.createDiv({ cls: "tree-item-self puffs-tag-note-card is-clickable puffs-note-hierarchy-child-card" });
       cardEl.dataset.path = file.path;
@@ -4951,8 +4994,7 @@ var RelationsBehavior = class {
         toggleEl.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (state.expandedBranches.has(branchKey)) state.expandedBranches.delete(branchKey);
-          else state.expandedBranches.add(branchKey);
+          this.toggleHierarchyItemExpansion(state, branchKey, "branch");
           rerender();
         });
       }

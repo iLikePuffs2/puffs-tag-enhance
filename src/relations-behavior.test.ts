@@ -100,8 +100,25 @@ describe('批量父子关系', () => {
     expect(state.allExpanded).toBe(true);
     expect(state.expandedParents.size).toBe(0);
     expect(state.expandedBranches.size).toBe(0);
+    expect(state.collapsedParents.size).toBe(0);
+    expect(state.collapsedBranches.size).toBe(0);
     expect(behavior.toggleHierarchyGroup(state)).toBe(true);
     expect(state.allExpanded).toBe(true);
+  });
+
+  it('全部展开模式下仍可单独折叠和重新展开父笔记及中间分支', () => {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    const state = behavior.createHierarchySurfaceState();
+
+    expect(behavior.isHierarchyItemExpanded(state, '父.md', 'parent')).toBe(true);
+    expect(behavior.toggleHierarchyItemExpansion(state, '父.md', 'parent')).toBe(false);
+    expect(behavior.isHierarchyItemExpanded(state, '父.md', 'parent')).toBe(false);
+    expect(behavior.toggleHierarchyItemExpansion(state, '父.md', 'parent')).toBe(true);
+
+    const branchKey = '父.md\u0000子.md';
+    expect(behavior.isHierarchyItemExpanded(state, branchKey, 'branch')).toBe(true);
+    expect(behavior.toggleHierarchyItemExpansion(state, branchKey, 'branch')).toBe(false);
+    expect(behavior.isHierarchyItemExpanded(state, branchKey, 'branch')).toBe(false);
   });
 
   it('标签内父子分支默认展开，手动收起状态在标签关闭后清除', () => {

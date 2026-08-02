@@ -327,6 +327,8 @@ export class RelationsBehavior {
       allExpanded: true,
       expandedParents: new Set(),
       expandedBranches: new Set(),
+      collapsedParents: new Set(),
+      collapsedBranches: new Set(),
       activeMatchIndex: -1,
       groupExpanded: true,
     };
@@ -580,6 +582,8 @@ export class RelationsBehavior {
     state.allExpanded = true;
     state.expandedParents.clear();
     state.expandedBranches.clear();
+    state.collapsedParents?.clear();
+    state.collapsedBranches?.clear();
   }
 
   toggleHierarchyGroup(state) {
@@ -593,8 +597,34 @@ export class RelationsBehavior {
     state.allExpanded = !state.allExpanded;
     state.expandedParents.clear();
     state.expandedBranches.clear();
+    state.collapsedParents?.clear();
+    state.collapsedBranches?.clear();
     if (typeof state.renderList === 'function') state.renderList();
     return state.allExpanded;
+  }
+
+  isHierarchyItemExpanded(state, key, kind, forceExpanded = false) {
+    if (forceExpanded) return true;
+    const expandedSet = kind === 'parent' ? state.expandedParents : state.expandedBranches;
+    const collapsedSet = kind === 'parent'
+      ? (state.collapsedParents ||= new Set())
+      : (state.collapsedBranches ||= new Set());
+    return state.allExpanded ? !collapsedSet.has(key) : expandedSet.has(key);
+  }
+
+  toggleHierarchyItemExpansion(state, key, kind) {
+    const expandedSet = kind === 'parent' ? state.expandedParents : state.expandedBranches;
+    const collapsedSet = kind === 'parent'
+      ? (state.collapsedParents ||= new Set())
+      : (state.collapsedBranches ||= new Set());
+    if (state.allExpanded) {
+      if (collapsedSet.has(key)) collapsedSet.delete(key);
+      else collapsedSet.add(key);
+      return !collapsedSet.has(key);
+    }
+    if (expandedSet.has(key)) expandedSet.delete(key);
+    else expandedSet.add(key);
+    return expandedSet.has(key);
   }
 
   renderNoteHierarchyPage(hostEl, state, options = {}) {
@@ -647,7 +677,7 @@ export class RelationsBehavior {
   }
 
   renderHierarchyParentItem(listEl, item, state, rerender, surface) {
-    const expanded = item.forceExpand || state.allExpanded || state.expandedParents.has(item.parentPath);
+    const expanded = this.isHierarchyItemExpanded(state, item.parentPath, 'parent', item.forceExpand);
     const treeEl = listEl.createDiv({ cls: 'tree-item puffs-note-hierarchy-parent' });
     const rowEl = treeEl.createDiv({ cls: 'tree-item-self is-clickable mod-collapsible puffs-note-hierarchy-parent-row' });
     const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon' });
@@ -667,8 +697,7 @@ export class RelationsBehavior {
       cls: 'tree-item-flair tag-pane-tag-count',
     });
     rowEl.addEventListener('click', () => {
-      if (state.expandedParents.has(item.parentPath)) state.expandedParents.delete(item.parentPath);
-      else state.expandedParents.add(item.parentPath);
+      this.toggleHierarchyItemExpansion(state, item.parentPath, 'parent');
       rerender();
     });
     rowEl.addEventListener('contextmenu', (event) => {
@@ -691,7 +720,7 @@ export class RelationsBehavior {
       const branchKey = `${rootPath}\u0000${parentPath}\u0000${childPath}`;
       const hasChildren = this.getHierarchyChildren(childPath).length > 0;
       const forceOpen = Array.from(matchingPaths).some((path) => path === childPath || this.getHierarchyDescendants(childPath).includes(path));
-      const expanded = forceOpen || state.allExpanded || state.expandedBranches.has(branchKey);
+      const expanded = this.isHierarchyItemExpanded(state, branchKey, 'branch', forceOpen);
       const itemEl = containerEl.createDiv({ cls: 'tree-item puffs-tag-note-item puffs-note-hierarchy-child-item' });
       const cardEl = itemEl.createDiv({ cls: 'tree-item-self puffs-tag-note-card is-clickable puffs-note-hierarchy-child-card' });
       cardEl.dataset.path = file.path;
@@ -716,8 +745,7 @@ export class RelationsBehavior {
         toggleEl.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (state.expandedBranches.has(branchKey)) state.expandedBranches.delete(branchKey);
-          else state.expandedBranches.add(branchKey);
+          this.toggleHierarchyItemExpansion(state, branchKey, 'branch');
           rerender();
         });
       }

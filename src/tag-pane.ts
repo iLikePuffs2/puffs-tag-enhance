@@ -695,6 +695,7 @@ export class TagPaneBehavior {
     if (!buttonEl) return;
     setIcon(buttonEl, patch.hierarchyState.allExpanded ? 'chevrons-down-up' : 'chevrons-up-down');
     buttonEl.setAttribute('aria-label', patch.hierarchyState.allExpanded ? '全部收起' : '全部展开');
+    buttonEl.removeAttribute('aria-disabled');
   }
 
   renderSidebarHierarchyPage(view, patch) {
