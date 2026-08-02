@@ -138,7 +138,10 @@ class PuffsTagShelfView extends ItemView {
         const shouldExpand = items.some((item) => !this.expandedTags.has(item.tag));
         for (const item of items) {
           if (shouldExpand) this.expandedTags.add(item.tag);
-          else this.expandedTags.delete(item.tag);
+          else {
+            this.expandedTags.delete(item.tag);
+            this.plugin.clearInlineHierarchyBranchState(item.tag);
+          }
         }
         this.renderTagList();
       }
@@ -344,9 +347,12 @@ class PuffsTagShelfView extends ItemView {
     } else {
       this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
       if (!noteCardSearch || noteCardSearch.isTagOnly) {
+        const autoExpandItems = this.plugin.settings.pinnedTag && !effectiveQuery.trim()
+          ? items
+          : matchingItems;
         this.syncAutoSingleSearchResult(
           noteCardSearch ? noteCardSearch.tagQuery : effectiveQuery,
-          matchingItems
+          autoExpandItems
         );
       } else {
         this.clearAutoExpandedTag();
@@ -391,7 +397,7 @@ class PuffsTagShelfView extends ItemView {
   }
 
   syncAutoSingleSearchResult(query, items) {
-    if (!query || items.length !== 1) {
+    if ((!query && !this.plugin.isPinnedOnlyTagResult(query, items)) || items.length !== 1) {
       this.clearAutoExpandedTag();
       return;
     }
@@ -410,6 +416,7 @@ class PuffsTagShelfView extends ItemView {
 
     if (!this.autoExpandedWasAlreadyExpanded) {
       this.expandedTags.delete(this.autoExpandedTag);
+      this.plugin.clearInlineHierarchyBranchState(this.autoExpandedTag);
     }
 
     this.autoExpandedTag = null;
@@ -511,8 +518,12 @@ class PuffsTagShelfView extends ItemView {
     treeItemEl.appendChild(tagEl);
 
     tagEl.addEventListener('click', () => {
-      if (this.expandedTags.has(tag)) this.expandedTags.delete(tag);
-      else this.expandedTags.add(tag);
+      if (this.expandedTags.has(tag)) {
+        this.expandedTags.delete(tag);
+        this.plugin.clearInlineHierarchyBranchState(tag);
+      } else {
+        this.expandedTags.add(tag);
+      }
       this.renderTagList();
     });
 

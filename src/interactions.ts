@@ -42,6 +42,14 @@ export class InteractionsBehavior {
       .map(({ file }) => file);
   }
 
+  getOrderedRootFilesForTag(tagValue, files) {
+    const orderedFiles = this.getOrderedFilesForTag(tagValue, files);
+    const visiblePaths = new Set(orderedFiles.map((file) => file.path));
+    return orderedFiles.filter((file) =>
+      !this.getHierarchyParents(file.path).some((parentPath) => visiblePaths.has(parentPath))
+    );
+  }
+
   getNoteAliases(file) {
     if (!(file instanceof TFile) || file.extension !== 'md') return [];
 
@@ -217,10 +225,21 @@ export class InteractionsBehavior {
       ...(matchingItem || pinnedItem),
       isPinnedExtra: !matchingItem,
     };
+    if (!String(query || '').trim()) return [positionedPinnedItem];
     const isNonNoteSearch = String(query || '').trim() && !String(query || '').includes('*');
     return isNonNoteSearch
       ? [...remainingItems, positionedPinnedItem]
       : [positionedPinnedItem, ...remainingItems];
+  }
+
+  isPinnedOnlyTagResult(query, items) {
+    const pinnedTag = normalizeTag(this.settings.pinnedTag);
+    return !!(
+      pinnedTag &&
+      !String(query || '').trim() &&
+      items.length === 1 &&
+      items[0].tag === pinnedTag
+    );
   }
 
   async togglePinnedTag(tagValue) {
@@ -350,6 +369,7 @@ export class InteractionsBehavior {
     if (!state || !state.autoExpandedTag) return;
     if (!state.autoExpandedWasAlreadyExpanded) {
       expandedTags.delete(state.autoExpandedTag);
+      this.clearInlineHierarchyBranchState(state.autoExpandedTag);
     }
     state.autoExpandedTag = null;
     state.autoExpandedWasAlreadyExpanded = false;
@@ -606,7 +626,7 @@ export class InteractionsBehavior {
       return true;
     }
 
-    const files = this.getOrderedFilesForTag(target.tag, this.tagFileIndex.get(target.tag) || []);
+    const files = this.getOrderedRootFilesForTag(target.tag, this.tagFileIndex.get(target.tag) || []);
     const currentIndex = files.findIndex((file) => file.path === target.path);
     if (currentIndex < 0) {
       this.clearNoteOrderTarget();

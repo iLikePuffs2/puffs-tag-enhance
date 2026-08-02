@@ -328,6 +328,7 @@ export class TagIndexBehavior {
     for (const tag of Array.from(this.expandedTags)) {
       if (!String(tag).startsWith('intersection:') && !this.tagFileIndex.has(tag)) {
         this.expandedTags.delete(tag);
+        this.clearInlineHierarchyBranchState(tag);
       }
     }
   }
@@ -380,6 +381,8 @@ export class TagIndexBehavior {
       }
 
       if (this.expandedTags.delete(oldTag)) {
+        this.clearInlineHierarchyBranchState(oldTag);
+        this.clearInlineHierarchyBranchState(newTag);
         this.expandedTags.add(newTag);
       }
       if (this.settings.pinnedTag === oldTag) {

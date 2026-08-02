@@ -646,7 +646,10 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
         const shouldExpand = items.some((item) => !this.expandedTags.has(item.tag));
         for (const item of items) {
           if (shouldExpand) this.expandedTags.add(item.tag);
-          else this.expandedTags.delete(item.tag);
+          else {
+            this.expandedTags.delete(item.tag);
+            this.plugin.clearInlineHierarchyBranchState(item.tag);
+          }
         }
         this.renderTagList();
       }
@@ -833,9 +836,10 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     } else {
       this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
       if (!noteCardSearch || noteCardSearch.isTagOnly) {
+        const autoExpandItems = this.plugin.settings.pinnedTag && !effectiveQuery.trim() ? items : matchingItems;
         this.syncAutoSingleSearchResult(
           noteCardSearch ? noteCardSearch.tagQuery : effectiveQuery,
-          matchingItems
+          autoExpandItems
         );
       } else {
         this.clearAutoExpandedTag();
@@ -875,7 +879,7 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     this.summaryNoteCountEl.textContent = `${uniqueNotePaths.size} \u7BC7`;
   }
   syncAutoSingleSearchResult(query, items) {
-    if (!query || items.length !== 1) {
+    if (!query && !this.plugin.isPinnedOnlyTagResult(query, items) || items.length !== 1) {
       this.clearAutoExpandedTag();
       return;
     }
@@ -890,6 +894,7 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     if (!this.autoExpandedTag) return;
     if (!this.autoExpandedWasAlreadyExpanded) {
       this.expandedTags.delete(this.autoExpandedTag);
+      this.plugin.clearInlineHierarchyBranchState(this.autoExpandedTag);
     }
     this.autoExpandedTag = null;
     this.autoExpandedWasAlreadyExpanded = false;
@@ -976,8 +981,12 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
     tagEl.addEventListener("click", () => {
-      if (this.expandedTags.has(tag)) this.expandedTags.delete(tag);
-      else this.expandedTags.add(tag);
+      if (this.expandedTags.has(tag)) {
+        this.expandedTags.delete(tag);
+        this.plugin.clearInlineHierarchyBranchState(tag);
+      } else {
+        this.expandedTags.add(tag);
+      }
       this.renderTagList();
     });
     tagEl.addEventListener("contextmenu", (event) => {
@@ -1327,6 +1336,13 @@ var InteractionsBehavior = class {
       return a.index - b.index;
     }).map(({ file }) => file);
   }
+  getOrderedRootFilesForTag(tagValue, files) {
+    const orderedFiles = this.getOrderedFilesForTag(tagValue, files);
+    const visiblePaths = new Set(orderedFiles.map((file) => file.path));
+    return orderedFiles.filter(
+      (file) => !this.getHierarchyParents(file.path).some((parentPath) => visiblePaths.has(parentPath))
+    );
+  }
   getNoteAliases(file) {
     if (!(file instanceof import_obsidian5.TFile) || file.extension !== "md") return [];
     const cache = this.app.metadataCache.getFileCache(file);
@@ -1459,8 +1475,13 @@ var InteractionsBehavior = class {
       ...matchingItem || pinnedItem,
       isPinnedExtra: !matchingItem
     };
+    if (!String(query || "").trim()) return [positionedPinnedItem];
     const isNonNoteSearch = String(query || "").trim() && !String(query || "").includes("*");
     return isNonNoteSearch ? [...remainingItems, positionedPinnedItem] : [positionedPinnedItem, ...remainingItems];
+  }
+  isPinnedOnlyTagResult(query, items) {
+    const pinnedTag = normalizeTag(this.settings.pinnedTag);
+    return !!(pinnedTag && !String(query || "").trim() && items.length === 1 && items[0].tag === pinnedTag);
   }
   async togglePinnedTag(tagValue) {
     const tag = normalizeTag(tagValue);
@@ -1564,6 +1585,7 @@ var InteractionsBehavior = class {
     if (!state || !state.autoExpandedTag) return;
     if (!state.autoExpandedWasAlreadyExpanded) {
       expandedTags.delete(state.autoExpandedTag);
+      this.clearInlineHierarchyBranchState(state.autoExpandedTag);
     }
     state.autoExpandedTag = null;
     state.autoExpandedWasAlreadyExpanded = false;
@@ -1762,7 +1784,7 @@ var InteractionsBehavior = class {
       }, 0);
       return true;
     }
-    const files = this.getOrderedFilesForTag(target.tag, this.tagFileIndex.get(target.tag) || []);
+    const files = this.getOrderedRootFilesForTag(target.tag, this.tagFileIndex.get(target.tag) || []);
     const currentIndex = files.findIndex((file) => file.path === target.path);
     if (currentIndex < 0) {
       this.clearNoteOrderTarget();
@@ -2625,6 +2647,7 @@ var TagIndexBehavior = class {
     for (const tag of Array.from(this.expandedTags)) {
       if (!String(tag).startsWith("intersection:") && !this.tagFileIndex.has(tag)) {
         this.expandedTags.delete(tag);
+        this.clearInlineHierarchyBranchState(tag);
       }
     }
   }
@@ -2668,6 +2691,8 @@ var TagIndexBehavior = class {
         await this.renameTagInFile(file, oldTag, newTag);
       }
       if (this.expandedTags.delete(oldTag)) {
+        this.clearInlineHierarchyBranchState(oldTag);
+        this.clearInlineHierarchyBranchState(newTag);
         this.expandedTags.add(newTag);
       }
       if (this.settings.pinnedTag === oldTag) {
@@ -3510,6 +3535,7 @@ var TagPaneBehavior = class {
     return true;
   }
   renderListMode(view) {
+    var _a, _b;
     const listEl = this.ensureListModeContainer(view);
     if (!listEl) return;
     const rawQuery = this.getTagSearchValue(view);
@@ -3527,7 +3553,8 @@ var TagPaneBehavior = class {
       } else {
         this.clearNoteCardSearchState(patch.noteCardSearchState);
         if (!noteCardSearch || noteCardSearch.isTagOnly) {
-          this.syncAutoSingleSearchResult(view, patch, matchingItems, effectiveQuery);
+          const autoExpandItems = this.settings.pinnedTag && !effectiveQuery.trim() ? items : matchingItems;
+          this.syncAutoSingleSearchResult(view, patch, autoExpandItems, effectiveQuery);
         } else {
           this.clearAutoExpandedTag(patch);
         }
@@ -3536,6 +3563,7 @@ var TagPaneBehavior = class {
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
     const signature = JSON.stringify([
       this.inlineHierarchyExpansionVersion || 0,
+      ((_b = (_a = patch == null ? void 0 : patch.noteCardSearchState) == null ? void 0 : _a.target) == null ? void 0 : _b.key) || "",
       items.map((item) => [
         item.tag,
         item.displayName,
@@ -3574,7 +3602,7 @@ var TagPaneBehavior = class {
     this.getTagSearchValue(view)
   )) {
     const query = getTagFilterQuery(queryValue).trim();
-    if (!query || items.length !== 1) {
+    if (!query && !this.isPinnedOnlyTagResult(queryValue, items) || items.length !== 1) {
       this.clearAutoExpandedTag(patch);
       return;
     }
@@ -3589,6 +3617,7 @@ var TagPaneBehavior = class {
     if (!patch.autoExpandedTag) return;
     if (!patch.autoExpandedWasAlreadyExpanded) {
       this.expandedTags.delete(patch.autoExpandedTag);
+      this.clearInlineHierarchyBranchState(patch.autoExpandedTag);
     }
     patch.autoExpandedTag = null;
     patch.autoExpandedWasAlreadyExpanded = false;
@@ -3597,6 +3626,7 @@ var TagPaneBehavior = class {
     for (const tag of Array.from(this.expandedTags)) {
       if (String(tag).startsWith("intersection:") && !validTags.has(tag)) {
         this.expandedTags.delete(tag);
+        this.clearInlineHierarchyBranchState(tag);
       }
     }
   }
@@ -3908,6 +3938,7 @@ var TagPaneBehavior = class {
     if (!tag) return;
     if (this.expandedTags.has(tag)) {
       this.expandedTags.delete(tag);
+      this.clearInlineHierarchyBranchState(tag);
     } else {
       this.expandedTags.add(tag);
     }
@@ -3922,6 +3953,7 @@ var TagPaneBehavior = class {
         this.expandedTags.add(item.tag);
       } else {
         this.expandedTags.delete(item.tag);
+        this.clearInlineHierarchyBranchState(item.tag);
       }
     }
     this.scheduleSyncView(view, 0);
@@ -4562,7 +4594,7 @@ var RelationsBehavior = class {
   createHierarchySurfaceState() {
     return {
       query: "",
-      allExpanded: false,
+      allExpanded: true,
       expandedParents: /* @__PURE__ */ new Set(),
       expandedBranches: /* @__PURE__ */ new Set(),
       activeMatchIndex: -1,
@@ -4592,13 +4624,29 @@ var RelationsBehavior = class {
   }
   toggleInlineHierarchyBranch(branchKey) {
     if (!branchKey) return false;
-    if (this.expandedInlineHierarchyBranches.has(branchKey)) {
-      this.expandedInlineHierarchyBranches.delete(branchKey);
+    const collapsedBranches = this.collapsedInlineHierarchyBranches || /* @__PURE__ */ new Set();
+    this.collapsedInlineHierarchyBranches = collapsedBranches;
+    if (collapsedBranches.has(branchKey)) {
+      collapsedBranches.delete(branchKey);
     } else {
-      this.expandedInlineHierarchyBranches.add(branchKey);
+      collapsedBranches.add(branchKey);
     }
     this.inlineHierarchyExpansionVersion = (this.inlineHierarchyExpansionVersion || 0) + 1;
-    return this.expandedInlineHierarchyBranches.has(branchKey);
+    return !collapsedBranches.has(branchKey);
+  }
+  clearInlineHierarchyBranchState(tagValue) {
+    const prefix = `${String(tagValue || "")}\0`;
+    if (!prefix || !this.collapsedInlineHierarchyBranches) return false;
+    let changed = false;
+    for (const branchKey of Array.from(this.collapsedInlineHierarchyBranches)) {
+      if (!String(branchKey).startsWith(prefix)) continue;
+      this.collapsedInlineHierarchyBranches.delete(branchKey);
+      changed = true;
+    }
+    if (changed) {
+      this.inlineHierarchyExpansionVersion = (this.inlineHierarchyExpansionVersion || 0) + 1;
+    }
+    return changed;
   }
   getInlineHierarchyDisplayName(tag, parentPath, file, isVirtual = false) {
     var _a, _b;
@@ -4627,8 +4675,8 @@ var RelationsBehavior = class {
       orderedFiles.map((file) => file.path),
       this.getNoteHierarchySettings().childrenByParentPath
     );
-    const expandedBranches = this.expandedInlineHierarchyBranches || /* @__PURE__ */ new Set();
-    this.expandedInlineHierarchyBranches = expandedBranches;
+    const collapsedBranches = this.collapsedInlineHierarchyBranches || /* @__PURE__ */ new Set();
+    this.collapsedInlineHierarchyBranches = collapsedBranches;
     const surface = options.surface || "sidebar";
     const targetPath = options.targetPath || "";
     const renderedCards = [];
@@ -4646,7 +4694,7 @@ var RelationsBehavior = class {
         targetPath,
         /* @__PURE__ */ new Set()
       );
-      const expanded = forceExpanded || expandedBranches.has(branchKey);
+      const expanded = forceExpanded || !collapsedBranches.has(branchKey);
       const inherited = !!tag && !isVirtual && this.isInheritedFileForTag(tag, file.path);
       const canTagReorder = !parentPath && !!tag && !isVirtual && !isNestedTag(tag) && !inherited;
       const itemEl = containerEl.createDiv({
@@ -4769,7 +4817,7 @@ var RelationsBehavior = class {
     const flairOuterEl = rowEl.createDiv({ cls: "tree-item-flair-outer" });
     flairOuterEl.createSpan({ text: String(this.getHierarchyEdgeCount()), cls: "tree-item-flair tag-pane-tag-count" });
     rowEl.addEventListener("click", () => {
-      state.groupExpanded = !groupExpanded;
+      this.toggleHierarchyGroup(state);
       this.renderHierarchySearchItem(hostEl, state, options);
     });
     if (groupExpanded) {
@@ -4780,6 +4828,18 @@ var RelationsBehavior = class {
         showSearch: false
       });
     }
+  }
+  resetHierarchyExpansionState(state) {
+    if (!state) return;
+    state.allExpanded = true;
+    state.expandedParents.clear();
+    state.expandedBranches.clear();
+  }
+  toggleHierarchyGroup(state) {
+    if (!state) return false;
+    state.groupExpanded = state.groupExpanded === false;
+    this.resetHierarchyExpansionState(state);
+    return state.groupExpanded;
   }
   toggleAllHierarchyItems(state) {
     state.allExpanded = !state.allExpanded;
@@ -5329,7 +5389,7 @@ var PuffsTagEnhancePlugin = class extends import_obsidian12.Plugin {
     this.settings = { ...DEFAULT_SETTINGS };
     this.tagFileIndex = /* @__PURE__ */ new Map();
     this.expandedTags = /* @__PURE__ */ new Set();
-    this.expandedInlineHierarchyBranches = /* @__PURE__ */ new Set();
+    this.collapsedInlineHierarchyBranches = /* @__PURE__ */ new Set();
     this.inlineHierarchyExpansionVersion = 0;
     this.selectedNoteOrderTarget = null;
     this.noteOrderHotkeyScope = null;

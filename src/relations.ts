@@ -320,7 +320,7 @@ export class RelationsBehavior {
   createHierarchySurfaceState() {
     return {
       query: '',
-      allExpanded: false,
+      allExpanded: true,
       expandedParents: new Set(),
       expandedBranches: new Set(),
       activeMatchIndex: -1,
@@ -355,13 +355,30 @@ export class RelationsBehavior {
 
   toggleInlineHierarchyBranch(branchKey) {
     if (!branchKey) return false;
-    if (this.expandedInlineHierarchyBranches.has(branchKey)) {
-      this.expandedInlineHierarchyBranches.delete(branchKey);
+    const collapsedBranches = this.collapsedInlineHierarchyBranches || new Set();
+    this.collapsedInlineHierarchyBranches = collapsedBranches;
+    if (collapsedBranches.has(branchKey)) {
+      collapsedBranches.delete(branchKey);
     } else {
-      this.expandedInlineHierarchyBranches.add(branchKey);
+      collapsedBranches.add(branchKey);
     }
     this.inlineHierarchyExpansionVersion = (this.inlineHierarchyExpansionVersion || 0) + 1;
-    return this.expandedInlineHierarchyBranches.has(branchKey);
+    return !collapsedBranches.has(branchKey);
+  }
+
+  clearInlineHierarchyBranchState(tagValue) {
+    const prefix = `${String(tagValue || '')}\u0000`;
+    if (!prefix || !this.collapsedInlineHierarchyBranches) return false;
+    let changed = false;
+    for (const branchKey of Array.from(this.collapsedInlineHierarchyBranches)) {
+      if (!String(branchKey).startsWith(prefix)) continue;
+      this.collapsedInlineHierarchyBranches.delete(branchKey);
+      changed = true;
+    }
+    if (changed) {
+      this.inlineHierarchyExpansionVersion = (this.inlineHierarchyExpansionVersion || 0) + 1;
+    }
+    return changed;
   }
 
   getInlineHierarchyDisplayName(tag, parentPath, file, isVirtual = false) {
@@ -392,8 +409,8 @@ export class RelationsBehavior {
       orderedFiles.map((file) => file.path),
       this.getNoteHierarchySettings().childrenByParentPath
     );
-    const expandedBranches = this.expandedInlineHierarchyBranches || new Set();
-    this.expandedInlineHierarchyBranches = expandedBranches;
+    const collapsedBranches = this.collapsedInlineHierarchyBranches || new Set();
+    this.collapsedInlineHierarchyBranches = collapsedBranches;
     const surface = options.surface || 'sidebar';
     const targetPath = options.targetPath || '';
     const renderedCards = [];
@@ -412,7 +429,7 @@ export class RelationsBehavior {
         targetPath,
         new Set()
       );
-      const expanded = forceExpanded || expandedBranches.has(branchKey);
+      const expanded = forceExpanded || !collapsedBranches.has(branchKey);
       const inherited = !!tag && !isVirtual && this.isInheritedFileForTag(tag, file.path);
       const canTagReorder = !parentPath && !!tag && !isVirtual && !isNestedTag(tag) && !inherited;
       const itemEl = containerEl.createDiv({
@@ -545,7 +562,7 @@ export class RelationsBehavior {
     const flairOuterEl = rowEl.createDiv({ cls: 'tree-item-flair-outer' });
     flairOuterEl.createSpan({ text: String(this.getHierarchyEdgeCount()), cls: 'tree-item-flair tag-pane-tag-count' });
     rowEl.addEventListener('click', () => {
-      state.groupExpanded = !groupExpanded;
+      this.toggleHierarchyGroup(state);
       this.renderHierarchySearchItem(hostEl, state, options);
     });
     if (groupExpanded) {
@@ -556,6 +573,20 @@ export class RelationsBehavior {
         showSearch: false,
       });
     }
+  }
+
+  resetHierarchyExpansionState(state) {
+    if (!state) return;
+    state.allExpanded = true;
+    state.expandedParents.clear();
+    state.expandedBranches.clear();
+  }
+
+  toggleHierarchyGroup(state) {
+    if (!state) return false;
+    state.groupExpanded = state.groupExpanded === false;
+    this.resetHierarchyExpansionState(state);
+    return state.groupExpanded;
   }
 
   toggleAllHierarchyItems(state) {

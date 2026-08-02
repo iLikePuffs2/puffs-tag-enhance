@@ -84,18 +84,39 @@ describe('关系文件迁移', () => {
 describe('批量父子关系', () => {
   it('父子虚拟标签每次进入搜索时默认展开', () => {
     const behavior = Object.create(RelationsBehavior.prototype) as any;
-    expect(behavior.createHierarchySurfaceState().groupExpanded).toBe(true);
+    const state = behavior.createHierarchySurfaceState();
+    expect(state.groupExpanded).toBe(true);
+    expect(state.allExpanded).toBe(true);
   });
 
-  it('切换标签内父子分支时同步更新展开状态和渲染版本', () => {
+  it('父子虚拟标签重新展开时清除内部折叠状态并全部展开', () => {
     const behavior = Object.create(RelationsBehavior.prototype) as any;
-    behavior.expandedInlineHierarchyBranches = new Set();
+    const state = behavior.createHierarchySurfaceState();
+    state.allExpanded = false;
+    state.expandedParents.add('父.md');
+    state.expandedBranches.add('父.md\u0000子.md');
+
+    expect(behavior.toggleHierarchyGroup(state)).toBe(false);
+    expect(state.allExpanded).toBe(true);
+    expect(state.expandedParents.size).toBe(0);
+    expect(state.expandedBranches.size).toBe(0);
+    expect(behavior.toggleHierarchyGroup(state)).toBe(true);
+    expect(state.allExpanded).toBe(true);
+  });
+
+  it('标签内父子分支默认展开，手动收起状态在标签关闭后清除', () => {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    behavior.collapsedInlineHierarchyBranches = new Set();
     behavior.inlineHierarchyExpansionVersion = 0;
 
-    expect(behavior.toggleInlineHierarchyBranch('#爱情-升温\u0000父.md')).toBe(true);
-    expect(behavior.inlineHierarchyExpansionVersion).toBe(1);
     expect(behavior.toggleInlineHierarchyBranch('#爱情-升温\u0000父.md')).toBe(false);
+    expect(behavior.inlineHierarchyExpansionVersion).toBe(1);
+    expect(behavior.toggleInlineHierarchyBranch('#爱情-升温\u0000父.md')).toBe(true);
     expect(behavior.inlineHierarchyExpansionVersion).toBe(2);
+    behavior.toggleInlineHierarchyBranch('#爱情-升温\u0000父.md');
+    expect(behavior.clearInlineHierarchyBranchState('#爱情-升温')).toBe(true);
+    expect(behavior.collapsedInlineHierarchyBranches.size).toBe(0);
+    expect(behavior.inlineHierarchyExpansionVersion).toBe(4);
   });
 
   it('标签内嵌套卡片优先使用标签 alias，再回退到关系 alias 和文件名', () => {

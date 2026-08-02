@@ -764,7 +764,10 @@ export class TagPaneBehavior {
       } else {
         this.clearNoteCardSearchState(patch.noteCardSearchState);
         if (!noteCardSearch || noteCardSearch.isTagOnly) {
-          this.syncAutoSingleSearchResult(view, patch, matchingItems, effectiveQuery);
+          const autoExpandItems = this.settings.pinnedTag && !effectiveQuery.trim()
+            ? items
+            : matchingItems;
+          this.syncAutoSingleSearchResult(view, patch, autoExpandItems, effectiveQuery);
         } else {
           this.clearAutoExpandedTag(patch);
         }
@@ -774,6 +777,7 @@ export class TagPaneBehavior {
 
     const signature = JSON.stringify([
       this.inlineHierarchyExpansionVersion || 0,
+      patch?.noteCardSearchState?.target?.key || '',
       items.map((item) => [
         item.tag,
         item.displayName,
@@ -815,7 +819,7 @@ export class TagPaneBehavior {
     this.getTagSearchValue(view)
   )) {
     const query = getTagFilterQuery(queryValue).trim();
-    if (!query || items.length !== 1) {
+    if ((!query && !this.isPinnedOnlyTagResult(queryValue, items)) || items.length !== 1) {
       this.clearAutoExpandedTag(patch);
       return;
     }
@@ -834,6 +838,7 @@ export class TagPaneBehavior {
 
     if (!patch.autoExpandedWasAlreadyExpanded) {
       this.expandedTags.delete(patch.autoExpandedTag);
+      this.clearInlineHierarchyBranchState(patch.autoExpandedTag);
     }
 
     patch.autoExpandedTag = null;
@@ -844,6 +849,7 @@ export class TagPaneBehavior {
     for (const tag of Array.from(this.expandedTags)) {
       if (String(tag).startsWith('intersection:') && !validTags.has(tag)) {
         this.expandedTags.delete(tag);
+        this.clearInlineHierarchyBranchState(tag);
       }
     }
   }
@@ -1226,6 +1232,7 @@ export class TagPaneBehavior {
 
     if (this.expandedTags.has(tag)) {
       this.expandedTags.delete(tag);
+      this.clearInlineHierarchyBranchState(tag);
     } else {
       this.expandedTags.add(tag);
     }
@@ -1243,6 +1250,7 @@ export class TagPaneBehavior {
         this.expandedTags.add(item.tag);
       } else {
         this.expandedTags.delete(item.tag);
+        this.clearInlineHierarchyBranchState(item.tag);
       }
     }
 
