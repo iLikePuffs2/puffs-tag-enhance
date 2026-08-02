@@ -101,16 +101,25 @@
 }
 
 .puffs-note-relation-modal .modal-content {
-  padding: var(--size-4-4) !important;
+  padding-top: 0 !important;
+  margin-top: 0 !important;
 }
 
 .puffs-relation-modal-title {
   margin: 0 0 14px;
 }
 
+.puffs-note-relation-modal .puffs-relation-modal-title {
+  margin-bottom: 16px;
+}
+
 .puffs-relation-input {
   width: 100%;
   min-width: 0;
+}
+
+.puffs-relation-selector.is-locked .puffs-relation-input {
+  display: none;
 }
 
 .puffs-relation-selector + .puffs-relation-selector {

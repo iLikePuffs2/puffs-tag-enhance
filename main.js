@@ -2865,6 +2865,8 @@ var NoteRelationModal = class extends import_obsidian8.Modal {
   constructor(app, plugin, sourcePath = null, mode = null) {
     super(app);
     this.plugin = plugin;
+    this.sourcePath = sourcePath;
+    this.mode = mode;
     this.selectedParents = /* @__PURE__ */ new Map();
     this.selectedChildren = /* @__PURE__ */ new Map();
     this.lockedParents = /* @__PURE__ */ new Set();
@@ -2892,9 +2894,13 @@ var NoteRelationModal = class extends import_obsidian8.Modal {
   }
   render() {
     this.contentEl.empty();
-    this.contentEl.createEl("h3", { text: "\u65B0\u589E\u7236\u5B50\u7B14\u8BB0", cls: "puffs-relation-modal-title" });
+    const sourceFile = this.sourcePath && this.app.vault.getAbstractFileByPath(this.sourcePath);
+    const sourceName = sourceFile instanceof import_obsidian8.TFile ? sourceFile.basename : this.sourcePath;
+    const title = this.sourcePath ? `\u4E3A ${sourceName} \u6DFB\u52A0${this.mode === "parent" ? "\u7236\u7B14\u8BB0" : "\u5B50\u7B14\u8BB0"}` : "\u65B0\u589E\u7236\u5B50\u7B14\u8BB0";
+    this.contentEl.createDiv({ text: title, cls: "puffs-relation-modal-title puffs-tag-rename-title" });
     const inputBySide = {};
     const selectedBySide = {};
+    const visibleSides = this.sourcePath ? [this.mode === "parent" ? "parent" : "child"] : ["parent", "child"];
     const createSelector = (side, label) => {
       const sectionEl = this.contentEl.createDiv({ cls: "puffs-relation-selector" });
       const locked = side === "parent" ? this.lockedParents : this.lockedChildren;
@@ -2902,13 +2908,11 @@ var NoteRelationModal = class extends import_obsidian8.Modal {
       selectedBySide[side] = sectionEl.createDiv({ cls: "puffs-relation-selected-list" });
       const inputEl = sectionEl.createEl("input", {
         type: "search",
-        cls: "puffs-relation-input",
-        attr: { placeholder: "\u641C\u7D22\u7B14\u8BB0\u540D\u6216\u522B\u540D" }
+        cls: "puffs-relation-input"
       });
       if (locked.size) {
         sectionEl.classList.add("is-locked");
         inputEl.disabled = true;
-        inputEl.placeholder = "\u5DF2\u9501\u5B9A";
       }
       inputEl.value = this.queries[side];
       inputBySide[side] = inputEl;
@@ -2934,8 +2938,8 @@ var NoteRelationModal = class extends import_obsidian8.Modal {
       });
       return inputEl;
     };
-    createSelector("parent", "\u7236\u7B14\u8BB0");
-    createSelector("child", "\u5B50\u7B14\u8BB0");
+    if (visibleSides.includes("parent")) createSelector("parent", "\u7236\u7B14\u8BB0");
+    if (visibleSides.includes("child")) createSelector("child", "\u5B50\u7B14\u8BB0");
     const resultsEl = this.contentEl.createDiv({ cls: "puffs-relation-note-results" });
     const footerEl = this.contentEl.createDiv({ cls: "puffs-relation-modal-footer" });
     const submitButton = footerEl.createEl("button", { cls: "mod-cta" });
@@ -2944,6 +2948,7 @@ var NoteRelationModal = class extends import_obsidian8.Modal {
         const map = side === "parent" ? this.selectedParents : this.selectedChildren;
         const locked = side === "parent" ? this.lockedParents : this.lockedChildren;
         const hostEl = selectedBySide[side];
+        if (!hostEl) continue;
         hostEl.empty();
         for (const selection of map.values()) {
           const file = this.app.vault.getAbstractFileByPath(selection.path);
@@ -2991,11 +2996,15 @@ var NoteRelationModal = class extends import_obsidian8.Modal {
           path: candidate.file.path,
           displayName: this.activeSide === "child" ? candidate.alias : ""
         });
+        this.queries[this.activeSide] = "";
+        inputBySide[this.activeSide].value = "";
+        this.activeIndex = 0;
       } else {
         new import_obsidian8.Notice("\u53EA\u80FD\u9009\u62E9\u4E00\u7BC7\u7236\u7B14\u8BB0\u6216\u4E00\u7BC7\u5B50\u7B14\u8BB0\u4F5C\u4E3A\u6279\u91CF\u5173\u7CFB\u7684\u4E00\u4FA7");
       }
       renderSelections();
       renderResults();
+      globalThis.setTimeout(() => inputBySide[this.activeSide].focus(), 0);
     };
     const renderResults = () => {
       var _a;
@@ -3029,7 +3038,7 @@ var NoteRelationModal = class extends import_obsidian8.Modal {
       });
       (_a = resultsEl.querySelector(".is-active")) == null ? void 0 : _a.scrollIntoView({ block: "nearest" });
     };
-    for (const side of ["parent", "child"]) {
+    for (const side of visibleSides) {
       inputBySide[side].addEventListener("keydown", (event) => {
         if (this.isComposing || event.isComposing) return;
         const rows = Array.from(resultsEl.querySelectorAll(".puffs-relation-note-result"));
@@ -4680,13 +4689,14 @@ var RelationsBehavior = class {
     (0, import_obsidian11.setIcon)(toggleEl, "right-triangle");
     rowEl.createDiv({ text: item.parentFile.basename, cls: "tree-item-inner" });
     const addChildButton = rowEl.createEl("button", { cls: "clickable-icon puffs-hierarchy-add-child-button", attr: { "aria-label": "\u6DFB\u52A0\u5B50\u7B14\u8BB0" } });
-    (0, import_obsidian11.setIcon)(addChildButton, "plus");
+    (0, import_obsidian11.setIcon)(addChildButton, "user-round-plus");
     addChildButton.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       new NoteRelationModal(this.app, this, item.parentPath, "child").open();
     });
-    rowEl.createSpan({
+    const flairOuterEl = rowEl.createDiv({ cls: "tree-item-flair-outer" });
+    flairOuterEl.createSpan({
       text: String(item.descendantCount),
       cls: "tree-item-flair tag-pane-tag-count"
     });
@@ -4779,7 +4789,7 @@ var RelationsBehavior = class {
     }
     menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => new NoteRelationModal(this.app, this, file.path, "child").open()));
     menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => new NoteRelationModal(this.app, this, file.path, "parent").open()));
-    menu.addItem((item) => item.setTitle("\u4ECE\u5F53\u524D\u7236\u7B14\u8BB0\u79FB\u9664").setIcon("unlink").onClick(() => this.removeNoteHierarchyEdge(parentPath, file.path)));
+    menu.addItem((item) => item.setTitle("\u4ECE\u5F53\u524D\u79FB\u9664").setIcon("unlink").onClick(() => this.removeNoteHierarchyEdge(parentPath, file.path)));
     menu.showAtMouseEvent(event);
   }
   showHierarchyDisplayNameOptions(position, parentPath, file, aliases) {

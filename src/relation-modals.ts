@@ -128,6 +128,8 @@ class NoteRelationModal extends Modal {
   constructor(app, plugin, sourcePath = null, mode = null) {
     super(app);
     this.plugin = plugin;
+    this.sourcePath = sourcePath;
+    this.mode = mode;
     this.selectedParents = new Map();
     this.selectedChildren = new Map();
     this.lockedParents = new Set();
@@ -157,9 +159,17 @@ class NoteRelationModal extends Modal {
 
   render() {
     this.contentEl.empty();
-    this.contentEl.createEl('h3', { text: '新增父子笔记', cls: 'puffs-relation-modal-title' });
+    const sourceFile = this.sourcePath && this.app.vault.getAbstractFileByPath(this.sourcePath);
+    const sourceName = sourceFile instanceof TFile ? sourceFile.basename : this.sourcePath;
+    const title = this.sourcePath
+      ? `为 ${sourceName} 添加${this.mode === 'parent' ? '父笔记' : '子笔记'}`
+      : '新增父子笔记';
+    this.contentEl.createDiv({ text: title, cls: 'puffs-relation-modal-title puffs-tag-rename-title' });
     const inputBySide = {};
     const selectedBySide = {};
+    const visibleSides = this.sourcePath
+      ? [this.mode === 'parent' ? 'parent' : 'child']
+      : ['parent', 'child'];
     const createSelector = (side, label) => {
       const sectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-selector' });
       const locked = side === 'parent' ? this.lockedParents : this.lockedChildren;
@@ -168,12 +178,10 @@ class NoteRelationModal extends Modal {
       const inputEl = sectionEl.createEl('input', {
         type: 'search',
         cls: 'puffs-relation-input',
-        attr: { placeholder: '搜索笔记名或别名' },
       });
       if (locked.size) {
         sectionEl.classList.add('is-locked');
         inputEl.disabled = true;
-        inputEl.placeholder = '已锁定';
       }
       inputEl.value = this.queries[side];
       inputBySide[side] = inputEl;
@@ -197,8 +205,8 @@ class NoteRelationModal extends Modal {
       });
       return inputEl;
     };
-    createSelector('parent', '父笔记');
-    createSelector('child', '子笔记');
+    if (visibleSides.includes('parent')) createSelector('parent', '父笔记');
+    if (visibleSides.includes('child')) createSelector('child', '子笔记');
     const resultsEl = this.contentEl.createDiv({ cls: 'puffs-relation-note-results' });
     const footerEl = this.contentEl.createDiv({ cls: 'puffs-relation-modal-footer' });
     const submitButton = footerEl.createEl('button', { cls: 'mod-cta' });
@@ -208,6 +216,7 @@ class NoteRelationModal extends Modal {
         const map = side === 'parent' ? this.selectedParents : this.selectedChildren;
         const locked = side === 'parent' ? this.lockedParents : this.lockedChildren;
         const hostEl = selectedBySide[side];
+        if (!hostEl) continue;
         hostEl.empty();
         for (const selection of map.values()) {
           const file = this.app.vault.getAbstractFileByPath(selection.path);
@@ -257,11 +266,15 @@ class NoteRelationModal extends Modal {
           path: candidate.file.path,
           displayName: this.activeSide === 'child' ? candidate.alias : '',
         });
+        this.queries[this.activeSide] = '';
+        inputBySide[this.activeSide].value = '';
+        this.activeIndex = 0;
       } else {
         new Notice('只能选择一篇父笔记或一篇子笔记作为批量关系的一侧');
       }
       renderSelections();
       renderResults();
+      globalThis.setTimeout(() => inputBySide[this.activeSide].focus(), 0);
     };
     const renderResults = () => {
       resultsEl.empty();
@@ -299,7 +312,7 @@ class NoteRelationModal extends Modal {
       });
       resultsEl.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
     };
-    for (const side of ['parent', 'child']) {
+    for (const side of visibleSides) {
       inputBySide[side].addEventListener('keydown', (event) => {
         if (this.isComposing || event.isComposing) return;
         const rows = Array.from(resultsEl.querySelectorAll('.puffs-relation-note-result'));

@@ -389,13 +389,14 @@ export class RelationsBehavior {
     setIcon(toggleEl, 'right-triangle');
     rowEl.createDiv({ text: item.parentFile.basename, cls: 'tree-item-inner' });
     const addChildButton = rowEl.createEl('button', { cls: 'clickable-icon puffs-hierarchy-add-child-button', attr: { 'aria-label': '添加子笔记' } });
-    setIcon(addChildButton, 'plus');
+    setIcon(addChildButton, 'user-round-plus');
     addChildButton.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       new NoteRelationModal(this.app, this, item.parentPath, 'child').open();
     });
-    rowEl.createSpan({
+    const flairOuterEl = rowEl.createDiv({ cls: 'tree-item-flair-outer' });
+    flairOuterEl.createSpan({
       text: String(item.descendantCount),
       cls: 'tree-item-flair tag-pane-tag-count',
     });
@@ -491,7 +492,7 @@ export class RelationsBehavior {
     }
     menu.addItem((item) => item.setTitle('添加子笔记').setIcon('user-round-plus').onClick(() => new NoteRelationModal(this.app, this, file.path, 'child').open()));
     menu.addItem((item) => item.setTitle('添加父笔记').setIcon('corner-left-up').onClick(() => new NoteRelationModal(this.app, this, file.path, 'parent').open()));
-    menu.addItem((item) => item.setTitle('从当前父笔记移除').setIcon('unlink').onClick(() => this.removeNoteHierarchyEdge(parentPath, file.path)));
+    menu.addItem((item) => item.setTitle('从当前移除').setIcon('unlink').onClick(() => this.removeNoteHierarchyEdge(parentPath, file.path)));
     menu.showAtMouseEvent(event);
   }
 
