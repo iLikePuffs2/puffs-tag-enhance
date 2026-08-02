@@ -9,6 +9,21 @@ function getDirectionalInputSide(activeSide, key, visibleSides) {
   return null;
 }
 
+function getNoteRelationSubmitError(parentCount, childCount) {
+  if (!parentCount || !childCount) return '请分别选择父笔记和子笔记';
+  if (parentCount > 1 && childCount > 1) return '批量关系仅支持一父多子或多父一子';
+  return '';
+}
+
+function getNoteRelationEnterAction(event, isComposing, hasCandidate = false) {
+  if (
+    event.key !== 'Enter' ||
+    event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+    isComposing || event.isComposing || event.keyCode === 229
+  ) return null;
+  return hasCandidate ? 'select-candidate' : 'submit';
+}
+
 class AddParentTagModal extends Modal {
   constructor(app, plugin, childTag) {
     super(app);
@@ -145,6 +160,7 @@ class NoteRelationModal extends Modal {
     this.activeSide = 'parent';
     this.activeIndex = 0;
     this.isComposing = false;
+    this.isSubmitting = false;
     if (sourcePath) {
       const selection = { path: sourcePath, displayName: '' };
       if (mode === 'parent') {
@@ -215,8 +231,6 @@ class NoteRelationModal extends Modal {
     if (visibleSides.includes('parent')) createSelector('parent', '父笔记');
     if (visibleSides.includes('child')) createSelector('child', '子笔记');
     const resultsEl = this.contentEl.createDiv({ cls: 'puffs-relation-note-results' });
-    const footerEl = this.contentEl.createDiv({ cls: 'puffs-relation-modal-footer' });
-    const submitButton = footerEl.createEl('button', { cls: 'mod-cta' });
 
     const renderSelections = () => {
       for (const side of ['parent', 'child']) {
@@ -240,10 +254,6 @@ class NoteRelationModal extends Modal {
           }
         }
       }
-      const count = this.selectedParents.size * this.selectedChildren.size;
-      submitButton.textContent = `添加（${count}）`;
-      submitButton.disabled = !this.selectedParents.size || !this.selectedChildren.size ||
-        (this.selectedParents.size > 1 && this.selectedChildren.size > 1);
     };
 
     const findMatch = (file, term) => {
@@ -339,13 +349,21 @@ class NoteRelationModal extends Modal {
           this.activeIndex = Math.max(0, Math.min(rows.length - 1, this.activeIndex + delta));
           event.preventDefault();
           renderResults();
-        } else if (event.key === 'Enter' && rows[this.activeIndex]) {
+        } else if (getNoteRelationEnterAction(event, this.isComposing, !!rows[this.activeIndex]) === 'select-candidate') {
           event.preventDefault();
+          event.stopPropagation();
           rows[this.activeIndex].click();
         }
       });
     }
-    submitButton.addEventListener('click', async () => {
+    const submit = async () => {
+      if (this.isSubmitting) return;
+      const errorMessage = getNoteRelationSubmitError(this.selectedParents.size, this.selectedChildren.size);
+      if (errorMessage) {
+        new Notice(errorMessage);
+        return;
+      }
+      this.isSubmitting = true;
       try {
         await this.plugin.addNoteHierarchyEdges(
           Array.from(this.selectedParents.values()),
@@ -354,7 +372,15 @@ class NoteRelationModal extends Modal {
         this.close();
       } catch (error) {
         new Notice(error && error.message ? error.message : '添加父子关系失败');
+      } finally {
+        this.isSubmitting = false;
       }
+    };
+    this.modalEl.addEventListener('keydown', (event) => {
+      if (getNoteRelationEnterAction(event, this.isComposing) !== 'submit') return;
+      event.preventDefault();
+      event.stopPropagation();
+      void submit();
     });
     renderSelections();
     renderResults();
@@ -362,4 +388,11 @@ class NoteRelationModal extends Modal {
   }
 }
 
-export { AddParentTagModal, NoteRelationModal, TagInheritanceModal, getDirectionalInputSide };
+export {
+  AddParentTagModal,
+  NoteRelationModal,
+  TagInheritanceModal,
+  getDirectionalInputSide,
+  getNoteRelationEnterAction,
+  getNoteRelationSubmitError,
+};

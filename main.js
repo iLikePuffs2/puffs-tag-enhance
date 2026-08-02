@@ -4039,6 +4039,15 @@ function getDirectionalInputSide(activeSide, key, visibleSides) {
   if (key === "ArrowUp" && activeSide === "child" && visibleSides.includes("parent")) return "parent";
   return null;
 }
+function getNoteRelationSubmitError(parentCount, childCount) {
+  if (!parentCount || !childCount) return "\u8BF7\u5206\u522B\u9009\u62E9\u7236\u7B14\u8BB0\u548C\u5B50\u7B14\u8BB0";
+  if (parentCount > 1 && childCount > 1) return "\u6279\u91CF\u5173\u7CFB\u4EC5\u652F\u6301\u4E00\u7236\u591A\u5B50\u6216\u591A\u7236\u4E00\u5B50";
+  return "";
+}
+function getNoteRelationEnterAction(event, isComposing, hasCandidate = false) {
+  if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || isComposing || event.isComposing || event.keyCode === 229) return null;
+  return hasCandidate ? "select-candidate" : "submit";
+}
 var AddParentTagModal = class extends import_obsidian10.Modal {
   constructor(app, plugin, childTag) {
     super(app);
@@ -4167,6 +4176,7 @@ var NoteRelationModal = class extends import_obsidian10.Modal {
     this.activeSide = "parent";
     this.activeIndex = 0;
     this.isComposing = false;
+    this.isSubmitting = false;
     if (sourcePath) {
       const selection = { path: sourcePath, displayName: "" };
       if (mode === "parent") {
@@ -4233,8 +4243,6 @@ var NoteRelationModal = class extends import_obsidian10.Modal {
     if (visibleSides.includes("parent")) createSelector("parent", "\u7236\u7B14\u8BB0");
     if (visibleSides.includes("child")) createSelector("child", "\u5B50\u7B14\u8BB0");
     const resultsEl = this.contentEl.createDiv({ cls: "puffs-relation-note-results" });
-    const footerEl = this.contentEl.createDiv({ cls: "puffs-relation-modal-footer" });
-    const submitButton = footerEl.createEl("button", { cls: "mod-cta" });
     const renderSelections = () => {
       for (const side of ["parent", "child"]) {
         const map = side === "parent" ? this.selectedParents : this.selectedChildren;
@@ -4257,9 +4265,6 @@ var NoteRelationModal = class extends import_obsidian10.Modal {
           }
         }
       }
-      const count = this.selectedParents.size * this.selectedChildren.size;
-      submitButton.textContent = `\u6DFB\u52A0\uFF08${count}\uFF09`;
-      submitButton.disabled = !this.selectedParents.size || !this.selectedChildren.size || this.selectedParents.size > 1 && this.selectedChildren.size > 1;
     };
     const findMatch = (file, term) => {
       const basename = file.basename.toLowerCase();
@@ -4350,13 +4355,21 @@ var NoteRelationModal = class extends import_obsidian10.Modal {
           this.activeIndex = Math.max(0, Math.min(rows.length - 1, this.activeIndex + delta));
           event.preventDefault();
           renderResults();
-        } else if (event.key === "Enter" && rows[this.activeIndex]) {
+        } else if (getNoteRelationEnterAction(event, this.isComposing, !!rows[this.activeIndex]) === "select-candidate") {
           event.preventDefault();
+          event.stopPropagation();
           rows[this.activeIndex].click();
         }
       });
     }
-    submitButton.addEventListener("click", async () => {
+    const submit = async () => {
+      if (this.isSubmitting) return;
+      const errorMessage = getNoteRelationSubmitError(this.selectedParents.size, this.selectedChildren.size);
+      if (errorMessage) {
+        new import_obsidian10.Notice(errorMessage);
+        return;
+      }
+      this.isSubmitting = true;
       try {
         await this.plugin.addNoteHierarchyEdges(
           Array.from(this.selectedParents.values()),
@@ -4365,7 +4378,15 @@ var NoteRelationModal = class extends import_obsidian10.Modal {
         this.close();
       } catch (error) {
         new import_obsidian10.Notice(error && error.message ? error.message : "\u6DFB\u52A0\u7236\u5B50\u5173\u7CFB\u5931\u8D25");
+      } finally {
+        this.isSubmitting = false;
       }
+    };
+    this.modalEl.addEventListener("keydown", (event) => {
+      if (getNoteRelationEnterAction(event, this.isComposing) !== "submit") return;
+      event.preventDefault();
+      event.stopPropagation();
+      void submit();
     });
     renderSelections();
     renderResults();
