@@ -10,6 +10,7 @@ import {
   normalizeBackupFolderPath,
   normalizeBackupFileName,
   normalizeBackupInterval,
+  normalizeHierarchySearchKeyword,
   normalizeHotkeyText,
   normalizeNewNotePosition,
   normalizeScrollTopButtonThreshold,
@@ -54,6 +55,9 @@ export class PersistenceBehavior {
     }
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
       this.settings.scrollTopButtonThreshold
+    );
+    this.settings.noteHierarchySearchKeyword = normalizeHierarchySearchKeyword(
+      this.settings.noteHierarchySearchKeyword
     );
     this.settings.sidebarToolbarButtons = normalizeSidebarToolbarButtons(
       this.settings.sidebarToolbarButtons
@@ -100,6 +104,9 @@ export class PersistenceBehavior {
     this.settings.scrollTopButtonThreshold = normalizeScrollTopButtonThreshold(
       this.settings.scrollTopButtonThreshold
     );
+    this.settings.noteHierarchySearchKeyword = normalizeHierarchySearchKeyword(
+      this.settings.noteHierarchySearchKeyword
+    );
     this.settings.sidebarToolbarButtons = normalizeSidebarToolbarButtons(
       this.settings.sidebarToolbarButtons
     );
@@ -140,6 +147,10 @@ export class PersistenceBehavior {
     }
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'sidebarToolbarButtons')) {
       this.refreshTagViews();
+    }
+    if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'noteHierarchySearchKeyword')) {
+      this.refreshTagViews();
+      this.refreshTagShelfViews();
     }
   }
 

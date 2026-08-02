@@ -64,8 +64,8 @@ export class WorkspaceBehavior {
     const leaf = this.getVisibleTagLeaf();
     if (leaf) {
       const patch = this.viewPatches.get(leaf.view);
-      if (patch && patch.hierarchyMode) {
-        this.exitSidebarHierarchyMode(leaf.view, patch);
+      if (patch && patch.hierarchySearchActive) {
+        this.exitSidebarHierarchySearch(leaf.view, patch);
         await this.focusLeaf(leaf);
         return;
       }

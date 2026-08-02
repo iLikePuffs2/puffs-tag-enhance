@@ -1,6 +1,6 @@
 {
   "name": "puffs-tag-enhance",
-  "version": "1.4.1",
+  "version": "1.5.3",
   "description": "增强 Obsidian 核心插件“标签列表”，支持快速筛选与标签笔记列表模式。",
   "main": "main.js",
   "scripts": {

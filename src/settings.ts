@@ -4,8 +4,10 @@ import {
   DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
   DEFAULT_MOVE_NOTE_UP_HOTKEY,
   DEFAULT_QUICK_SEARCH_HOTKEY,
+  DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD
 } from "./models";
+import { getHierarchySearchKeywordError } from "./relation-utils";
 import {
   getSidebarToolbarButtonLabel,
   moveSidebarToolbarButton,
@@ -41,6 +43,25 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.freezeSearchWhileComposing)
           .onChange(async (value) => {
             await this.plugin.updateSettings({ freezeSearchWhileComposing: value });
+          });
+      });
+
+    const keywordConflict = this.plugin.getHierarchySearchKeywordConflict();
+    const keywordDescription = '输入精确关键字时只显示父子笔记；可继续使用“关键字*父*子”和“关键字**子”搜索';
+    const keywordSetting = new Setting(containerEl)
+      .setName('父子笔记搜索关键字')
+      .setDesc(keywordConflict ? `${keywordDescription}。当前警告：${keywordConflict}` : keywordDescription)
+      .addText((text) => {
+        text
+          .setValue(this.plugin.settings.noteHierarchySearchKeyword)
+          .setPlaceholder(DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD)
+          .onChange(async (value) => {
+            const error = getHierarchySearchKeywordError(value, this.plugin.getLogicalTagSet());
+            text.inputEl.setCustomValidity(error);
+            text.inputEl.classList.toggle('is-invalid', !!error);
+            keywordSetting.setDesc(error || keywordDescription);
+            if (error) return;
+            await this.plugin.updateSettings({ noteHierarchySearchKeyword: value });
           });
       });
 

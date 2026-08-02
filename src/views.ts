@@ -24,8 +24,11 @@ class PuffsTagShelfView extends ItemView {
     this.listEl = null;
     this.summaryTagCountEl = null;
     this.summaryNoteCountEl = null;
-    this.hierarchyMode = false;
     this.hierarchyState = this.plugin.createHierarchySurfaceState();
+    this.hierarchySearchActive = false;
+    this.expandAllButtonEl = null;
+    this.scrollBottomButtonEl = null;
+    this.scrollTopButtonEl = null;
   }
 
   getViewType() {
@@ -67,11 +70,6 @@ class PuffsTagShelfView extends ItemView {
   }
 
   toggleSearch() {
-    if (this.hierarchyMode) {
-      if (this.hierarchyState.inputEl) this.hierarchyState.inputEl.focus();
-      return;
-    }
-
     const inputEl = this.searchComponent && this.searchComponent.inputEl;
     if (!inputEl) return;
 
@@ -115,11 +113,6 @@ class PuffsTagShelfView extends ItemView {
     this.contentEl.empty();
     this.contentEl.classList.add('puffs-tag-shelf-view');
 
-    if (this.hierarchyMode) {
-      this.renderHierarchyPage();
-      return;
-    }
-
     const pageEl = document.createElement('div');
     pageEl.className = 'puffs-tag-shelf-page';
     this.syncSidebarTreeStyles(pageEl);
@@ -131,18 +124,32 @@ class PuffsTagShelfView extends ItemView {
     titleEl.className = 'puffs-tag-shelf-title';
     titleEl.textContent = '标签系统';
 
-    const hierarchyButtonEl = document.createElement('button');
-    hierarchyButtonEl.type = 'button';
-    hierarchyButtonEl.className = 'clickable-icon puffs-note-hierarchy-button';
-    hierarchyButtonEl.setAttribute('aria-label', '打开父子笔记');
-    setIcon(hierarchyButtonEl, 'git-fork');
-    hierarchyButtonEl.addEventListener('click', () => {
-      this.hierarchyMode = true;
-      this.render();
-    });
-
     headerEl.appendChild(titleEl);
-    headerEl.appendChild(hierarchyButtonEl);
+    const toolbarEl = headerEl.createDiv({ cls: 'puffs-tag-shelf-toolbar' });
+    this.expandAllButtonEl = this.createToolbarButton(toolbarEl, 'chevrons-up-down', '全部展开', () => {
+      const hierarchySearch = this.plugin.getHierarchySearchContext(this.searchQuery);
+      if (hierarchySearch.matched) {
+        this.plugin.toggleAllHierarchyItems(this.hierarchyState);
+      } else {
+        const items = this.plugin.prependPinnedTagItem(
+          this.plugin.getTagShelfItems(this.plugin.resolvePinnedSearchQuery(this.searchQuery), false),
+          this.searchQuery
+        );
+        const shouldExpand = items.some((item) => !this.expandedTags.has(item.tag));
+        for (const item of items) {
+          if (shouldExpand) this.expandedTags.add(item.tag);
+          else this.expandedTags.delete(item.tag);
+        }
+        this.renderTagList();
+      }
+      this.updateToolbarState();
+    });
+    this.scrollBottomButtonEl = this.createToolbarButton(toolbarEl, 'arrow-down-to-line', '回底', () => {
+      this.contentEl.scrollTop = this.contentEl.scrollHeight;
+    });
+    this.scrollTopButtonEl = this.createToolbarButton(toolbarEl, 'arrow-up-to-line', '回顶', () => {
+      this.contentEl.scrollTop = 0;
+    });
     pageEl.appendChild(headerEl);
 
     const summaryEl = document.createElement('div');
@@ -201,6 +208,10 @@ class PuffsTagShelfView extends ItemView {
     });
     this.searchComponent.inputEl.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' || event.isComposing) return;
+      if (this.plugin.getHierarchySearchContext(this.searchQuery).matched) {
+        this.hierarchyState.handleSearchEnter?.(event);
+        return;
+      }
       if (!this.plugin.advanceNoteCardSearchState(this.noteCardSearchState, this.expandedTags)) {
         return;
       }
@@ -221,55 +232,28 @@ class PuffsTagShelfView extends ItemView {
     this.renderTagList();
   }
 
-  renderHierarchyPage() {
-    this.listEl = null;
-    this.summaryTagCountEl = null;
-    this.summaryNoteCountEl = null;
-    const pageEl = document.createElement('div');
-    pageEl.className = 'puffs-tag-shelf-page puffs-note-hierarchy-shelf';
-    this.syncSidebarTreeStyles(pageEl);
-    const headerEl = pageEl.createDiv({ cls: 'puffs-tag-shelf-header' });
-    headerEl.createEl('h3', { text: '标签系统', cls: 'puffs-tag-shelf-title' });
-    const backButton = headerEl.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': '打开标签列表' } });
-    setIcon(backButton, 'tags');
-    backButton.addEventListener('click', () => {
-      this.hierarchyMode = false;
-      this.render();
-    });
+  createToolbarButton(hostEl, icon, label, callback) {
+    const buttonEl = hostEl.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': label } });
+    setIcon(buttonEl, icon);
+    buttonEl.addEventListener('click', callback);
+    return buttonEl;
+  }
 
-    const sectionHeaderEl = pageEl.createDiv({ cls: 'puffs-tag-shelf-section-header' });
-    sectionHeaderEl.createEl('h3', { text: '父子笔记', cls: 'puffs-tag-shelf-section-title' });
-    const searchHostEl = sectionHeaderEl.createDiv({ cls: 'puffs-tag-shelf-search-host' });
-    this.searchComponent = new SearchComponent(searchHostEl);
-    this.searchComponent.containerEl.classList.add('puffs-tag-shelf-search-container');
-    this.searchComponent.setPlaceholder('搜索父笔记；父*子；*子');
-    this.searchComponent.setValue(this.hierarchyState.query || '');
-
-    const listEl = pageEl.createDiv({ cls: 'puffs-note-hierarchy-shelf-list' });
-    this.contentEl.appendChild(pageEl);
-    this.plugin.renderNoteHierarchyPage(listEl, this.hierarchyState, {
-      surface: 'shelf', showHeader: false, showSearch: false,
-    });
-    this.hierarchyState.inputEl = this.searchComponent.inputEl;
-    const applySearch = (value) => {
-      if (this.isSearchComposing) return;
-      this.hierarchyState.query = value;
-      this.hierarchyState.activeMatchIndex = -1;
-      if (this.hierarchyState.renderList) this.hierarchyState.renderList();
-    };
-    const inputEl = this.searchComponent.inputEl;
-    const onCompositionStart = () => { this.isSearchComposing = this.plugin.settings.freezeSearchWhileComposing; };
-    const onCompositionEnd = () => { this.isSearchComposing = false; applySearch(inputEl.value); };
-    inputEl.addEventListener('compositionstart', onCompositionStart);
-    inputEl.addEventListener('compositionend', onCompositionEnd);
-    inputEl.addEventListener('keydown', (event) => this.hierarchyState.handleSearchEnter?.(event));
-    this.searchCompositionCleanup = () => {
-      inputEl.removeEventListener('compositionstart', onCompositionStart);
-      inputEl.removeEventListener('compositionend', onCompositionEnd);
-      this.isSearchComposing = false;
-      this.searchCompositionCleanup = null;
-    };
-    this.searchComponent.onChange(applySearch);
+  updateToolbarState() {
+    if (!this.expandAllButtonEl) return;
+    const hierarchySearch = this.plugin.getHierarchySearchContext(this.searchQuery);
+    if (hierarchySearch.matched) {
+      setIcon(this.expandAllButtonEl, this.hierarchyState.allExpanded ? 'chevrons-down-up' : 'chevrons-up-down');
+      this.expandAllButtonEl.setAttribute('aria-label', this.hierarchyState.allExpanded ? '全部收起' : '全部展开');
+      return;
+    }
+    const items = this.plugin.prependPinnedTagItem(
+      this.plugin.getTagShelfItems(this.plugin.resolvePinnedSearchQuery(this.searchQuery), false),
+      this.searchQuery
+    );
+    const shouldExpand = items.some((item) => !this.expandedTags.has(item.tag));
+    setIcon(this.expandAllButtonEl, shouldExpand ? 'chevrons-up-down' : 'chevrons-down-up');
+    this.expandAllButtonEl.setAttribute('aria-label', shouldExpand ? '全部展开' : '全部收起');
   }
 
   clearSearchCompositionHandlers() {
@@ -329,6 +313,22 @@ class PuffsTagShelfView extends ItemView {
     if (!this.listEl || !this.summaryTagCountEl || !this.summaryNoteCountEl) return;
 
     const query = this.searchQuery.trim();
+    const hierarchySearch = this.plugin.getHierarchySearchContext(query);
+    if (hierarchySearch.matched) {
+      if (!this.hierarchySearchActive) this.hierarchyState.groupExpanded = true;
+      this.hierarchySearchActive = true;
+      this.clearAutoExpandedTag();
+      this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
+      this.hierarchyState.query = hierarchySearch.query;
+      this.hierarchyState.activeMatchIndex = -1;
+      this.summaryTagCountEl.textContent = '0 个';
+      this.summaryNoteCountEl.textContent = '0 篇';
+      this.plugin.renderHierarchySearchItem(this.listEl, this.hierarchyState, { surface: 'shelf' });
+      this.hierarchyState.inputEl = this.searchComponent && this.searchComponent.inputEl;
+      this.updateToolbarState();
+      return;
+    }
+    this.hierarchySearchActive = false;
     const effectiveQuery = this.plugin.resolvePinnedSearchQuery(query);
     const matchingItems = this.plugin.getTagShelfItems(effectiveQuery, false);
     const items = this.plugin.prependPinnedTagItem(matchingItems, query);
@@ -365,6 +365,7 @@ class PuffsTagShelfView extends ItemView {
         this.searchComponent && this.searchComponent.inputEl,
         this.noteCardSearchState
       );
+      this.updateToolbarState();
       return;
     }
 
@@ -376,6 +377,7 @@ class PuffsTagShelfView extends ItemView {
       this.searchComponent && this.searchComponent.inputEl,
       this.noteCardSearchState
     );
+    this.updateToolbarState();
   }
 
   updateSummary(items) {
@@ -523,89 +525,13 @@ class PuffsTagShelfView extends ItemView {
     if (isExpanded) {
       const notesEl = document.createElement('div');
       notesEl.className = 'tree-item-children puffs-tag-note-list puffs-tag-shelf-notes';
-
-      for (const [fileIndex, file] of files.entries()) {
-        const inherited = !isVirtual && this.plugin.isInheritedFileForTag(tag, file.path);
-        const noteItemEl = document.createElement('div');
-        noteItemEl.className = 'tree-item puffs-tag-note-item puffs-tag-shelf-note-item';
-        noteItemEl.dataset.path = file.path;
-        noteItemEl.classList.toggle(
-          'is-order-selected',
-          this.plugin.isNoteOrderTargetSelected(tag, file.path)
-        );
-
-        const noteCardEl = document.createElement('div');
-        noteCardEl.className = 'tree-item-self puffs-tag-note-card is-clickable puffs-tag-shelf-note-card';
-        noteCardEl.dataset.path = file.path;
-
-        if (!isVirtual) {
-          noteCardEl.dataset.puffsTag = tag;
-          noteCardEl.dataset.puffsSurface = 'shelf';
-          if (inherited) {
-            noteCardEl.dataset.puffsInherited = 'true';
-            noteCardEl.title = `继承自：${this.plugin.getInheritedFileSources(tag, file.path).join('、')}`;
-          }
-
-          if (!inherited) {
-            const orderButtonEl = document.createElement('button');
-            orderButtonEl.type = 'button';
-            orderButtonEl.className = 'clickable-icon puffs-tag-note-order-button';
-            orderButtonEl.dataset.puffsTag = tag;
-            orderButtonEl.dataset.path = file.path;
-            orderButtonEl.dataset.puffsSurface = 'shelf';
-            setIcon(orderButtonEl, 'grip-vertical');
-            this.plugin.syncNoteOrderButtonSelection(orderButtonEl);
-            orderButtonEl.addEventListener('click', (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              this.plugin.toggleNoteOrderTarget(tag, file.path, 'shelf');
-            });
-            noteCardEl.appendChild(orderButtonEl);
-          }
-        }
-
-        const noteInnerEl = document.createElement('div');
-        noteInnerEl.className = 'tree-item-inner';
-
-        const noteTextEl = document.createElement('div');
-        noteTextEl.className = 'tree-item-inner-text';
-        noteTextEl.textContent = this.plugin.getNoteDisplayName(tag, file, isVirtual);
-
-        noteInnerEl.appendChild(noteTextEl);
-        noteCardEl.appendChild(noteInnerEl);
-        const scrollTopButtonThreshold = this.plugin.settings.scrollTopButtonThreshold;
-        if (
-          scrollTopButtonThreshold > 0 &&
-          files.length >= scrollTopButtonThreshold &&
-          fileIndex === files.length - 1
-        ) {
-          const scrollTopButtonEl = document.createElement('button');
-          scrollTopButtonEl.type = 'button';
-          scrollTopButtonEl.className = 'clickable-icon puffs-tag-scroll-top-button';
-          scrollTopButtonEl.dataset.puffsTag = tag;
-          setIcon(scrollTopButtonEl, 'arrow-up-to-line');
-          scrollTopButtonEl.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            this.plugin.scheduleTagTopScroll(this.listEl, tag);
-          });
-          noteCardEl.appendChild(scrollTopButtonEl);
-        }
-        noteCardEl.addEventListener('click', () => {
-          this.plugin.openNoteCard(noteCardEl).catch((error) => {
-            console.error('[Puffs Tag Enhance] Failed to open note:', error);
-            new Notice('打开笔记失败');
-          });
-        });
-        noteCardEl.addEventListener('contextmenu', (event) => {
-          const handled = this.plugin.showNoteCardContextMenu(event, noteCardEl);
-          if (!handled) return;
-          event.preventDefault();
-          event.stopPropagation();
-        });
-        noteItemEl.appendChild(noteCardEl);
-        notesEl.appendChild(noteItemEl);
-      }
+      const target = this.noteCardSearchState.target;
+      this.plugin.renderInlineTagNoteTree(notesEl, files, tag, isVirtual, {
+        surface: 'shelf',
+        targetPath: target?.tag === tag ? target.path : '',
+        scrollContainer: this.listEl,
+        rerender: () => this.renderTagList(),
+      });
 
       treeItemEl.appendChild(notesEl);
     }

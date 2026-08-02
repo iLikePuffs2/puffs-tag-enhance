@@ -82,6 +82,37 @@ describe('关系文件迁移', () => {
 });
 
 describe('批量父子关系', () => {
+  it('父子虚拟标签每次进入搜索时默认展开', () => {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    expect(behavior.createHierarchySurfaceState().groupExpanded).toBe(true);
+  });
+
+  it('切换标签内父子分支时同步更新展开状态和渲染版本', () => {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    behavior.expandedInlineHierarchyBranches = new Set();
+    behavior.inlineHierarchyExpansionVersion = 0;
+
+    expect(behavior.toggleInlineHierarchyBranch('#爱情-升温\u0000父.md')).toBe(true);
+    expect(behavior.inlineHierarchyExpansionVersion).toBe(1);
+    expect(behavior.toggleInlineHierarchyBranch('#爱情-升温\u0000父.md')).toBe(false);
+    expect(behavior.inlineHierarchyExpansionVersion).toBe(2);
+  });
+
+  it('标签内嵌套卡片优先使用标签 alias，再回退到关系 alias 和文件名', () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: { '父.md': ['子.md'] },
+      displayNamesByParentPath: { '父.md': { '子.md': '关系别名' } },
+    }), ['父.md', '子.md'], { '子.md': ['标签别名', '关系别名'] });
+    behavior.settings.noteDisplayNameByTag = { '#标签': { '子.md': '标签别名' } };
+    const child = behavior.app.vault.getAbstractFileByPath('子.md');
+
+    expect(behavior.getInlineHierarchyDisplayName('#标签', '父.md', child)).toBe('标签别名');
+    delete behavior.settings.noteDisplayNameByTag['#标签']['子.md'];
+    expect(behavior.getInlineHierarchyDisplayName('#标签', '父.md', child)).toBe('关系别名');
+    delete behavior.settings.relations.noteHierarchy.displayNamesByParentPath['父.md']['子.md'];
+    expect(behavior.getInlineHierarchyDisplayName('#标签', '父.md', child)).toBe('子');
+  });
+
   it('支持多父一子并把子笔记 alias 写入每条新关系', async () => {
     const behavior = attachFiles(createBehavior({
       childrenByParentPath: {},

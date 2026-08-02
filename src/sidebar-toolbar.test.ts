@@ -16,13 +16,15 @@ describe('侧边栏顶栏按钮配置', () => {
     const result = normalizeSidebarToolbarButtons([
       { id: 'scroll-top', visible: false },
       { id: 'unknown', visible: true },
+      { id: 'note-hierarchy', visible: true },
       { id: 'scroll-top', visible: true },
       { id: 'sort', visible: 'no' },
     ]);
     expect(result.find((item) => item.id === 'scroll-top')).toEqual({ id: 'scroll-top', visible: false });
     expect(result.find((item) => item.id === 'sort')).toEqual({ id: 'sort', visible: true });
     expect(result.some((item) => String(item.id) === 'unknown')).toBe(false);
-    expect(result).toHaveLength(7);
+    expect(result.some((item) => String(item.id) === 'note-hierarchy')).toBe(false);
+    expect(result).toHaveLength(6);
   });
 
   it('旧配置缺少按钮时按默认相对位置补齐', () => {
@@ -37,7 +39,6 @@ describe('侧边栏顶栏按钮配置', () => {
       'open-tag-system',
       'scroll-bottom',
       'scroll-top',
-      'note-hierarchy',
       'filter',
     ]);
     expect(result.find((item) => item.id === 'scroll-bottom')?.visible).toBe(false);
@@ -65,15 +66,13 @@ describe('侧边栏顶栏按钮配置', () => {
       'sort',
       'scroll-bottom',
       'scroll-top',
-      'note-hierarchy',
       'filter',
     ]);
     expect(available.map((item) => item.id)).toEqual([
       'sort',
       'scroll-bottom',
-      'scroll-top',
       'filter',
-      'note-hierarchy',
+      'scroll-top',
     ]);
   });
 });

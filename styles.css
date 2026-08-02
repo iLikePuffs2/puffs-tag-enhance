@@ -40,6 +40,15 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 55%, transparent);
 }
 
+.puffs-tag-sidebar-note-card {
+  margin-inline-start: -17px !important;
+  padding-inline-start: 17px !important;
+}
+
+.puffs-tag-sidebar-note-card.puffs-tag-note-card-no-order {
+  padding-inline-start: 41px !important;
+}
+
 .puffs-tag-scroll-bottom-button,
 .puffs-tag-pin-button,
 .puffs-tag-scroll-top-button,
@@ -218,10 +227,6 @@
   display: none !important;
 }
 
-.puffs-note-hierarchy-button {
-  flex: 0 0 auto;
-}
-
 .puffs-note-hierarchy-page {
   box-sizing: border-box;
   width: 100%;
@@ -285,6 +290,7 @@
   min-height: 28px;
 }
 
+.puffs-hierarchy-add-button,
 .puffs-hierarchy-add-child-button {
   flex: 0 0 24px;
   width: 24px;
@@ -311,6 +317,10 @@
 }
 
 .puffs-note-hierarchy-child-card.is-hierarchy-search-match {
+  background: color-mix(in srgb, var(--interactive-accent) 13%, transparent);
+}
+
+.puffs-note-hierarchy-parent-row.is-hierarchy-parent-match {
   background: color-mix(in srgb, var(--interactive-accent) 13%, transparent);
 }
 
@@ -466,6 +476,17 @@
   line-height: 1.25;
 }
 
+.puffs-tag-shelf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-inline-start: auto;
+}
+
+.puffs-tag-shelf-toolbar .clickable-icon {
+  flex: 0 0 28px;
+}
+
 .puffs-tag-shelf-summary {
   display: grid;
   grid-template-columns: repeat(2, 20%);
@@ -559,6 +580,24 @@
 
 .puffs-tag-shelf-notes {
   display: block;
+}
+
+.puffs-inline-hierarchy-children,
+.puffs-hierarchy-search-content {
+  display: block;
+}
+
+.puffs-inline-hierarchy-child-card {
+  box-sizing: border-box;
+  width: auto;
+}
+
+.puffs-inline-hierarchy-toggle {
+  flex: 0 0 var(--nav-item-size, 18px);
+}
+
+.puffs-hierarchy-search-row {
+  cursor: pointer;
 }
 
 .puffs-tag-note-list,

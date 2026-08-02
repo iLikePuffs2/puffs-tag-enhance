@@ -17,6 +17,8 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.settings = { ...DEFAULT_SETTINGS };
     this.tagFileIndex = new Map();
     this.expandedTags = new Set();
+    this.expandedInlineHierarchyBranches = new Set();
+    this.inlineHierarchyExpansionVersion = 0;
     this.selectedNoteOrderTarget = null;
     this.noteOrderHotkeyScope = null;
     this.viewPatches = new WeakMap();

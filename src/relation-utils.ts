@@ -52,6 +52,74 @@ export function parseHierarchySearch(value: string): {
   };
 }
 
+export const DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD = '父';
+
+export function normalizeHierarchySearchKeyword(
+  value: unknown,
+  fallback = DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD
+): string {
+  const text = String(value ?? '').trim();
+  if (!text || /[*|&]/.test(text)) return fallback;
+  return text;
+}
+
+export function getHierarchySearchKeywordError(value: unknown, tagValues: Iterable<string> = []): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '父子搜索关键字不能为空';
+  if (/[*|&]/.test(raw)) return '父子搜索关键字不能包含 *、| 或 &';
+  const normalized = raw.toLowerCase();
+  for (const tagValue of tagValues) {
+    if (String(tagValue || '').trim().replace(/^#/, '').toLowerCase() === normalized) {
+      return `父子搜索关键字与标签 #${raw} 重名`;
+    }
+  }
+  return '';
+}
+
+export function parseUnifiedHierarchySearch(value: unknown, keywordValue: unknown): {
+  matched: boolean;
+  query: string;
+} {
+  const text = String(value ?? '').trim();
+  const keyword = normalizeHierarchySearchKeyword(keywordValue);
+  const lowerText = text.toLowerCase();
+  const lowerKeyword = keyword.toLowerCase();
+  if (lowerText === lowerKeyword) return { matched: true, query: '' };
+  const prefix = `${lowerKeyword}*`;
+  if (!lowerText.startsWith(prefix)) return { matched: false, query: '' };
+  return { matched: true, query: text.slice(keyword.length + 1) };
+}
+
+export type VisibleHierarchyForest = {
+  roots: string[];
+  childrenByParent: Record<string, string[]>;
+  parentsByChild: Record<string, string[]>;
+};
+
+export function buildVisibleHierarchyForest(
+  orderedPaths: string[],
+  adjacency: Record<string, string[]>
+): VisibleHierarchyForest {
+  const paths = Array.from(new Set((orderedPaths || []).filter(Boolean)));
+  const visible = new Set(paths);
+  const childrenByParent: Record<string, string[]> = {};
+  const parentsByChild: Record<string, string[]> = {};
+  for (const parent of paths) {
+    const children = Array.from(new Set((adjacency[parent] || []).filter((child) => visible.has(child))));
+    if (!children.length) continue;
+    childrenByParent[parent] = children;
+    for (const child of children) {
+      if (!parentsByChild[child]) parentsByChild[child] = [];
+      parentsByChild[child].push(parent);
+    }
+  }
+  return {
+    roots: paths.filter((path) => !parentsByChild[path]?.length),
+    childrenByParent,
+    parentsByChild,
+  };
+}
+
 export function mergeInheritedPaths(
   exactPaths: string[],
   orderedBranches: Array<{ source: string; paths: string[] }>,

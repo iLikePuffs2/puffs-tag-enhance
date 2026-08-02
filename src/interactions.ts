@@ -276,9 +276,16 @@ export class InteractionsBehavior {
 
     const matches = [];
     for (const item of items) {
+      const visiblePaths = new Set(item.files.map((file) => file.path));
       for (const file of item.files) {
-        const displayName = this.getNoteDisplayName(item.tag, file, item.isVirtual);
-        if (!fileMatchesNoteSearch(file, noteCardSearch.noteQuery, displayName)) continue;
+        const displayNames = [this.getNoteDisplayName(item.tag, file, item.isVirtual)];
+        if (!item.isVirtual) {
+          for (const parentPath of this.getHierarchyParents(file.path)) {
+            if (!visiblePaths.has(parentPath)) continue;
+            displayNames.push(this.getInlineHierarchyDisplayName(item.tag, parentPath, file, false));
+          }
+        }
+        if (!displayNames.some((displayName) => fileMatchesNoteSearch(file, noteCardSearch.noteQuery, displayName))) continue;
         matches.push({
           tag: item.tag,
           path: file.path,

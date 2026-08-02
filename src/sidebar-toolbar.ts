@@ -4,7 +4,6 @@ export const SIDEBAR_TOOLBAR_BUTTON_DEFINITIONS = [
   { id: 'open-tag-system', label: '打开标签系统', visible: false },
   { id: 'scroll-bottom', label: '回底', visible: true },
   { id: 'scroll-top', label: '回顶', visible: true },
-  { id: 'note-hierarchy', label: '父子笔记', visible: true },
   { id: 'filter', label: '筛选', visible: true },
 ] as const;
 

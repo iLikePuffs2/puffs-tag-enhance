@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
+  buildVisibleHierarchyForest,
+  getHierarchySearchKeywordError,
   mergeInheritedPaths,
+  normalizeHierarchySearchKeyword,
   parseHierarchySearch,
+  parseUnifiedHierarchySearch,
   sanitizeAcyclicAdjacency,
   wouldCreateDirectedCycle,
 } from "./relation-utils";
@@ -50,6 +54,32 @@ describe('父子笔记搜索和排序', () => {
     expect(parseHierarchySearch('父笔记 * 子笔记')).toMatchObject({ valid: true, parentQuery: '父笔记', childQuery: '子笔记' });
     expect(parseHierarchySearch('* 子笔记')).toMatchObject({ valid: true, parentQuery: '', childQuery: '子笔记' });
     expect(parseHierarchySearch('父*子*孙')).toMatchObject({ valid: false });
+  });
+
+  it('仅用精确关键字或关键字星号前缀进入父子搜索', () => {
+    expect(parseUnifiedHierarchySearch('父', '父')).toEqual({ matched: true, query: '' });
+    expect(parseUnifiedHierarchySearch('父*父笔记', '父')).toEqual({ matched: true, query: '父笔记' });
+    expect(parseUnifiedHierarchySearch('父*父笔记*子笔记', '父')).toEqual({ matched: true, query: '父笔记*子笔记' });
+    expect(parseUnifiedHierarchySearch('父**子笔记', '父')).toEqual({ matched: true, query: '*子笔记' });
+    expect(parseUnifiedHierarchySearch('父亲', '父')).toEqual({ matched: false, query: '' });
+  });
+
+  it('规范化关键字并拒绝保留符号或标签重名', () => {
+    expect(normalizeHierarchySearchKeyword(' 父子 ')).toBe('父子');
+    expect(normalizeHierarchySearchKeyword('')).toBe('父');
+    expect(getHierarchySearchKeywordError('')).toContain('不能为空');
+    expect(getHierarchySearchKeywordError('父*')).toContain('不能包含');
+    expect(getHierarchySearchKeywordError('父', ['#爱情', '#父'])).toContain('重名');
+  });
+
+  it('按可见集合构建关系森林并保留多父级与关系顺序', () => {
+    const forest = buildVisibleHierarchyForest(
+      ['A', 'B', 'C', 'D', 'E'],
+      { A: ['C', 'B', 'X'], B: ['D'], C: ['D'], X: ['E'] }
+    );
+    expect(forest.roots).toEqual(['A', 'E']);
+    expect(forest.childrenByParent).toEqual({ A: ['C', 'B'], B: ['D'], C: ['D'] });
+    expect(forest.parentsByChild.D).toEqual(['B', 'C']);
   });
 
   it('先按直接子级数量降序，再按中文名称排序', () => {

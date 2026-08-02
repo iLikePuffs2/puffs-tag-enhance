@@ -18,7 +18,6 @@ import {
   tagMatchesAnySearchTerm,
   tagMatchesSearchText
 } from "./models";
-import { NoteRelationModal } from "./relation-modals";
 import { PuffsTagRenameModal } from "./modals";
 import {
   getAvailableSidebarToolbarButtons,
@@ -52,13 +51,6 @@ export class TagPaneBehavior {
   }
 
   toggleTagSearch(view) {
-    const patch = this.viewPatches.get(view);
-    if (patch && patch.hierarchyMode) {
-      const inputEl = patch.hierarchyState && patch.hierarchyState.inputEl;
-      if (inputEl) inputEl.focus();
-      return;
-    }
-
     const isShowingSearch = !!view.isShowingSearch;
 
     if (isShowingSearch) {
@@ -143,10 +135,9 @@ export class TagPaneBehavior {
       autoExpandedWasAlreadyExpanded: false,
       noteCardSearchState: createNoteCardSearchState(),
       lastRenderedSearchQuery: this.getTagSearchValue(view),
-      hierarchyMode: false,
+      hierarchySearchActive: false,
       hierarchyState: this.createHierarchySurfaceState(),
       hierarchyPageEl: null,
-      hierarchyButtonEl: null,
       scrollBottomButtonEl: null,
       scrollTopButtonEl: null,
       tagSystemButtonEl: null,
@@ -164,7 +155,7 @@ export class TagPaneBehavior {
       };
       const onNoteSearchEnter = (event) => {
         if (event.key !== 'Enter' || event.isComposing) return;
-        if (patch.hierarchyMode && patch.hierarchyState.handleSearchEnter) {
+        if (patch.hierarchySearchActive && patch.hierarchyState.handleSearchEnter) {
           patch.hierarchyState.handleSearchEnter(event);
           return;
         }
@@ -193,7 +184,7 @@ export class TagPaneBehavior {
         evt.preventDefault();
         evt.stopPropagation();
         evt.stopImmediatePropagation();
-        if (patch.hierarchyMode) {
+        if (patch.hierarchySearchActive) {
           this.toggleAllHierarchyItems(patch.hierarchyState);
           this.updateHierarchyExpandAllButton(view, patch);
         } else {
@@ -222,19 +213,12 @@ export class TagPaneBehavior {
       setIcon(scrollTopButtonEl, 'arrow-up-to-line');
       scrollBottomButtonEl.insertAdjacentElement('afterend', scrollTopButtonEl);
 
-      const hierarchyButtonEl = document.createElement('div');
-      hierarchyButtonEl.className = 'clickable-icon nav-action-button puffs-note-hierarchy-button';
-      hierarchyButtonEl.setAttribute('aria-label', '打开父子笔记');
-      setIcon(hierarchyButtonEl, 'git-fork');
-      scrollTopButtonEl.insertAdjacentElement('afterend', hierarchyButtonEl);
-      patch.hierarchyButtonEl = hierarchyButtonEl;
       patch.scrollBottomButtonEl = scrollBottomButtonEl;
       patch.scrollTopButtonEl = scrollTopButtonEl;
       patch.tagSystemButtonEl = tagSystemButtonEl;
       patch.toolbarButtonEls.set('open-tag-system', tagSystemButtonEl);
       patch.toolbarButtonEls.set('scroll-bottom', scrollBottomButtonEl);
       patch.toolbarButtonEls.set('scroll-top', scrollTopButtonEl);
-      patch.toolbarButtonEls.set('note-hierarchy', hierarchyButtonEl);
 
       const onTagSystemButtonClick = (evt) => {
         if (evt.button !== 0) return;
@@ -269,36 +253,16 @@ export class TagPaneBehavior {
         scrollTagPaneTo('top');
       };
 
-      const onHierarchyButtonClick = (evt) => {
-        if (evt.button !== 0) return;
-        evt.preventDefault();
-        evt.stopPropagation();
-        evt.stopImmediatePropagation();
-        if (patch.hierarchyMode) {
-          new NoteRelationModal(this.app, this).open();
-          return;
-        }
-        patch.tagSearchQuery = this.getTagSearchValue(view);
-        patch.hierarchyMode = true;
-        if (view.searchComponent && view.searchComponent.inputEl) {
-          view.searchComponent.inputEl.value = patch.hierarchyState.query || '';
-        }
-        this.scheduleSyncView(view, 0);
-      };
-
       tagSystemButtonEl.addEventListener('click', onTagSystemButtonClick, true);
       scrollBottomButtonEl.addEventListener('click', onScrollBottomButtonClick, true);
       scrollTopButtonEl.addEventListener('click', onScrollTopButtonClick, true);
-      hierarchyButtonEl.addEventListener('click', onHierarchyButtonClick, true);
       patch.cleanup.push(() => {
         tagSystemButtonEl.removeEventListener('click', onTagSystemButtonClick, true);
         scrollBottomButtonEl.removeEventListener('click', onScrollBottomButtonClick, true);
         scrollTopButtonEl.removeEventListener('click', onScrollTopButtonClick, true);
-        hierarchyButtonEl.removeEventListener('click', onHierarchyButtonClick, true);
         tagSystemButtonEl.remove();
         scrollBottomButtonEl.remove();
         scrollTopButtonEl.remove();
-        hierarchyButtonEl.remove();
       });
     }
 
@@ -307,6 +271,22 @@ export class TagPaneBehavior {
     const onTagPaneClick = (evt) => {
       const target = evt.target instanceof Element ? evt.target : null;
       if (!target || !view.containerEl.contains(target)) return;
+
+      const inlineHierarchyToggleEl = target.closest('.puffs-inline-hierarchy-toggle');
+      if (inlineHierarchyToggleEl) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        const branchKey = inlineHierarchyToggleEl.dataset.puffsInlineHierarchyBranchKey;
+        this.toggleInlineHierarchyBranch(branchKey);
+        this.scheduleSyncView(view, 0);
+        this.refreshTagShelfViews();
+        return;
+      }
+
+      if (target.closest('.puffs-note-hierarchy-child-card .collapse-icon')) {
+        return;
+      }
 
       const pinButtonEl = target.closest('.puffs-tag-pin-button');
       if (pinButtonEl) {
@@ -445,10 +425,17 @@ export class TagPaneBehavior {
       if (patch.isSearchComposing) return;
 
       const rawQuery = this.getTagSearchValue(view);
-      if (patch.hierarchyMode) {
-        patch.hierarchyState.query = rawQuery;
+      const hierarchySearch = this.getHierarchySearchContext(rawQuery);
+      const hierarchyWasActive = patch.hierarchySearchActive;
+      patch.hierarchySearchActive = hierarchySearch.matched;
+      if (hierarchySearch.matched) {
+        if (!hierarchyWasActive) patch.hierarchyState.groupExpanded = true;
+        patch.hierarchyState.query = hierarchySearch.query;
         patch.hierarchyState.activeMatchIndex = -1;
+        view.searchQuery = createMultiTagSearchQuery(rawQuery, []);
+        if (typeof view.updateTags === 'function') view.updateTags();
         if (typeof patch.hierarchyState.renderList === 'function') patch.hierarchyState.renderList();
+        this.scheduleSyncView(view, 0);
         return;
       }
       const query = this.resolvePinnedSearchQuery(rawQuery);
@@ -571,7 +558,12 @@ export class TagPaneBehavior {
         return;
       }
 
-      if (patch.hierarchyMode) {
+      const hierarchySearch = this.getHierarchySearchContext(this.getTagSearchValue(view));
+      const hierarchyWasActive = patch.hierarchySearchActive;
+      patch.hierarchySearchActive = hierarchySearch.matched;
+      if (patch.hierarchySearchActive && !hierarchyWasActive) patch.hierarchyState.groupExpanded = true;
+      patch.hierarchyState.query = hierarchySearch.query;
+      if (patch.hierarchySearchActive) {
         this.renderSidebarHierarchyPage(view, patch);
         return;
       }
@@ -679,7 +671,7 @@ export class TagPaneBehavior {
   }
 
   setSidebarToolbarContextHidden(patch, hierarchyMode) {
-    const hierarchyIds = ['note-hierarchy', 'expand-collapse', 'scroll-bottom', 'scroll-top'];
+    const hierarchyIds = ['expand-collapse', 'scroll-bottom', 'scroll-top'];
     for (const [id, buttonEl] of patch.toolbarButtonEls || []) {
       if (!buttonEl || !buttonEl.classList) continue;
       const hidden = hierarchyMode && !hierarchyIds.includes(id);
@@ -688,7 +680,7 @@ export class TagPaneBehavior {
       else if (!buttonEl.classList.contains('puffs-toolbar-config-hidden')) buttonEl.removeAttribute('aria-hidden');
     }
     if (hierarchyMode) {
-      const navButtonsEl = patch.hierarchyButtonEl && patch.hierarchyButtonEl.parentElement;
+      const navButtonsEl = patch.toolbarButtonEls.get('expand-collapse')?.parentElement;
       if (navButtonsEl) {
         for (const id of hierarchyIds) {
           const buttonEl = patch.toolbarButtonEls.get(id);
@@ -717,23 +709,7 @@ export class TagPaneBehavior {
       tagPaneEl.appendChild(patch.hierarchyPageEl);
     }
     patch.hierarchyPageEl.classList.remove('puffs-tag-hidden');
-    const relationSignature = JSON.stringify(this.getNoteHierarchySettings());
-    if (
-      patch.hierarchyPageEl.dataset.puffsRelationSignature !== relationSignature ||
-      !patch.hierarchyState.inputEl ||
-      !patch.hierarchyState.inputEl.isConnected
-    ) {
-      this.renderNoteHierarchyPage(patch.hierarchyPageEl, patch.hierarchyState, {
-        surface: 'sidebar',
-        showHeader: false,
-        showSearch: false,
-      });
-      patch.hierarchyPageEl.dataset.puffsRelationSignature = relationSignature;
-    }
-    if (patch.hierarchyButtonEl) {
-      patch.hierarchyButtonEl.setAttribute('aria-label', '新增');
-      setIcon(patch.hierarchyButtonEl, 'plus');
-    }
+    this.renderHierarchySearchItem(patch.hierarchyPageEl, patch.hierarchyState, { surface: 'sidebar' });
     patch.hierarchyState.inputEl = view.searchComponent && view.searchComponent.inputEl;
     this.updateHierarchyExpandAllButton(view, patch);
     this.setSidebarToolbarContextHidden(patch, true);
@@ -749,10 +725,6 @@ export class TagPaneBehavior {
     const tagPaneEl = view.tagPaneEl || view.containerEl.querySelector('.tag-container');
     const listEl = tagPaneEl && tagPaneEl.querySelector(':scope > .puffs-tag-list-container:not(.puffs-note-hierarchy-sidebar)');
     if (listEl) listEl.classList.remove('puffs-tag-hidden');
-    if (patch.hierarchyButtonEl) {
-      patch.hierarchyButtonEl.setAttribute('aria-label', '打开父子笔记');
-      setIcon(patch.hierarchyButtonEl, 'git-fork');
-    }
     this.setSidebarToolbarContextHidden(patch, false);
     if (view.searchComponent && view.searchComponent.containerEl) {
       view.searchComponent.containerEl.classList.remove('puffs-hierarchy-search-visible');
@@ -760,13 +732,10 @@ export class TagPaneBehavior {
     }
   }
 
-  exitSidebarHierarchyMode(view, patch = this.viewPatches.get(view)) {
-    if (!patch || !patch.hierarchyMode) return false;
-    patch.hierarchyState.query = this.getTagSearchValue(view);
-    patch.hierarchyMode = false;
-    if (view.searchComponent && view.searchComponent.inputEl) {
-      view.searchComponent.inputEl.value = patch.tagSearchQuery || '';
-    }
+  exitSidebarHierarchySearch(view, patch = this.viewPatches.get(view)) {
+    if (!patch || !patch.hierarchySearchActive) return false;
+    this.clearTagSearch(view);
+    patch.hierarchySearchActive = false;
     this.scheduleSyncView(view, 0);
     return true;
   }
@@ -803,7 +772,8 @@ export class TagPaneBehavior {
     }
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
 
-    const signature = JSON.stringify(
+    const signature = JSON.stringify([
+      this.inlineHierarchyExpansionVersion || 0,
       items.map((item) => [
         item.tag,
         item.displayName,
@@ -815,15 +785,15 @@ export class TagPaneBehavior {
         this.settings.pinnedTag === item.tag,
         this.expandedTags.has(item.tag),
         this.expandedTags.has(item.tag) ? item.files.map((file) => file.path).join('\n') : '',
-      ])
-    );
+      ]),
+    ]);
 
     if (listEl.dataset.puffsSignature !== signature) {
       listEl.dataset.puffsSignature = signature;
       listEl.empty();
 
       for (const item of items) {
-        this.renderListModeTagItem(listEl, item);
+        this.renderListModeTagItem(listEl, item, view, patch);
       }
     }
     if (patch) {
@@ -1031,7 +1001,7 @@ export class TagPaneBehavior {
     );
   }
 
-  renderListModeTagItem(listEl, item) {
+  renderListModeTagItem(listEl, item, view, patch) {
     const { tag, displayName, files, isVirtual } = item;
     const isExpanded = this.expandedTags.has(tag);
     const treeItemEl = document.createElement('div');
@@ -1109,7 +1079,12 @@ export class TagPaneBehavior {
     treeItemEl.appendChild(tagEl);
 
     if (isExpanded) {
-      this.renderNoteList(treeItemEl, files, tag, isVirtual);
+      this.renderNoteList(treeItemEl, files, tag, isVirtual, {
+        view,
+        patch,
+        surface: 'sidebar',
+        scrollContainer: listEl,
+      });
     }
 
     listEl.appendChild(treeItemEl);
@@ -1189,7 +1164,7 @@ export class TagPaneBehavior {
     }
   }
 
-  renderNoteList(treeItemEl, files, tagValue, isVirtual = false) {
+  renderNoteList(treeItemEl, files, tagValue, isVirtual = false, options = {}) {
     let listEl = Array.from(treeItemEl.children).find((el) =>
       el.classList.contains('puffs-tag-note-list')
     );
@@ -1201,74 +1176,13 @@ export class TagPaneBehavior {
     }
 
     listEl.className = 'tree-item-children puffs-tag-note-list';
-    listEl.empty();
-
-    const tag = normalizeTag(tagValue);
-    const browseData = tag && !isVirtual ? this.getTagBrowseData(tag) : null;
-    for (const [fileIndex, file] of files.entries()) {
-      const inherited = !!(browseData && browseData.inheritedFiles.some((candidate) => candidate.path === file.path));
-      const canReorder = !!tag && !isVirtual && !isNestedTag(tag) && !inherited;
-      const itemEl = document.createElement('div');
-      itemEl.className = 'tree-item puffs-tag-note-item';
-      itemEl.dataset.path = file.path;
-      itemEl.classList.toggle(
-        'is-order-selected',
-        this.isNoteOrderTargetSelected(tag, file.path)
-      );
-
-      const cardEl = document.createElement('div');
-      cardEl.className = 'tree-item-self puffs-tag-note-card is-clickable';
-      cardEl.dataset.path = file.path;
-      if (tag) cardEl.dataset.puffsTag = tag;
-      if (inherited) {
-        cardEl.dataset.puffsInherited = 'true';
-        const sources = this.getInheritedFileSources(tag, file.path);
-        cardEl.title = `继承自：${sources.join('、')}`;
-      }
-      cardEl.style.marginInlineStart = '-17px';
-      cardEl.style.setProperty('margin-inline-start', '-17px', 'important');
-      cardEl.style.paddingInlineStart = canReorder ? '17px' : '41px';
-      cardEl.style.setProperty('padding-inline-start', canReorder ? '17px' : '41px', 'important');
-
-      if (canReorder) {
-        cardEl.dataset.puffsSurface = 'sidebar';
-
-        const orderButtonEl = document.createElement('button');
-        orderButtonEl.type = 'button';
-        orderButtonEl.className = 'clickable-icon puffs-tag-note-order-button';
-        orderButtonEl.dataset.puffsTag = tag;
-        orderButtonEl.dataset.path = file.path;
-        orderButtonEl.dataset.puffsSurface = 'sidebar';
-        setIcon(orderButtonEl, 'grip-vertical');
-        this.syncNoteOrderButtonSelection(orderButtonEl);
-        cardEl.appendChild(orderButtonEl);
-      }
-
-      const innerEl = document.createElement('div');
-      innerEl.className = 'tree-item-inner';
-
-      const textEl = document.createElement('div');
-      textEl.className = 'tree-item-inner-text';
-      textEl.textContent = this.getNoteDisplayName(tag, file, isVirtual);
-
-      innerEl.appendChild(textEl);
-      cardEl.appendChild(innerEl);
-      const scrollTopButtonThreshold = this.settings.scrollTopButtonThreshold;
-      if (
-        scrollTopButtonThreshold > 0 &&
-        files.length >= scrollTopButtonThreshold &&
-        fileIndex === files.length - 1
-      ) {
-        const scrollTopButtonEl = document.createElement('button');
-        scrollTopButtonEl.type = 'button';
-        scrollTopButtonEl.className = 'clickable-icon puffs-tag-scroll-top-button';
-        scrollTopButtonEl.dataset.puffsTag = tagValue;
-        setIcon(scrollTopButtonEl, 'arrow-up-to-line');
-        cardEl.appendChild(scrollTopButtonEl);
-      }
-      itemEl.appendChild(cardEl);
-      listEl.appendChild(itemEl);
-    }
+    const target = options.patch?.noteCardSearchState?.target;
+    this.renderInlineTagNoteTree(listEl, files, tagValue, isVirtual, {
+      surface: options.surface || 'sidebar',
+      targetPath: target?.tag === tagValue ? target.path : '',
+      scrollContainer: options.scrollContainer || listEl,
+      rerender: () => options.view ? this.scheduleSyncView(options.view, 0) : this.refreshTagViews(),
+    });
   }
 
   removeNoteList(treeItemEl) {

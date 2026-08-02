@@ -1,6 +1,10 @@
 // @ts-nocheck
 import { normalizePath } from "obsidian";
 import { createDefaultSidebarToolbarButtons } from "./sidebar-toolbar";
+import {
+  DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
+  normalizeHierarchySearchKeyword,
+} from "./relation-utils";
 
 const TAG_VIEW_TYPE = 'tag';
 const TAG_SHELF_VIEW_TYPE = 'puffs-tag-shelf-view';
@@ -31,6 +35,7 @@ const DEFAULT_SETTINGS = {
   backupFolderPath: '',
   pinnedTag: null,
   scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
+  noteHierarchySearchKeyword: DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   sidebarToolbarButtons: createDefaultSidebarToolbarButtons(),
   relations: {
     version: 1,
@@ -422,11 +427,13 @@ export {
   BACKUP_FILE_NAME,
   MAX_BACKUP_INTERVAL_MINUTES,
   DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
+  DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   DEFAULT_SETTINGS,
   normalizeTag,
   normalizeNewNotePosition,
   normalizeBackupInterval,
   normalizeScrollTopButtonThreshold,
+  normalizeHierarchySearchKeyword,
   normalizeBackupFolderPath,
   normalizeBackupFileName,
   getBackupPathParts,

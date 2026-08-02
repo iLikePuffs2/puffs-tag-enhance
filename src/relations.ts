@@ -5,8 +5,11 @@ import { AddParentTagModal, NoteRelationModal, TagInheritanceModal } from "./rel
 import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
+  buildVisibleHierarchyForest,
+  getHierarchySearchKeywordError,
   mergeInheritedPaths,
   parseHierarchySearch,
+  parseUnifiedHierarchySearch,
   sanitizeAcyclicAdjacency,
   wouldCreateDirectedCycle,
 } from "./relation-utils";
@@ -304,6 +307,7 @@ export class RelationsBehavior {
         additionalCount: Math.max(0, descendantCount - directCount),
         matchingPaths: new Set(matchingPaths),
         forceExpand: !!childQuery,
+        parentMatch: !!parentQuery,
       });
     }
     items.sort((a, b) => compareHierarchyParentItems(
@@ -320,7 +324,238 @@ export class RelationsBehavior {
       expandedParents: new Set(),
       expandedBranches: new Set(),
       activeMatchIndex: -1,
+      groupExpanded: true,
     };
+  }
+
+  getHierarchySearchContext(value) {
+    return parseUnifiedHierarchySearch(value, this.settings.noteHierarchySearchKeyword);
+  }
+
+  getHierarchySearchKeywordConflict(keyword = this.settings.noteHierarchySearchKeyword) {
+    return getHierarchySearchKeywordError(keyword, this.getLogicalTagSet());
+  }
+
+  getHierarchyEdgeCount() {
+    let count = 0;
+    for (const [parentPath, children] of Object.entries(this.getNoteHierarchySettings().childrenByParentPath)) {
+      const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
+      if (!(parentFile instanceof TFile) || parentFile.extension !== 'md') continue;
+      for (const childPath of Array.isArray(children) ? children : []) {
+        const childFile = this.app.vault.getAbstractFileByPath(childPath);
+        if (childFile instanceof TFile && childFile.extension === 'md') count += 1;
+      }
+    }
+    return count;
+  }
+
+  getInlineHierarchyBranchKey(tagValue, path) {
+    return `${String(tagValue || '')}\u0000${path}`;
+  }
+
+  toggleInlineHierarchyBranch(branchKey) {
+    if (!branchKey) return false;
+    if (this.expandedInlineHierarchyBranches.has(branchKey)) {
+      this.expandedInlineHierarchyBranches.delete(branchKey);
+    } else {
+      this.expandedInlineHierarchyBranches.add(branchKey);
+    }
+    this.inlineHierarchyExpansionVersion = (this.inlineHierarchyExpansionVersion || 0) + 1;
+    return this.expandedInlineHierarchyBranches.has(branchKey);
+  }
+
+  getInlineHierarchyDisplayName(tag, parentPath, file, isVirtual = false) {
+    if (tag && !isVirtual && !isNestedTag(tag)) {
+      const selected = this.settings.noteDisplayNameByTag?.[tag]?.[file.path];
+      if (selected && this.getNoteAliases(file).includes(selected)) return selected;
+    }
+    if (parentPath) return this.getHierarchyDisplayName(parentPath, file);
+    return this.getNoteDisplayName(tag, file, isVirtual);
+  }
+
+  hierarchyBranchContains(childrenByParent, parentPath, targetPath, seen = new Set()) {
+    if (!parentPath || seen.has(parentPath)) return false;
+    seen.add(parentPath);
+    for (const childPath of childrenByParent[parentPath] || []) {
+      if (childPath === targetPath) return true;
+      if (this.hierarchyBranchContains(childrenByParent, childPath, targetPath, seen)) return true;
+    }
+    return false;
+  }
+
+  renderInlineTagNoteTree(hostEl, files, tagValue, isVirtual = false, options = {}) {
+    hostEl.empty();
+    const tag = normalizeTag(tagValue);
+    const orderedFiles = Array.from(new Map((files || []).map((file) => [file.path, file])).values());
+    const fileByPath = new Map(orderedFiles.map((file) => [file.path, file]));
+    const forest = buildVisibleHierarchyForest(
+      orderedFiles.map((file) => file.path),
+      this.getNoteHierarchySettings().childrenByParentPath
+    );
+    const expandedBranches = this.expandedInlineHierarchyBranches || new Set();
+    this.expandedInlineHierarchyBranches = expandedBranches;
+    const surface = options.surface || 'sidebar';
+    const targetPath = options.targetPath || '';
+    const renderedCards = [];
+
+    const renderNode = (containerEl, path, parentPath = '', branch = new Set()) => {
+      if (branch.has(path)) return;
+      const file = fileByPath.get(path);
+      if (!(file instanceof TFile)) return;
+      const nextBranch = new Set(branch);
+      nextBranch.add(path);
+      const children = forest.childrenByParent[path] || [];
+      const branchKey = this.getInlineHierarchyBranchKey(tagValue, path);
+      const forceExpanded = !!targetPath && this.hierarchyBranchContains(
+        forest.childrenByParent,
+        path,
+        targetPath,
+        new Set()
+      );
+      const expanded = forceExpanded || expandedBranches.has(branchKey);
+      const inherited = !!tag && !isVirtual && this.isInheritedFileForTag(tag, file.path);
+      const canTagReorder = !parentPath && !!tag && !isVirtual && !isNestedTag(tag) && !inherited;
+      const itemEl = containerEl.createDiv({
+        cls: `tree-item puffs-tag-note-item${parentPath ? ' puffs-inline-hierarchy-child-item' : ''}`,
+      });
+      itemEl.dataset.path = file.path;
+      itemEl.classList.toggle(
+        'is-order-selected',
+        this.isNoteOrderTargetSelected(tag, file.path, parentPath)
+      );
+      const cardEl = itemEl.createDiv({
+        cls: `tree-item-self puffs-tag-note-card is-clickable${surface === 'shelf' ? ' puffs-tag-shelf-note-card' : ' puffs-tag-sidebar-note-card'}${!parentPath && !canTagReorder ? ' puffs-tag-note-card-no-order' : ''}${parentPath ? ' puffs-inline-hierarchy-child-card' : ''}`,
+      });
+      cardEl.dataset.path = file.path;
+      cardEl.dataset.puffsSurface = surface;
+      if (tag && !isVirtual) cardEl.dataset.puffsTag = tag;
+      if (parentPath) cardEl.dataset.puffsHierarchyParent = parentPath;
+      if (inherited) {
+        cardEl.dataset.puffsInherited = 'true';
+        cardEl.title = `继承自：${this.getInheritedFileSources(tag, file.path).join('、')}`;
+      }
+
+      const orderButtonEl = cardEl.createEl('button', { cls: 'clickable-icon puffs-tag-note-order-button' });
+      orderButtonEl.dataset.path = file.path;
+      orderButtonEl.dataset.puffsSurface = surface;
+      if (parentPath) {
+        orderButtonEl.dataset.puffsHierarchyParent = parentPath;
+      } else if (canTagReorder) {
+        orderButtonEl.dataset.puffsTag = tag;
+      } else {
+        orderButtonEl.remove();
+      }
+      if (orderButtonEl.isConnected || orderButtonEl.parentElement) {
+        setIcon(orderButtonEl, 'grip-vertical');
+        this.syncNoteOrderButtonSelection(orderButtonEl);
+        orderButtonEl.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (parentPath) this.toggleHierarchyNoteOrderTarget(parentPath, file.path, surface);
+          else this.toggleNoteOrderTarget(tag, file.path, surface);
+        });
+      }
+
+      if (children.length) {
+        const toggleEl = cardEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-inline-hierarchy-toggle' });
+        toggleEl.dataset.puffsInlineHierarchyBranchKey = branchKey;
+        toggleEl.classList.toggle('is-collapsed', !expanded);
+        setIcon(toggleEl, 'right-triangle');
+        toggleEl.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.toggleInlineHierarchyBranch(branchKey);
+          options.rerender?.();
+          if (surface === 'shelf') this.refreshTagViews();
+        });
+      }
+
+      const innerEl = cardEl.createDiv({ cls: 'tree-item-inner' });
+      innerEl.createDiv({
+        text: this.getInlineHierarchyDisplayName(tag, parentPath, file, isVirtual),
+        cls: 'tree-item-inner-text',
+      });
+      if (children.length) {
+        const flairOuterEl = cardEl.createDiv({ cls: 'tree-item-flair-outer' });
+        flairOuterEl.createSpan({ text: String(children.length), cls: 'tree-item-flair tag-pane-tag-count' });
+      }
+      cardEl.addEventListener('click', () => this.openFileInMainWorkspace(file));
+      cardEl.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (parentPath) this.showHierarchyChildMenu(event, parentPath, file);
+        else this.showNoteCardContextMenu(event, cardEl);
+      });
+      renderedCards.push(cardEl);
+
+      if (children.length && expanded) {
+        const childHostEl = itemEl.createDiv({ cls: 'tree-item-children puffs-inline-hierarchy-children' });
+        for (const childPath of children) renderNode(childHostEl, childPath, path, nextBranch);
+      }
+    };
+
+    const roots = forest.roots.length ? forest.roots : orderedFiles.map((file) => file.path);
+    for (const rootPath of roots) renderNode(hostEl, rootPath);
+
+    if (
+      this.settings.scrollTopButtonThreshold > 0 &&
+      orderedFiles.length >= this.settings.scrollTopButtonThreshold &&
+      renderedCards.length
+    ) {
+      const scrollTopButtonEl = renderedCards[renderedCards.length - 1].createEl('button', {
+        cls: 'clickable-icon puffs-tag-scroll-top-button',
+      });
+      scrollTopButtonEl.dataset.puffsTag = tagValue;
+      setIcon(scrollTopButtonEl, 'arrow-up-to-line');
+      scrollTopButtonEl.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.scheduleTagTopScroll(options.scrollContainer || hostEl, tagValue);
+      });
+    }
+  }
+
+  renderHierarchySearchItem(hostEl, state, options = {}) {
+    hostEl.empty();
+    const surface = options.surface || 'sidebar';
+    const groupExpanded = state.groupExpanded !== false;
+    const treeItemEl = hostEl.createDiv({
+      cls: `tree-item puffs-tag-list-item puffs-hierarchy-search-item${surface === 'shelf' ? ' puffs-tag-shelf-card' : ''}${groupExpanded ? ' puffs-tag-expanded' : ''}`,
+    });
+    const rowEl = treeItemEl.createDiv({
+      cls: `tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row puffs-hierarchy-search-row${surface === 'shelf' ? ' puffs-tag-shelf-tag-row' : ''}`,
+    });
+    rowEl.dataset.puffsHierarchyGroup = 'true';
+    rowEl.dataset.puffsVirtualTag = 'true';
+    rowEl.setAttribute('aria-expanded', String(groupExpanded));
+    const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-tag-list-toggle' });
+    toggleEl.classList.toggle('is-collapsed', !groupExpanded);
+    setIcon(toggleEl, 'right-triangle');
+    rowEl.createDiv({ text: '父子', cls: 'tree-item-inner' });
+    const addButtonEl = rowEl.createEl('button', {
+      cls: 'clickable-icon puffs-hierarchy-add-button',
+      attr: { 'aria-label': '新增父子笔记' },
+    });
+    setIcon(addButtonEl, 'plus');
+    addButtonEl.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      new NoteRelationModal(this.app, this).open();
+    });
+    const flairOuterEl = rowEl.createDiv({ cls: 'tree-item-flair-outer' });
+    flairOuterEl.createSpan({ text: String(this.getHierarchyEdgeCount()), cls: 'tree-item-flair tag-pane-tag-count' });
+    rowEl.addEventListener('click', () => {
+      state.groupExpanded = !groupExpanded;
+      this.renderHierarchySearchItem(hostEl, state, options);
+    });
+    if (groupExpanded) {
+      const contentEl = treeItemEl.createDiv({ cls: 'tree-item-children puffs-hierarchy-search-content' });
+      this.renderNoteHierarchyPage(contentEl, state, {
+        surface,
+        showHeader: false,
+        showSearch: false,
+      });
+    }
   }
 
   toggleAllHierarchyItems(state) {
@@ -384,6 +619,7 @@ export class RelationsBehavior {
     const expanded = item.forceExpand || state.allExpanded || state.expandedParents.has(item.parentPath);
     const treeEl = listEl.createDiv({ cls: 'tree-item puffs-note-hierarchy-parent' });
     const rowEl = treeEl.createDiv({ cls: 'tree-item-self is-clickable mod-collapsible puffs-note-hierarchy-parent-row' });
+    if (item.parentMatch) rowEl.classList.add('is-hierarchy-parent-match');
     const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon' });
     toggleEl.classList.toggle('is-collapsed', !expanded);
     setIcon(toggleEl, 'right-triangle');
@@ -514,26 +750,39 @@ export class RelationsBehavior {
   openHierarchyForNote(path, sourceEl) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile) || file.extension !== 'md') return;
-    const query = this.getHierarchyParents(path).length > 0 ? `*${file.basename}` : file.basename;
+    const keyword = this.settings.noteHierarchySearchKeyword;
+    const relationParentPath = sourceEl && sourceEl.dataset && sourceEl.dataset.puffsHierarchyParent;
+    const relationParent = relationParentPath && this.app.vault.getAbstractFileByPath(relationParentPath);
+    const query = relationParent instanceof TFile && relationParent.extension === 'md'
+      ? `${keyword}*${relationParent.basename}*${file.basename}`
+      : this.getHierarchyParents(path).length > 0
+        ? `${keyword}**${file.basename}`
+        : `${keyword}*${file.basename}`;
     for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)) {
       const view = leaf.view;
       if (!view || !view.contentEl || !view.contentEl.contains(sourceEl)) continue;
-      view.hierarchyMode = true;
-      view.hierarchyState.query = query;
+      view.searchQuery = query;
       view.hierarchyState.activeMatchIndex = -1;
-      view.render();
-      window.setTimeout(() => view.hierarchyState.inputEl && view.hierarchyState.inputEl.focus(), 0);
+      if (view.searchComponent && typeof view.searchComponent.setValue === 'function') {
+        view.searchComponent.setValue(query);
+      }
+      view.renderTagList();
+      window.setTimeout(() => view.searchComponent?.inputEl?.focus(), 0);
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType('tag')) {
       const view = leaf.view;
       if (!view || !view.containerEl || !view.containerEl.contains(sourceEl)) continue;
       const patch = this.viewPatches.get(view) || this.patchTagView(view);
-      patch.hierarchyMode = true;
-      patch.hierarchyState.query = query;
       patch.hierarchyState.activeMatchIndex = -1;
+      if (!view.isShowingSearch && typeof view.setShowSearch === 'function') view.setShowSearch(true);
+      const searchComponent = view.searchComponent;
+      if (searchComponent && typeof searchComponent.setValue === 'function') searchComponent.setValue(query);
+      const inputEl = searchComponent && searchComponent.inputEl;
+      if (inputEl) inputEl.value = query;
+      if (typeof view.updateSearch === 'function') view.updateSearch();
       this.scheduleSyncView(view, 0);
-      window.setTimeout(() => patch.hierarchyState.inputEl && patch.hierarchyState.inputEl.focus(), 50);
+      window.setTimeout(() => inputEl?.focus(), 50);
       return;
     }
   }
