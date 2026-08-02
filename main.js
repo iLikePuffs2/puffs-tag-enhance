@@ -137,33 +137,27 @@ function parseHierarchySearch(value) {
     hasChildQuery: delimiter >= 0
   };
 }
-var DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD = "\u7236";
-function normalizeHierarchySearchKeyword(value, fallback = DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD) {
-  const text = String(value != null ? value : "").trim();
-  if (!text || /[*|&]/.test(text)) return fallback;
-  return text;
+var DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD = "=";
+function normalizeHierarchySearchKeyword(_value, _fallback = DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD) {
+  return DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD;
 }
-function getHierarchySearchKeywordError(value, tagValues = []) {
-  const raw = String(value != null ? value : "").trim();
-  if (!raw) return "\u7236\u5B50\u641C\u7D22\u5173\u952E\u5B57\u4E0D\u80FD\u4E3A\u7A7A";
-  if (/[*|&]/.test(raw)) return "\u7236\u5B50\u641C\u7D22\u5173\u952E\u5B57\u4E0D\u80FD\u5305\u542B *\u3001| \u6216 &";
-  const normalized = raw.toLowerCase();
-  for (const tagValue of tagValues) {
-    if (String(tagValue || "").trim().replace(/^#/, "").toLowerCase() === normalized) {
-      return `\u7236\u5B50\u641C\u7D22\u5173\u952E\u5B57\u4E0E\u6807\u7B7E #${raw} \u91CD\u540D`;
+function parseUnifiedHierarchySearch(value, _keywordValue) {
+  const text = String(value != null ? value : "").trim();
+  if (text === "=") return { matched: true, query: "" };
+  if (!text.startsWith("=")) return { matched: false, query: "" };
+  if (text.startsWith("==")) {
+    const childQuery = text.slice(2).trim();
+    if (!childQuery || childQuery.includes("=") || childQuery.includes("*")) {
+      return { matched: false, query: "" };
     }
+    return { matched: true, query: `*${childQuery}` };
   }
-  return "";
-}
-function parseUnifiedHierarchySearch(value, keywordValue) {
-  const text = String(value != null ? value : "").trim();
-  const keyword = normalizeHierarchySearchKeyword(keywordValue);
-  const lowerText = text.toLowerCase();
-  const lowerKeyword = keyword.toLowerCase();
-  if (lowerText === lowerKeyword) return { matched: true, query: "" };
-  const prefix = `${lowerKeyword}*`;
-  if (!lowerText.startsWith(prefix)) return { matched: false, query: "" };
-  return { matched: true, query: text.slice(keyword.length + 1) };
+  const query = text.slice(1).trim();
+  const delimiter = query.indexOf("*");
+  if (!query || query.includes("=") || delimiter === 0 || delimiter >= 0 && (delimiter !== query.lastIndexOf("*") || !query.slice(delimiter + 1).trim())) {
+    return { matched: false, query: "" };
+  }
+  return { matched: true, query };
 }
 function buildVisibleHierarchyForest(orderedPaths, adjacency) {
   const paths = Array.from(new Set((orderedPaths || []).filter(Boolean)));
@@ -1030,17 +1024,9 @@ var PuffsTagEnhanceSettingTab = class extends import_obsidian3.PluginSettingTab 
         await this.plugin.updateSettings({ freezeSearchWhileComposing: value });
       });
     });
-    const keywordConflict = this.plugin.getHierarchySearchKeywordConflict();
-    const keywordDescription = "\u8F93\u5165\u7CBE\u786E\u5173\u952E\u5B57\u65F6\u53EA\u663E\u793A\u7236\u5B50\u7B14\u8BB0\uFF1B\u53EF\u7EE7\u7EED\u4F7F\u7528\u201C\u5173\u952E\u5B57*\u7236*\u5B50\u201D\u548C\u201C\u5173\u952E\u5B57**\u5B50\u201D\u641C\u7D22";
-    const keywordSetting = new import_obsidian3.Setting(containerEl).setName("\u7236\u5B50\u7B14\u8BB0\u641C\u7D22\u5173\u952E\u5B57").setDesc(keywordConflict ? `${keywordDescription}\u3002\u5F53\u524D\u8B66\u544A\uFF1A${keywordConflict}` : keywordDescription).addText((text) => {
-      text.setValue(this.plugin.settings.noteHierarchySearchKeyword).setPlaceholder(DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD).onChange(async (value) => {
-        const error = getHierarchySearchKeywordError(value, this.plugin.getLogicalTagSet());
-        text.inputEl.setCustomValidity(error);
-        text.inputEl.classList.toggle("is-invalid", !!error);
-        keywordSetting.setDesc(error || keywordDescription);
-        if (error) return;
-        await this.plugin.updateSettings({ noteHierarchySearchKeyword: value });
-      });
+    const keywordDescription = "\u56FA\u5B9A\u8BED\u6CD5\uFF1A=\uFF1B=\u7236\u7B14\u8BB0\uFF1B==\u5B50\u7B14\u8BB0\uFF1B=\u7236\u7B14\u8BB0*\u5B50\u7B14\u8BB0";
+    new import_obsidian3.Setting(containerEl).setName("\u7236\u5B50\u7B14\u8BB0\u641C\u7D22\u5173\u952E\u5B57").setDesc(keywordDescription).addText((text) => {
+      text.setValue(DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD).setPlaceholder(DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD).setDisabled(true);
     });
     new import_obsidian3.Setting(containerEl).setName("\u5F39\u51FA/\u6536\u8D77\u641C\u7D22\u680F\u5FEB\u6377\u952E").addText((text) => {
       text.setValue(this.plugin.getQuickSearchHotkeyDisplay()).setPlaceholder(DEFAULT_QUICK_SEARCH_HOTKEY).onChange(async (value) => {
@@ -1125,6 +1111,7 @@ var import_obsidian4 = require("obsidian");
 var PersistenceBehavior = class {
   async loadSettings() {
     const savedSettings = await this.loadData() || {};
+    const shouldPersistFixedHierarchyKeyword = Object.prototype.hasOwnProperty.call(savedSettings, "noteHierarchySearchKeyword") && savedSettings.noteHierarchySearchKeyword !== DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
     this.settings.freezeSearchWhileComposing = this.settings.freezeSearchWhileComposing !== false;
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
@@ -1172,6 +1159,7 @@ var PersistenceBehavior = class {
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
     delete this.settings.backupFileName;
+    if (shouldPersistFixedHierarchyKeyword) await this.saveSettings();
   }
   async saveSettings() {
     this.settingsSavePromise = this.settingsSavePromise.catch(() => {
@@ -4581,8 +4569,7 @@ var RelationsBehavior = class {
         descendantCount,
         additionalCount: Math.max(0, descendantCount - directCount),
         matchingPaths: new Set(matchingPaths),
-        forceExpand: !!childQuery,
-        parentMatch: !!parentQuery
+        forceExpand: !!childQuery
       });
     }
     items.sort((a, b) => compareHierarchyParentItems(
@@ -4602,10 +4589,7 @@ var RelationsBehavior = class {
     };
   }
   getHierarchySearchContext(value) {
-    return parseUnifiedHierarchySearch(value, this.settings.noteHierarchySearchKeyword);
-  }
-  getHierarchySearchKeywordConflict(keyword = this.settings.noteHierarchySearchKeyword) {
-    return getHierarchySearchKeywordError(keyword, this.getLogicalTagSet());
+    return parseUnifiedHierarchySearch(value);
   }
   getHierarchyEdgeCount() {
     let count = 0;
@@ -4902,7 +4886,6 @@ var RelationsBehavior = class {
     const expanded = item.forceExpand || state.allExpanded || state.expandedParents.has(item.parentPath);
     const treeEl = listEl.createDiv({ cls: "tree-item puffs-note-hierarchy-parent" });
     const rowEl = treeEl.createDiv({ cls: "tree-item-self is-clickable mod-collapsible puffs-note-hierarchy-parent-row" });
-    if (item.parentMatch) rowEl.classList.add("is-hierarchy-parent-match");
     const toggleEl = rowEl.createDiv({ cls: "tree-item-icon collapse-icon" });
     toggleEl.classList.toggle("is-collapsed", !expanded);
     (0, import_obsidian11.setIcon)(toggleEl, "right-triangle");
@@ -5027,10 +5010,10 @@ var RelationsBehavior = class {
   openHierarchyForNote(path, sourceEl) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md") return;
-    const keyword = this.settings.noteHierarchySearchKeyword;
+    const keyword = DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD;
     const relationParentPath = sourceEl && sourceEl.dataset && sourceEl.dataset.puffsHierarchyParent;
     const relationParent = relationParentPath && this.app.vault.getAbstractFileByPath(relationParentPath);
-    const query = relationParent instanceof import_obsidian11.TFile && relationParent.extension === "md" ? `${keyword}*${relationParent.basename}*${file.basename}` : this.getHierarchyParents(path).length > 0 ? `${keyword}**${file.basename}` : `${keyword}*${file.basename}`;
+    const query = relationParent instanceof import_obsidian11.TFile && relationParent.extension === "md" ? `${keyword}${relationParent.basename}*${file.basename}` : this.getHierarchyParents(path).length > 0 ? `${keyword}${keyword}${file.basename}` : `${keyword}${file.basename}`;
     for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)) {
       const view = leaf.view;
       if (!view || !view.contentEl || !view.contentEl.contains(sourceEl)) continue;

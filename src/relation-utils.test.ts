@@ -56,20 +56,24 @@ describe('父子笔记搜索和排序', () => {
     expect(parseHierarchySearch('父*子*孙')).toMatchObject({ valid: false });
   });
 
-  it('仅用精确关键字或关键字星号前缀进入父子搜索', () => {
-    expect(parseUnifiedHierarchySearch('父', '父')).toEqual({ matched: true, query: '' });
-    expect(parseUnifiedHierarchySearch('父*父笔记', '父')).toEqual({ matched: true, query: '父笔记' });
-    expect(parseUnifiedHierarchySearch('父*父笔记*子笔记', '父')).toEqual({ matched: true, query: '父笔记*子笔记' });
-    expect(parseUnifiedHierarchySearch('父**子笔记', '父')).toEqual({ matched: true, query: '*子笔记' });
-    expect(parseUnifiedHierarchySearch('父亲', '父')).toEqual({ matched: false, query: '' });
+  it('仅用固定等号语法进入父子搜索', () => {
+    expect(parseUnifiedHierarchySearch('=')).toEqual({ matched: true, query: '' });
+    expect(parseUnifiedHierarchySearch('=父笔记')).toEqual({ matched: true, query: '父笔记' });
+    expect(parseUnifiedHierarchySearch('==子笔记')).toEqual({ matched: true, query: '*子笔记' });
+    expect(parseUnifiedHierarchySearch('=父笔记*子笔记')).toEqual({ matched: true, query: '父笔记*子笔记' });
   });
 
-  it('规范化关键字并拒绝保留符号或标签重名', () => {
-    expect(normalizeHierarchySearchKeyword(' 父子 ')).toBe('父子');
-    expect(normalizeHierarchySearchKeyword('')).toBe('父');
-    expect(getHierarchySearchKeywordError('')).toContain('不能为空');
-    expect(getHierarchySearchKeywordError('父*')).toContain('不能包含');
-    expect(getHierarchySearchKeywordError('父', ['#爱情', '#父'])).toContain('重名');
+  it('拒绝旧语法、全角等号与格式错误的新语法', () => {
+    for (const query of ['父', '父*父笔记', '=*子笔记', '=父*子*孙', '=父*', '==', '==子*孙', '＝']) {
+      expect(parseUnifiedHierarchySearch(query)).toEqual({ matched: false, query: '' });
+    }
+  });
+
+  it('忽略旧配置并把父子搜索关键字固定为等号', () => {
+    expect(normalizeHierarchySearchKeyword('父')).toBe('=');
+    expect(normalizeHierarchySearchKeyword('任意自定义值')).toBe('=');
+    expect(normalizeHierarchySearchKeyword('')).toBe('=');
+    expect(getHierarchySearchKeywordError('任意值', ['#任意值'])).toBe('');
   });
 
   it('按可见集合构建关系森林并保留多父级与关系顺序', () => {

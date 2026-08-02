@@ -202,6 +202,31 @@ describe('批量父子关系', () => {
     expect(parent.descendantCount).toBe(3);
   });
 
+  it('父条件只筛选分支，只有子条件生成子笔记匹配目标', () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: {
+        '父.md': ['子.md'],
+        '另一父.md': ['另一子.md'],
+      },
+      displayNamesByParentPath: {
+        '父.md': { '子.md': '关系子别名' },
+      },
+    }), ['父.md', '子.md', '另一父.md', '另一子.md'], {
+      '父.md': ['父别名'],
+      '子.md': ['子别名', '关系子别名'],
+    });
+
+    const parentOnly = behavior.getHierarchyParentItems('父别名');
+    expect(parentOnly.map((item: any) => item.parentPath)).toEqual(['父.md']);
+    expect(parentOnly[0].matchingPaths.size).toBe(0);
+    expect(parentOnly[0]).not.toHaveProperty('parentMatch');
+
+    const parentAndChild = behavior.getHierarchyParentItems('父别名*关系子别名');
+    expect(parentAndChild.map((item: any) => item.parentPath)).toEqual(['父.md']);
+    expect(Array.from(parentAndChild[0].matchingPaths)).toEqual(['子.md']);
+    expect(parentAndChild[0]).not.toHaveProperty('parentMatch');
+  });
+
   it('右键目标子笔记时仅在同一父级内移动到其下方', async () => {
     const behavior = attachFiles(createBehavior({
       childrenByParentPath: {

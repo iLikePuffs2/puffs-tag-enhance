@@ -4,6 +4,7 @@ import {
   BACKUP_FILE_NAME,
   DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
   DEFAULT_MOVE_NOTE_UP_HOTKEY,
+  DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   DEFAULT_SETTINGS,
   getBackupPathParts,
   isNestedTag,
@@ -23,6 +24,9 @@ export class PersistenceBehavior {
 
   async loadSettings() {
     const savedSettings = (await this.loadData()) || {};
+    const shouldPersistFixedHierarchyKeyword =
+      Object.prototype.hasOwnProperty.call(savedSettings, 'noteHierarchySearchKeyword') &&
+      savedSettings.noteHierarchySearchKeyword !== DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
     this.settings.freezeSearchWhileComposing = this.settings.freezeSearchWhileComposing !== false;
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
@@ -70,6 +74,7 @@ export class PersistenceBehavior {
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
     delete this.settings.backupFileName;
+    if (shouldPersistFixedHierarchyKeyword) await this.saveSettings();
   }
 
   async saveSettings() {

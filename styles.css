@@ -320,10 +320,6 @@
   background: color-mix(in srgb, var(--interactive-accent) 13%, transparent);
 }
 
-.puffs-note-hierarchy-parent-row.is-hierarchy-parent-match {
-  background: color-mix(in srgb, var(--interactive-accent) 13%, transparent);
-}
-
 .puffs-note-hierarchy-child-card.is-active-match {
   background: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 52%, transparent);

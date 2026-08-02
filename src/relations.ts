@@ -1,12 +1,17 @@
 // @ts-nocheck
 import { Menu, Notice, TFile, setIcon } from "obsidian";
-import { TAG_SHELF_VIEW_TYPE, getTagDisplayName, isNestedTag, normalizeTag } from "./models";
+import {
+  DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
+  TAG_SHELF_VIEW_TYPE,
+  getTagDisplayName,
+  isNestedTag,
+  normalizeTag,
+} from "./models";
 import { AddParentTagModal, NoteRelationModal, TagInheritanceModal } from "./relation-modals";
 import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
   buildVisibleHierarchyForest,
-  getHierarchySearchKeywordError,
   mergeInheritedPaths,
   parseHierarchySearch,
   parseUnifiedHierarchySearch,
@@ -307,7 +312,6 @@ export class RelationsBehavior {
         additionalCount: Math.max(0, descendantCount - directCount),
         matchingPaths: new Set(matchingPaths),
         forceExpand: !!childQuery,
-        parentMatch: !!parentQuery,
       });
     }
     items.sort((a, b) => compareHierarchyParentItems(
@@ -329,11 +333,7 @@ export class RelationsBehavior {
   }
 
   getHierarchySearchContext(value) {
-    return parseUnifiedHierarchySearch(value, this.settings.noteHierarchySearchKeyword);
-  }
-
-  getHierarchySearchKeywordConflict(keyword = this.settings.noteHierarchySearchKeyword) {
-    return getHierarchySearchKeywordError(keyword, this.getLogicalTagSet());
+    return parseUnifiedHierarchySearch(value);
   }
 
   getHierarchyEdgeCount() {
@@ -650,7 +650,6 @@ export class RelationsBehavior {
     const expanded = item.forceExpand || state.allExpanded || state.expandedParents.has(item.parentPath);
     const treeEl = listEl.createDiv({ cls: 'tree-item puffs-note-hierarchy-parent' });
     const rowEl = treeEl.createDiv({ cls: 'tree-item-self is-clickable mod-collapsible puffs-note-hierarchy-parent-row' });
-    if (item.parentMatch) rowEl.classList.add('is-hierarchy-parent-match');
     const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon' });
     toggleEl.classList.toggle('is-collapsed', !expanded);
     setIcon(toggleEl, 'right-triangle');
@@ -781,14 +780,14 @@ export class RelationsBehavior {
   openHierarchyForNote(path, sourceEl) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile) || file.extension !== 'md') return;
-    const keyword = this.settings.noteHierarchySearchKeyword;
+    const keyword = DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD;
     const relationParentPath = sourceEl && sourceEl.dataset && sourceEl.dataset.puffsHierarchyParent;
     const relationParent = relationParentPath && this.app.vault.getAbstractFileByPath(relationParentPath);
     const query = relationParent instanceof TFile && relationParent.extension === 'md'
-      ? `${keyword}*${relationParent.basename}*${file.basename}`
+      ? `${keyword}${relationParent.basename}*${file.basename}`
       : this.getHierarchyParents(path).length > 0
-        ? `${keyword}**${file.basename}`
-        : `${keyword}*${file.basename}`;
+        ? `${keyword}${keyword}${file.basename}`
+        : `${keyword}${file.basename}`;
     for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)) {
       const view = leaf.view;
       if (!view || !view.contentEl || !view.contentEl.contains(sourceEl)) continue;

@@ -52,42 +52,46 @@ export function parseHierarchySearch(value: string): {
   };
 }
 
-export const DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD = '父';
+export const DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD = '=';
 
 export function normalizeHierarchySearchKeyword(
-  value: unknown,
-  fallback = DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD
+  _value: unknown,
+  _fallback = DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD
 ): string {
-  const text = String(value ?? '').trim();
-  if (!text || /[*|&]/.test(text)) return fallback;
-  return text;
+  return DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD;
 }
 
-export function getHierarchySearchKeywordError(value: unknown, tagValues: Iterable<string> = []): string {
-  const raw = String(value ?? '').trim();
-  if (!raw) return '父子搜索关键字不能为空';
-  if (/[*|&]/.test(raw)) return '父子搜索关键字不能包含 *、| 或 &';
-  const normalized = raw.toLowerCase();
-  for (const tagValue of tagValues) {
-    if (String(tagValue || '').trim().replace(/^#/, '').toLowerCase() === normalized) {
-      return `父子搜索关键字与标签 #${raw} 重名`;
-    }
-  }
+export function getHierarchySearchKeywordError(_value: unknown, _tagValues: Iterable<string> = []): string {
   return '';
 }
 
-export function parseUnifiedHierarchySearch(value: unknown, keywordValue: unknown): {
+export function parseUnifiedHierarchySearch(value: unknown, _keywordValue?: unknown): {
   matched: boolean;
   query: string;
 } {
   const text = String(value ?? '').trim();
-  const keyword = normalizeHierarchySearchKeyword(keywordValue);
-  const lowerText = text.toLowerCase();
-  const lowerKeyword = keyword.toLowerCase();
-  if (lowerText === lowerKeyword) return { matched: true, query: '' };
-  const prefix = `${lowerKeyword}*`;
-  if (!lowerText.startsWith(prefix)) return { matched: false, query: '' };
-  return { matched: true, query: text.slice(keyword.length + 1) };
+  if (text === '=') return { matched: true, query: '' };
+  if (!text.startsWith('=')) return { matched: false, query: '' };
+
+  if (text.startsWith('==')) {
+    const childQuery = text.slice(2).trim();
+    if (!childQuery || childQuery.includes('=') || childQuery.includes('*')) {
+      return { matched: false, query: '' };
+    }
+    return { matched: true, query: `*${childQuery}` };
+  }
+
+  const query = text.slice(1).trim();
+  const delimiter = query.indexOf('*');
+  if (
+    !query ||
+    query.includes('=') ||
+    delimiter === 0 ||
+    (delimiter >= 0 && (delimiter !== query.lastIndexOf('*') || !query.slice(delimiter + 1).trim()))
+  ) {
+    return { matched: false, query: '' };
+  }
+  return { matched: true, query };
 }
 
 export type VisibleHierarchyForest = {
