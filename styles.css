@@ -91,6 +91,19 @@
   max-width: calc(100vw - 32px);
 }
 
+.modal-container .puffs-note-relation-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.puffs-note-relation-modal .modal-close-button,
+.puffs-note-relation-modal .modal-header {
+  display: none !important;
+}
+
+.puffs-note-relation-modal .modal-content {
+  padding: var(--size-4-4) !important;
+}
+
 .puffs-relation-modal-title {
   margin: 0 0 14px;
 }
@@ -98,6 +111,51 @@
 .puffs-relation-input {
   width: 100%;
   min-width: 0;
+}
+
+.puffs-relation-selector + .puffs-relation-selector {
+  margin-top: 12px;
+}
+
+.puffs-relation-selector-label {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+}
+
+.puffs-relation-selected-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 0;
+  margin-bottom: 5px;
+}
+
+.puffs-relation-selected-list:empty {
+  display: none;
+}
+
+.puffs-relation-selected-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  padding: 2px 4px 2px 8px;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+}
+
+.puffs-relation-selected-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.puffs-relation-selected-chip button {
+  width: 22px;
+  height: 22px;
+  padding: 4px;
 }
 
 .puffs-relation-add-row,
@@ -166,7 +224,12 @@
 
 .puffs-note-hierarchy-sidebar {
   min-height: 100%;
-  padding: 8px 0 12px;
+  padding: 0 0 12px;
+}
+
+.workspace-leaf-content.puffs-note-hierarchy-mode .puffs-hierarchy-search-visible {
+  display: flex !important;
+  visibility: visible !important;
 }
 
 .puffs-note-hierarchy-header {
@@ -217,6 +280,19 @@
   min-height: 28px;
 }
 
+.puffs-hierarchy-add-child-button {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin-inline-start: 4px;
+  padding: 4px;
+}
+
+.puffs-note-hierarchy-child-card {
+  margin-inline-start: -17px !important;
+  padding-inline-start: 17px !important;
+}
+
 .puffs-note-hierarchy-parent-row .tree-item-inner,
 .puffs-note-hierarchy-child-card .tree-item-inner {
   min-width: 0;
@@ -242,17 +318,26 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 52vh;
+  height: 416px;
+  max-height: min(416px, 52vh);
   margin-top: 10px;
   overflow-y: auto;
 }
 
+.puffs-relation-note-results.is-empty-query {
+  overflow: hidden;
+}
+
 .puffs-relation-note-result {
+  box-sizing: border-box;
+  flex: 0 0 49px;
+  min-height: 49px;
   padding: 7px 9px;
   border-radius: var(--radius-s);
 }
 
-.puffs-relation-note-result:hover {
+.puffs-relation-note-result:hover,
+.puffs-relation-note-result.is-active {
   background: var(--background-modifier-hover);
 }
 

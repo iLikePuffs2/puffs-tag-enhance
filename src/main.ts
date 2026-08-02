@@ -45,6 +45,12 @@ class PuffsTagEnhancePlugin extends Plugin {
       name: '打开标签系统',
       callback: () => this.openTagShelf(),
     });
+    this.addCommand({
+      id: 'toggle-tag-sidebar',
+      name: '打开或收起标签侧边栏',
+      callback: () => this.toggleTagSidebar(),
+    });
+    await this.migrateTagSidebarHotkeys();
     this.addRibbonIcon(TAG_SYSTEM_ICON, '打开标签系统', () => this.openTagShelf());
     this.refreshTagIndexAndViews();
     this.registerKeyboardHandler();

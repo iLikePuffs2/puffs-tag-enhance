@@ -222,21 +222,54 @@ class PuffsTagShelfView extends ItemView {
   }
 
   renderHierarchyPage() {
-    this.searchComponent = null;
     this.listEl = null;
     this.summaryTagCountEl = null;
     this.summaryNoteCountEl = null;
     const pageEl = document.createElement('div');
     pageEl.className = 'puffs-tag-shelf-page puffs-note-hierarchy-shelf';
     this.syncSidebarTreeStyles(pageEl);
-    this.contentEl.appendChild(pageEl);
-    this.plugin.renderNoteHierarchyPage(pageEl, this.hierarchyState, {
-      surface: 'shelf',
-      onBack: () => {
-        this.hierarchyMode = false;
-        this.render();
-      },
+    const headerEl = pageEl.createDiv({ cls: 'puffs-tag-shelf-header' });
+    headerEl.createEl('h3', { text: '标签系统', cls: 'puffs-tag-shelf-title' });
+    const backButton = headerEl.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': '打开标签列表' } });
+    setIcon(backButton, 'tags');
+    backButton.addEventListener('click', () => {
+      this.hierarchyMode = false;
+      this.render();
     });
+
+    const sectionHeaderEl = pageEl.createDiv({ cls: 'puffs-tag-shelf-section-header' });
+    sectionHeaderEl.createEl('h3', { text: '父子笔记', cls: 'puffs-tag-shelf-section-title' });
+    const searchHostEl = sectionHeaderEl.createDiv({ cls: 'puffs-tag-shelf-search-host' });
+    this.searchComponent = new SearchComponent(searchHostEl);
+    this.searchComponent.containerEl.classList.add('puffs-tag-shelf-search-container');
+    this.searchComponent.setPlaceholder('搜索父笔记；父*子；*子');
+    this.searchComponent.setValue(this.hierarchyState.query || '');
+
+    const listEl = pageEl.createDiv({ cls: 'puffs-note-hierarchy-shelf-list' });
+    this.contentEl.appendChild(pageEl);
+    this.plugin.renderNoteHierarchyPage(listEl, this.hierarchyState, {
+      surface: 'shelf', showHeader: false, showSearch: false,
+    });
+    this.hierarchyState.inputEl = this.searchComponent.inputEl;
+    const applySearch = (value) => {
+      if (this.isSearchComposing) return;
+      this.hierarchyState.query = value;
+      this.hierarchyState.activeMatchIndex = -1;
+      if (this.hierarchyState.renderList) this.hierarchyState.renderList();
+    };
+    const inputEl = this.searchComponent.inputEl;
+    const onCompositionStart = () => { this.isSearchComposing = this.plugin.settings.freezeSearchWhileComposing; };
+    const onCompositionEnd = () => { this.isSearchComposing = false; applySearch(inputEl.value); };
+    inputEl.addEventListener('compositionstart', onCompositionStart);
+    inputEl.addEventListener('compositionend', onCompositionEnd);
+    inputEl.addEventListener('keydown', (event) => this.hierarchyState.handleSearchEnter?.(event));
+    this.searchCompositionCleanup = () => {
+      inputEl.removeEventListener('compositionstart', onCompositionStart);
+      inputEl.removeEventListener('compositionend', onCompositionEnd);
+      this.isSearchComposing = false;
+      this.searchCompositionCleanup = null;
+    };
+    this.searchComponent.onChange(applySearch);
   }
 
   clearSearchCompositionHandlers() {

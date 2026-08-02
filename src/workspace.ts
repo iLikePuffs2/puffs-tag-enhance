@@ -14,6 +14,11 @@ import {
   parseHotkeyText
 } from "./models";
 
+const TAG_PLUGIN_ID = 'tag-pane';
+const OPEN_TAG_COMMAND_ID = 'tag-pane:open';
+const TOGGLE_RIGHT_SIDEBAR_COMMAND_ID = 'app:toggle-right-sidebar';
+const LEGACY_TAG_SIDEBAR_COMMAND_ID = 'puffs-immersive-mode:toggle-tag-sidebar';
+
 export class WorkspaceBehavior {
   [key: string]: any;
 
@@ -23,6 +28,70 @@ export class WorkspaceBehavior {
         leaf.view.refresh();
       }
     }
+  }
+
+  getVisibleTagLeaf() {
+    return (this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []).find((leaf) => {
+      if (typeof leaf.isVisible === 'function') return leaf.isVisible();
+      return Boolean(leaf.view && leaf.view.containerEl && leaf.view.containerEl.isShown());
+    }) || null;
+  }
+
+  isLeafFocused(leaf) {
+    if (!leaf) return false;
+    const activeEl = document.activeElement;
+    const containerEl = leaf.view && leaf.view.containerEl || leaf.containerEl;
+    return this.app.workspace.activeLeaf === leaf || Boolean(activeEl && containerEl && containerEl.contains(activeEl));
+  }
+
+  async focusLeaf(leaf) {
+    if (!leaf) return;
+    if (this.app.workspace.revealLeaf) await this.app.workspace.revealLeaf(leaf);
+    if (this.app.workspace.setActiveLeaf) this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    const containerEl = leaf.view && leaf.view.containerEl || leaf.containerEl;
+    const focusTarget = containerEl && containerEl.querySelector('input, button, [tabindex]:not([tabindex="-1"])');
+    if (focusTarget && focusTarget.focus) focusTarget.focus();
+    else if (containerEl && containerEl.focus) containerEl.focus();
+  }
+
+  async toggleTagSidebar() {
+    const tagPlugin = this.app.internalPlugins && this.app.internalPlugins.getPluginById &&
+      this.app.internalPlugins.getPluginById(TAG_PLUGIN_ID);
+    if (tagPlugin && !tagPlugin.enabled) {
+      new Notice('请先启用 Obsidian 核心插件 标签列表。');
+      return;
+    }
+    const leaf = this.getVisibleTagLeaf();
+    if (leaf) {
+      const patch = this.viewPatches.get(leaf.view);
+      if (patch && patch.hierarchyMode) {
+        this.exitSidebarHierarchyMode(leaf.view, patch);
+        await this.focusLeaf(leaf);
+        return;
+      }
+      if (!this.isLeafFocused(leaf)) {
+        await this.focusLeaf(leaf);
+        return;
+      }
+      await this.app.commands.executeCommandById(TOGGLE_RIGHT_SIDEBAR_COMMAND_ID);
+      return;
+    }
+    const opened = await this.app.commands.executeCommandById(OPEN_TAG_COMMAND_ID);
+    if (opened === false) new Notice('无法打开标签列表，请确认核心插件 标签列表 已启用。');
+  }
+
+  async migrateTagSidebarHotkeys() {
+    const manager = this.app.hotkeyManager;
+    if (!manager || !manager.getHotkeys || !manager.setHotkeys || !manager.removeHotkeys) return;
+    const nextId = `${this.manifest.id}:toggle-tag-sidebar`;
+    const legacy = manager.getHotkeys(LEGACY_TAG_SIDEBAR_COMMAND_ID) || [];
+    if (!legacy.length) return;
+    const current = manager.getHotkeys(nextId) || [];
+    const merged = Array.from(new Map([...current, ...legacy]
+      .map((hotkey) => [JSON.stringify(hotkey), hotkey])).values());
+    manager.setHotkeys(nextId, merged);
+    manager.removeHotkeys(LEGACY_TAG_SIDEBAR_COMMAND_ID);
+    if (manager.save) await manager.save();
   }
 
   async openTagShelf() {
@@ -114,7 +183,23 @@ export class WorkspaceBehavior {
       if (!cardEl) return;
 
       const targetTag = normalizeTag(cardEl.dataset.puffsTag);
+      const targetHierarchyParent = cardEl.dataset.puffsHierarchyParent;
       const targetPath = cardEl.dataset.path;
+      if (selected.hierarchyParent) {
+        if (targetHierarchyParent === selected.hierarchyParent && targetPath === selected.path) return;
+        if (!targetHierarchyParent || targetHierarchyParent !== selected.hierarchyParent || !targetPath) {
+          this.clearNoteOrderTarget();
+          return;
+        }
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        this.moveSelectedHierarchyNoteAfter(targetHierarchyParent, targetPath).catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to move hierarchy note:', error);
+          new Notice('调整子笔记顺序失败');
+        });
+        return;
+      }
       if (targetTag === selected.tag && targetPath === selected.path) return;
 
       if (!targetTag || targetTag !== selected.tag || !targetPath) {

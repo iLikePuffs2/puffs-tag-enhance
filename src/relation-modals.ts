@@ -125,75 +125,209 @@ class TagInheritanceModal extends Modal {
 }
 
 class NoteRelationModal extends Modal {
-  constructor(app, plugin, sourcePath, mode) {
+  constructor(app, plugin, sourcePath = null, mode = null) {
     super(app);
     this.plugin = plugin;
-    this.sourcePath = sourcePath;
-    this.mode = mode === 'parent' ? 'parent' : 'child';
-    this.query = '';
+    this.selectedParents = new Map();
+    this.selectedChildren = new Map();
+    this.lockedParents = new Set();
+    this.lockedChildren = new Set();
+    this.queries = { parent: '', child: '' };
+    this.activeSide = 'parent';
+    this.activeIndex = 0;
+    this.isComposing = false;
+    if (sourcePath) {
+      const selection = { path: sourcePath, displayName: '' };
+      if (mode === 'parent') {
+        this.selectedChildren.set(sourcePath, selection);
+        this.lockedChildren.add(sourcePath);
+        this.activeSide = 'parent';
+      } else {
+        this.selectedParents.set(sourcePath, selection);
+        this.lockedParents.add(sourcePath);
+        this.activeSide = 'child';
+      }
+    }
   }
 
   onOpen() {
-    this.modalEl.classList.add('puffs-relation-modal');
+    this.modalEl.classList.add('puffs-relation-modal', 'puffs-note-relation-modal');
     this.render();
   }
 
   render() {
     this.contentEl.empty();
-    const sourceFile = this.app.vault.getAbstractFileByPath(this.sourcePath);
-    const sourceName = sourceFile instanceof TFile ? sourceFile.basename : this.sourcePath;
-    this.contentEl.createEl('h3', {
-      text: this.mode === 'child' ? `为 ${sourceName} 添加子笔记` : `为 ${sourceName} 添加父笔记`,
-      cls: 'puffs-relation-modal-title',
-    });
-    const inputEl = this.contentEl.createEl('input', {
-      type: 'search',
-      cls: 'puffs-relation-input',
-      attr: { placeholder: '搜索文件名、路径或 alias' },
-    });
-    inputEl.value = this.query;
+    this.contentEl.createEl('h3', { text: '新增父子笔记', cls: 'puffs-relation-modal-title' });
+    const inputBySide = {};
+    const selectedBySide = {};
+    const createSelector = (side, label) => {
+      const sectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-selector' });
+      const locked = side === 'parent' ? this.lockedParents : this.lockedChildren;
+      sectionEl.createDiv({ text: label, cls: 'puffs-relation-selector-label' });
+      selectedBySide[side] = sectionEl.createDiv({ cls: 'puffs-relation-selected-list' });
+      const inputEl = sectionEl.createEl('input', {
+        type: 'search',
+        cls: 'puffs-relation-input',
+        attr: { placeholder: '搜索笔记名或别名' },
+      });
+      if (locked.size) {
+        sectionEl.classList.add('is-locked');
+        inputEl.disabled = true;
+        inputEl.placeholder = '已锁定';
+      }
+      inputEl.value = this.queries[side];
+      inputBySide[side] = inputEl;
+      inputEl.addEventListener('focus', () => {
+        this.activeSide = side;
+        this.activeIndex = 0;
+        renderResults();
+      });
+      inputEl.addEventListener('compositionstart', () => { this.isComposing = true; });
+      inputEl.addEventListener('compositionend', () => {
+        this.isComposing = false;
+        this.queries[side] = inputEl.value;
+        this.activeIndex = 0;
+        renderResults();
+      });
+      inputEl.addEventListener('input', () => {
+        if (this.isComposing) return;
+        this.queries[side] = inputEl.value;
+        this.activeIndex = 0;
+        renderResults();
+      });
+      return inputEl;
+    };
+    createSelector('parent', '父笔记');
+    createSelector('child', '子笔记');
     const resultsEl = this.contentEl.createDiv({ cls: 'puffs-relation-note-results' });
+    const footerEl = this.contentEl.createDiv({ cls: 'puffs-relation-modal-footer' });
+    const submitButton = footerEl.createEl('button', { cls: 'mod-cta' });
+
+    const renderSelections = () => {
+      for (const side of ['parent', 'child']) {
+        const map = side === 'parent' ? this.selectedParents : this.selectedChildren;
+        const locked = side === 'parent' ? this.lockedParents : this.lockedChildren;
+        const hostEl = selectedBySide[side];
+        hostEl.empty();
+        for (const selection of map.values()) {
+          const file = this.app.vault.getAbstractFileByPath(selection.path);
+          const chipEl = hostEl.createDiv({ cls: 'puffs-relation-selected-chip' });
+          chipEl.createSpan({ text: selection.displayName || (file instanceof TFile ? file.basename : selection.path) });
+          if (!locked.has(selection.path)) {
+            const removeButton = chipEl.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': '移除' } });
+            setIcon(removeButton, 'x');
+            removeButton.addEventListener('click', () => {
+              map.delete(selection.path);
+              renderSelections();
+              renderResults();
+            });
+          }
+        }
+      }
+      const count = this.selectedParents.size * this.selectedChildren.size;
+      submitButton.textContent = `添加（${count}）`;
+      submitButton.disabled = !this.selectedParents.size || !this.selectedChildren.size ||
+        (this.selectedParents.size > 1 && this.selectedChildren.size > 1);
+    };
+
+    const findMatch = (file, term) => {
+      const basename = file.basename.toLowerCase();
+      if (basename.includes(term)) return { displayName: file.basename, alias: '' };
+      const alias = this.plugin.getNoteAliases(file).find((value) => value.toLowerCase().includes(term));
+      return alias ? { displayName: alias, alias } : null;
+    };
+    const canSelect = (side, path) => {
+      if (side === 'parent' && this.selectedChildren.size > 1 && this.selectedParents.size >= 1) return false;
+      if (side === 'child' && this.selectedParents.size > 1 && this.selectedChildren.size >= 1) return false;
+      const opposite = side === 'parent' ? this.selectedChildren : this.selectedParents;
+      let hasNewRelation = opposite.size === 0;
+      for (const selection of opposite.values()) {
+        const parentPath = side === 'parent' ? path : selection.path;
+        const childPath = side === 'child' ? path : selection.path;
+        if (parentPath === childPath || this.plugin.wouldCreateNoteHierarchyCycle(parentPath, childPath)) return false;
+        if (!this.plugin.getHierarchyChildren(parentPath).includes(childPath)) hasNewRelation = true;
+      }
+      return hasNewRelation;
+    };
+    const selectCandidate = (candidate) => {
+      const map = this.activeSide === 'parent' ? this.selectedParents : this.selectedChildren;
+      if (map.has(candidate.file.path)) map.delete(candidate.file.path);
+      else if (canSelect(this.activeSide, candidate.file.path)) {
+        map.set(candidate.file.path, {
+          path: candidate.file.path,
+          displayName: this.activeSide === 'child' ? candidate.alias : '',
+        });
+      } else {
+        new Notice('只能选择一篇父笔记或一篇子笔记作为批量关系的一侧');
+      }
+      renderSelections();
+      renderResults();
+    };
     const renderResults = () => {
       resultsEl.empty();
-      const term = this.query.trim().toLowerCase();
-      const existing = new Set(this.mode === 'child'
-        ? this.plugin.getHierarchyChildren(this.sourcePath)
-        : this.plugin.getHierarchyParents(this.sourcePath));
-      const files = this.app.vault.getMarkdownFiles()
-        .filter((file) => file.path !== this.sourcePath && !existing.has(file.path))
-        .filter((file) => {
-          if (!term) return true;
-          return [file.basename, file.path, ...this.plugin.getNoteAliases(file)]
-            .some((value) => String(value).toLowerCase().includes(term));
-        })
-        .sort((a, b) => a.basename.localeCompare(b.basename, 'zh-Hans-CN'))
-        .slice(0, 100);
-      if (!files.length) {
+      const term = this.queries[this.activeSide].trim().toLowerCase();
+      if (!term) {
+        resultsEl.classList.add('is-empty-query');
+        return;
+      }
+      resultsEl.classList.remove('is-empty-query');
+      const currentMap = this.activeSide === 'parent' ? this.selectedParents : this.selectedChildren;
+      const candidates = this.app.vault.getMarkdownFiles()
+        .map((file) => ({ file, match: findMatch(file, term) }))
+        .filter(({ match }) => !!match)
+        .map(({ file, match }) => ({ file, ...match }))
+        .filter(({ file }) => !currentMap.has(file.path) && canSelect(this.activeSide, file.path))
+        .sort((a, b) => a.displayName.localeCompare(b.displayName, 'zh-Hans-CN'));
+      if (!candidates.length) {
         resultsEl.createDiv({ text: '没有可添加的笔记。', cls: 'puffs-relation-empty' });
         return;
       }
-      for (const file of files) {
+      this.activeIndex = Math.min(this.activeIndex, candidates.length - 1);
+      candidates.forEach((candidate, index) => {
+        const file = candidate.file;
         const rowEl = resultsEl.createDiv({ cls: 'puffs-relation-note-result is-clickable' });
-        rowEl.createDiv({ text: file.basename, cls: 'puffs-relation-note-result-name' });
+        rowEl.classList.toggle('is-active', index === this.activeIndex);
+        rowEl.createDiv({ text: candidate.displayName, cls: 'puffs-relation-note-result-name' });
         rowEl.createDiv({ text: file.path, cls: 'puffs-relation-note-result-path' });
-        rowEl.addEventListener('click', async () => {
-          try {
-            const parentPath = this.mode === 'child' ? this.sourcePath : file.path;
-            const childPath = this.mode === 'child' ? file.path : this.sourcePath;
-            await this.plugin.addNoteHierarchyEdge(parentPath, childPath);
-            this.close();
-          } catch (error) {
-            new Notice(error && error.message ? error.message : '添加父子关系失败');
-          }
+        rowEl.addEventListener('mouseenter', () => {
+          this.activeIndex = index;
+          resultsEl.querySelectorAll('.puffs-relation-note-result').forEach((el, rowIndex) => {
+            el.classList.toggle('is-active', rowIndex === index);
+          });
         });
-      }
+        rowEl.addEventListener('click', () => selectCandidate(candidate));
+      });
+      resultsEl.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
     };
-    inputEl.addEventListener('input', () => {
-      this.query = inputEl.value;
-      renderResults();
+    for (const side of ['parent', 'child']) {
+      inputBySide[side].addEventListener('keydown', (event) => {
+        if (this.isComposing || event.isComposing) return;
+        const rows = Array.from(resultsEl.querySelectorAll('.puffs-relation-note-result'));
+        if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && rows.length) {
+          const delta = event.key === 'ArrowDown' ? 1 : -1;
+          this.activeIndex = Math.max(0, Math.min(rows.length - 1, this.activeIndex + delta));
+          event.preventDefault();
+          renderResults();
+        } else if (event.key === 'Enter' && rows[this.activeIndex]) {
+          event.preventDefault();
+          rows[this.activeIndex].click();
+        }
+      });
+    }
+    submitButton.addEventListener('click', async () => {
+      try {
+        await this.plugin.addNoteHierarchyEdges(
+          Array.from(this.selectedParents.values()),
+          Array.from(this.selectedChildren.values())
+        );
+        this.close();
+      } catch (error) {
+        new Notice(error && error.message ? error.message : '添加父子关系失败');
+      }
     });
+    renderSelections();
     renderResults();
-    window.setTimeout(() => inputEl.focus(), 0);
+    globalThis.setTimeout(() => inputBySide[this.activeSide].focus(), 0);
   }
 }
 

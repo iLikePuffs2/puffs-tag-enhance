@@ -133,17 +133,68 @@ export class RelationsBehavior {
   }
 
   async addNoteHierarchyEdge(parentPath, childPath) {
-    const parent = this.app.vault.getAbstractFileByPath(parentPath);
-    const child = this.app.vault.getAbstractFileByPath(childPath);
-    if (!(parent instanceof TFile) || parent.extension !== 'md') throw new Error('父笔记无效');
-    if (!(child instanceof TFile) || child.extension !== 'md') throw new Error('子笔记无效');
-    if (this.wouldCreateNoteHierarchyCycle(parentPath, childPath)) throw new Error('不能建立循环父子关系');
+    return this.addNoteHierarchyEdges(
+      [{ path: parentPath, displayName: '' }],
+      [{ path: childPath, displayName: '' }]
+    );
+  }
+
+  async addNoteHierarchyEdges(parentSelections, childSelections) {
+    const parents = Array.from(new Map((parentSelections || []).map((item) => [item.path, item])).values());
+    const children = Array.from(new Map((childSelections || []).map((item) => [item.path, item])).values());
+    if (!parents.length) throw new Error('请选择父笔记');
+    if (!children.length) throw new Error('请选择子笔记');
+    if (parents.length > 1 && children.length > 1) throw new Error('不能同时选择多篇父笔记和多篇子笔记');
+
+    for (const item of parents) {
+      const file = this.app.vault.getAbstractFileByPath(item.path);
+      if (!(file instanceof TFile) || file.extension !== 'md') throw new Error('父笔记无效');
+    }
+    for (const item of children) {
+      const file = this.app.vault.getAbstractFileByPath(item.path);
+      if (!(file instanceof TFile) || file.extension !== 'md') throw new Error('子笔记无效');
+    }
+
     const hierarchy = this.getNoteHierarchySettings();
-    const children = this.getHierarchyChildren(parentPath);
-    if (!children.includes(childPath)) children.push(childPath);
-    hierarchy.childrenByParentPath[parentPath] = children;
-    await this.saveSettings();
+    const previousChildren = hierarchy.childrenByParentPath;
+    const previousDisplayNames = hierarchy.displayNamesByParentPath;
+    const stagedChildren = Object.fromEntries(Object.entries(hierarchy.childrenByParentPath)
+      .map(([path, values]) => [path, [...values]]));
+    const stagedDisplayNames = Object.fromEntries(Object.entries(hierarchy.displayNamesByParentPath)
+      .map(([path, values]) => [path, { ...values }]));
+    const pending = [];
+    for (const parent of parents) {
+      for (const child of children) {
+        if (parent.path === child.path) throw new Error('父笔记和子笔记不能相同');
+        if ((stagedChildren[parent.path] || []).includes(child.path)) continue;
+        if (wouldCreateDirectedCycle(stagedChildren, parent.path, child.path)) {
+          throw new Error('不能建立循环父子关系');
+        }
+        if (!stagedChildren[parent.path]) stagedChildren[parent.path] = [];
+        stagedChildren[parent.path].push(child.path);
+        pending.push({ parent, child });
+      }
+    }
+    if (!pending.length) throw new Error('所选父子关系已经存在');
+
+    for (const { parent, child } of pending) {
+      const childFile = this.app.vault.getAbstractFileByPath(child.path);
+      const alias = typeof child.displayName === 'string' ? child.displayName.trim() : '';
+      if (!alias || !(childFile instanceof TFile) || !this.getNoteAliases(childFile).includes(alias)) continue;
+      if (!stagedDisplayNames[parent.path]) stagedDisplayNames[parent.path] = {};
+      stagedDisplayNames[parent.path][child.path] = alias;
+    }
+    hierarchy.childrenByParentPath = stagedChildren;
+    hierarchy.displayNamesByParentPath = stagedDisplayNames;
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      hierarchy.childrenByParentPath = previousChildren;
+      hierarchy.displayNamesByParentPath = previousDisplayNames;
+      throw error;
+    }
     this.refreshHierarchyViews();
+    return pending.length;
   }
 
   async removeNoteHierarchyEdge(parentPath, childPath) {
@@ -171,6 +222,22 @@ export class RelationsBehavior {
     hierarchy.childrenByParentPath[parentPath] = children;
     await this.saveSettings();
     this.refreshHierarchyViews();
+  }
+
+  async moveSelectedHierarchyNoteAfter(parentPath, targetPath) {
+    const selected = this.selectedNoteOrderTarget;
+    if (!selected || selected.hierarchyParent !== parentPath || !targetPath || selected.path === targetPath) return false;
+    const children = this.getHierarchyChildren(parentPath);
+    const movingIndex = children.indexOf(selected.path);
+    const targetIndex = children.indexOf(targetPath);
+    if (movingIndex < 0 || targetIndex < 0 || movingIndex === targetIndex + 1) return false;
+    children.splice(movingIndex, 1);
+    children.splice(children.indexOf(targetPath) + 1, 0, selected.path);
+    this.getNoteHierarchySettings().childrenByParentPath[parentPath] = children;
+    await this.saveSettings();
+    this.refreshHierarchyViews();
+    globalThis.setTimeout(() => this.refreshNoteOrderSelectionState(), 0);
+    return true;
   }
 
   getHierarchyDisplayName(parentPath, file) {
@@ -233,6 +300,7 @@ export class RelationsBehavior {
         parentPath,
         parentFile,
         directCount,
+        descendantCount,
         additionalCount: Math.max(0, descendantCount - directCount),
         matchingPaths: new Set(matchingPaths),
         forceExpand: !!childQuery,
@@ -248,28 +316,37 @@ export class RelationsBehavior {
   createHierarchySurfaceState() {
     return {
       query: '',
+      allExpanded: false,
       expandedParents: new Set(),
       expandedBranches: new Set(),
       activeMatchIndex: -1,
     };
   }
 
+  toggleAllHierarchyItems(state) {
+    state.allExpanded = !state.allExpanded;
+    state.expandedParents.clear();
+    state.expandedBranches.clear();
+    if (typeof state.renderList === 'function') state.renderList();
+    return state.allExpanded;
+  }
+
   renderNoteHierarchyPage(hostEl, state, options = {}) {
     hostEl.empty();
     hostEl.classList.add('puffs-note-hierarchy-page');
-    const headerEl = hostEl.createDiv({ cls: 'puffs-note-hierarchy-header' });
-    headerEl.createEl('h3', { text: '父子笔记', cls: 'puffs-note-hierarchy-title' });
-    if (options.onBack) {
-      const backButton = headerEl.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': '返回标签系统' } });
-      setIcon(backButton, 'tags');
-      backButton.addEventListener('click', options.onBack);
+    if (options.showHeader !== false) {
+      const headerEl = hostEl.createDiv({ cls: 'puffs-note-hierarchy-header' });
+      headerEl.createEl('h3', { text: '父子笔记', cls: 'puffs-note-hierarchy-title' });
+      if (options.onBack) {
+        const backButton = headerEl.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': '返回标签系统' } });
+        setIcon(backButton, 'tags');
+        backButton.addEventListener('click', options.onBack);
+      }
     }
-    const searchEl = hostEl.createEl('input', {
-      type: 'search',
-      cls: 'puffs-note-hierarchy-search',
-      attr: { placeholder: '搜索父笔记；父*子；*子' },
+    const searchEl = options.showSearch === false ? null : hostEl.createEl('input', {
+      type: 'search', cls: 'puffs-note-hierarchy-search', attr: { placeholder: '搜索父笔记；父*子；*子' },
     });
-    searchEl.value = state.query || '';
+    if (searchEl) searchEl.value = state.query || '';
     const listEl = hostEl.createDiv({ cls: 'puffs-note-hierarchy-list' });
     const renderList = () => {
       listEl.empty();
@@ -280,12 +357,7 @@ export class RelationsBehavior {
       }
       for (const item of items) this.renderHierarchyParentItem(listEl, item, state, renderList, options.surface || 'sidebar');
     };
-    searchEl.addEventListener('input', () => {
-      state.query = searchEl.value;
-      state.activeMatchIndex = -1;
-      renderList();
-    });
-    searchEl.addEventListener('keydown', (event) => {
+    const handleSearchEnter = (event) => {
       if (event.key !== 'Enter' || event.isComposing) return;
       const matches = Array.from(listEl.querySelectorAll('.is-hierarchy-search-match'));
       if (!matches.length) return;
@@ -293,21 +365,38 @@ export class RelationsBehavior {
       matches.forEach((el, index) => el.classList.toggle('is-active-match', index === state.activeMatchIndex));
       matches[state.activeMatchIndex].scrollIntoView({ block: 'nearest' });
       event.preventDefault();
-    });
+    };
+    if (searchEl) {
+      searchEl.addEventListener('input', () => {
+        state.query = searchEl.value;
+        state.activeMatchIndex = -1;
+        renderList();
+      });
+      searchEl.addEventListener('keydown', handleSearchEnter);
+    }
     renderList();
-    state.inputEl = searchEl;
+    state.inputEl = searchEl || state.inputEl;
+    state.renderList = renderList;
+    state.handleSearchEnter = handleSearchEnter;
   }
 
   renderHierarchyParentItem(listEl, item, state, rerender, surface) {
-    const expanded = item.forceExpand || state.expandedParents.has(item.parentPath);
+    const expanded = item.forceExpand || state.allExpanded || state.expandedParents.has(item.parentPath);
     const treeEl = listEl.createDiv({ cls: 'tree-item puffs-note-hierarchy-parent' });
     const rowEl = treeEl.createDiv({ cls: 'tree-item-self is-clickable mod-collapsible puffs-note-hierarchy-parent-row' });
     const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon' });
     toggleEl.classList.toggle('is-collapsed', !expanded);
     setIcon(toggleEl, 'right-triangle');
     rowEl.createDiv({ text: item.parentFile.basename, cls: 'tree-item-inner' });
+    const addChildButton = rowEl.createEl('button', { cls: 'clickable-icon puffs-hierarchy-add-child-button', attr: { 'aria-label': '添加子笔记' } });
+    setIcon(addChildButton, 'plus');
+    addChildButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      new NoteRelationModal(this.app, this, item.parentPath, 'child').open();
+    });
     rowEl.createSpan({
-      text: item.additionalCount > 0 ? `${item.directCount}+${item.additionalCount}` : String(item.directCount),
+      text: String(item.descendantCount),
       cls: 'tree-item-flair tag-pane-tag-count',
     });
     rowEl.addEventListener('click', () => {
@@ -335,12 +424,23 @@ export class RelationsBehavior {
       const branchKey = `${rootPath}\u0000${parentPath}\u0000${childPath}`;
       const hasChildren = this.getHierarchyChildren(childPath).length > 0;
       const forceOpen = Array.from(matchingPaths).some((path) => path === childPath || this.getHierarchyDescendants(childPath).includes(path));
-      const expanded = forceOpen || state.expandedBranches.has(branchKey);
+      const expanded = forceOpen || state.allExpanded || state.expandedBranches.has(branchKey);
       const itemEl = containerEl.createDiv({ cls: 'tree-item puffs-tag-note-item puffs-note-hierarchy-child-item' });
       const cardEl = itemEl.createDiv({ cls: 'tree-item-self puffs-tag-note-card is-clickable puffs-note-hierarchy-child-card' });
       cardEl.dataset.path = file.path;
       cardEl.dataset.puffsHierarchyParent = parentPath;
       cardEl.dataset.puffsSurface = surface;
+      const orderButtonEl = cardEl.createEl('button', { cls: 'clickable-icon puffs-tag-note-order-button' });
+      orderButtonEl.dataset.path = file.path;
+      orderButtonEl.dataset.puffsHierarchyParent = parentPath;
+      orderButtonEl.dataset.puffsSurface = surface;
+      setIcon(orderButtonEl, 'grip-vertical');
+      this.syncNoteOrderButtonSelection(orderButtonEl);
+      orderButtonEl.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.toggleHierarchyNoteOrderTarget(parentPath, file.path, surface);
+      });
       if (matchingPaths.has(childPath)) cardEl.classList.add('is-hierarchy-search-match');
       if (hasChildren) {
         const toggleEl = cardEl.createDiv({ cls: 'tree-item-icon collapse-icon' });
@@ -382,10 +482,6 @@ export class RelationsBehavior {
 
   showHierarchyChildMenu(event, parentPath, file) {
     const menu = new Menu();
-    const children = this.getHierarchyChildren(parentPath);
-    const index = children.indexOf(file.path);
-    menu.addItem((item) => item.setTitle('上移').setIcon('arrow-up').setDisabled(index <= 0).onClick(() => this.moveHierarchyChild(parentPath, file.path, -1)));
-    menu.addItem((item) => item.setTitle('下移').setIcon('arrow-down').setDisabled(index < 0 || index >= children.length - 1).onClick(() => this.moveHierarchyChild(parentPath, file.path, 1)));
     const aliases = this.getNoteAliases(file);
     if (aliases.length) {
       menu.addItem((item) => item.setTitle('更换显示名称').setIcon('text-cursor-input').onClick(() => {

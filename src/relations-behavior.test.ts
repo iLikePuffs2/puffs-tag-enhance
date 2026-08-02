@@ -19,6 +19,14 @@ function createBehavior(noteHierarchy: any, exclusions: Record<string, string[]>
   return behavior;
 }
 
+function attachFiles(behavior: any, paths: string[], aliases: Record<string, string[]> = {}) {
+  const files = new Map(paths.map((path) => [path, new (TFile as any)(path)]));
+  behavior.app = { vault: { getAbstractFileByPath: (path: string) => files.get(path) || null } };
+  behavior.getNoteAliases = (file: any) => aliases[file.path] || [];
+  behavior.refreshHierarchyViews = vi.fn();
+  return behavior;
+}
+
 describe('关系文件迁移', () => {
   it('改名或移动时迁移父节点、子节点、alias 与继承排除路径', () => {
     const behavior = createBehavior({
@@ -69,6 +77,93 @@ describe('关系文件迁移', () => {
     });
     expect(behavior.settings.relations.tagInheritance.excludedPathsByParent['#父'])
       .toEqual(['保留.md']);
+    expect(behavior.saveSettings).toHaveBeenCalledOnce();
+  });
+});
+
+describe('批量父子关系', () => {
+  it('支持多父一子并把子笔记 alias 写入每条新关系', async () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: {},
+      displayNamesByParentPath: {},
+    }), ['父一.md', '父二.md', '子.md'], { '子.md': ['子别名'] });
+
+    await behavior.addNoteHierarchyEdges(
+      [{ path: '父一.md' }, { path: '父二.md' }],
+      [{ path: '子.md', displayName: '子别名' }]
+    );
+
+    expect(behavior.settings.relations.noteHierarchy.childrenByParentPath).toEqual({
+      '父一.md': ['子.md'],
+      '父二.md': ['子.md'],
+    });
+    expect(behavior.settings.relations.noteHierarchy.displayNamesByParentPath).toEqual({
+      '父一.md': { '子.md': '子别名' },
+      '父二.md': { '子.md': '子别名' },
+    });
+    expect(behavior.saveSettings).toHaveBeenCalledOnce();
+  });
+
+  it('发现循环时保持原数据且不保存', async () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: { '甲.md': ['乙.md'] },
+      displayNamesByParentPath: {},
+    }), ['甲.md', '乙.md']);
+
+    await expect(behavior.addNoteHierarchyEdges(
+      [{ path: '乙.md' }],
+      [{ path: '甲.md' }]
+    )).rejects.toThrow('循环');
+    expect(behavior.settings.relations.noteHierarchy.childrenByParentPath).toEqual({ '甲.md': ['乙.md'] });
+    expect(behavior.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('保存失败时回滚整批关系，不留下部分结果', async () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: { '原父.md': ['原子.md'] },
+      displayNamesByParentPath: { '原父.md': { '原子.md': '原别名' } },
+    }), ['原父.md', '原子.md', '新父.md', '新子.md'], { '新子.md': ['新别名'] });
+    behavior.saveSettings.mockRejectedValueOnce(new Error('写入失败'));
+
+    await expect(behavior.addNoteHierarchyEdges(
+      [{ path: '新父.md' }],
+      [{ path: '新子.md', displayName: '新别名' }]
+    )).rejects.toThrow('写入失败');
+    expect(behavior.settings.relations.noteHierarchy).toEqual({
+      childrenByParentPath: { '原父.md': ['原子.md'] },
+      displayNamesByParentPath: { '原父.md': { '原子.md': '原别名' } },
+    });
+    expect(behavior.refreshHierarchyViews).not.toHaveBeenCalled();
+  });
+
+  it('父卡片递归后代数量按路径去重', () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: {
+        '父.md': ['子一.md', '子二.md'],
+        '子一.md': ['孙.md'],
+        '子二.md': ['孙.md'],
+      },
+      displayNamesByParentPath: {},
+    }), ['父.md', '子一.md', '子二.md', '孙.md']);
+
+    const parent = behavior.getHierarchyParentItems('').find((item: any) => item.parentPath === '父.md');
+    expect(parent.descendantCount).toBe(3);
+  });
+
+  it('右键目标子笔记时仅在同一父级内移动到其下方', async () => {
+    const behavior = attachFiles(createBehavior({
+      childrenByParentPath: {
+        '父.md': ['甲.md', '乙.md', '丙.md'],
+        '另一父.md': ['甲.md', '丁.md'],
+      },
+      displayNamesByParentPath: {},
+    }), ['父.md', '另一父.md', '甲.md', '乙.md', '丙.md', '丁.md']);
+    behavior.selectedNoteOrderTarget = { hierarchyParent: '父.md', path: '甲.md' };
+    behavior.refreshNoteOrderSelectionState = vi.fn();
+
+    await expect(behavior.moveSelectedHierarchyNoteAfter('父.md', '乙.md')).resolves.toBe(true);
+    expect(behavior.getHierarchyChildren('父.md')).toEqual(['乙.md', '甲.md', '丙.md']);
+    expect(behavior.getHierarchyChildren('另一父.md')).toEqual(['甲.md', '丁.md']);
     expect(behavior.saveSettings).toHaveBeenCalledOnce();
   });
 });

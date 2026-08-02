@@ -458,10 +458,12 @@ export class InteractionsBehavior {
     }, 0);
   }
 
-  isNoteOrderTargetSelected(tag, path) {
+  isNoteOrderTargetSelected(tag, path, hierarchyParent = '') {
     return !!(
       this.selectedNoteOrderTarget &&
-      this.selectedNoteOrderTarget.tag === tag &&
+      (hierarchyParent
+        ? this.selectedNoteOrderTarget.hierarchyParent === hierarchyParent
+        : this.selectedNoteOrderTarget.tag === tag) &&
       this.selectedNoteOrderTarget.path === path
     );
   }
@@ -470,7 +472,8 @@ export class InteractionsBehavior {
     if (!buttonEl) return;
     const isSelected = this.isNoteOrderTargetSelected(
       buttonEl.dataset.puffsTag,
-      buttonEl.dataset.path
+      buttonEl.dataset.path,
+      buttonEl.dataset.puffsHierarchyParent
     );
     buttonEl.classList.toggle('is-selected', isSelected);
     buttonEl.setAttribute('aria-pressed', String(isSelected));
@@ -541,6 +544,18 @@ export class InteractionsBehavior {
     this.refreshNoteOrderSelectionState();
   }
 
+  toggleHierarchyNoteOrderTarget(parentPath, path, surface = '') {
+    if (!parentPath || !path) return;
+    if (this.isNoteOrderTargetSelected('', path, parentPath)) {
+      this.selectedNoteOrderTarget = null;
+      this.deactivateNoteOrderHotkeyScope();
+    } else {
+      this.selectedNoteOrderTarget = { hierarchyParent: parentPath, path, surface };
+      this.refreshNoteOrderHotkeyScope();
+    }
+    this.refreshNoteOrderSelectionState();
+  }
+
   clearNoteOrderTarget() {
     if (!this.selectedNoteOrderTarget) return;
     this.selectedNoteOrderTarget = null;
@@ -550,17 +565,21 @@ export class InteractionsBehavior {
 
   focusSelectedNoteOrderButton() {
     if (!this.selectedNoteOrderTarget) return;
-    const { tag, path, surface } = this.selectedNoteOrderTarget;
+    const { tag, hierarchyParent, path, surface } = this.selectedNoteOrderTarget;
     const buttons = Array.from(document.querySelectorAll('.puffs-tag-note-order-button'));
     const buttonEl =
       buttons.find((button) =>
-        button.dataset.puffsTag === tag &&
+        (hierarchyParent
+          ? button.dataset.puffsHierarchyParent === hierarchyParent
+          : button.dataset.puffsTag === tag) &&
         button.dataset.path === path &&
         button.dataset.puffsSurface === surface &&
         button.offsetParent !== null
       ) ||
       buttons.find((button) =>
-        button.dataset.puffsTag === tag &&
+        (hierarchyParent
+          ? button.dataset.puffsHierarchyParent === hierarchyParent
+          : button.dataset.puffsTag === tag) &&
         button.dataset.path === path &&
         button.offsetParent !== null
       );
@@ -570,6 +589,15 @@ export class InteractionsBehavior {
   async moveSelectedNote(direction) {
     const target = this.selectedNoteOrderTarget;
     if (!target || (direction !== -1 && direction !== 1)) return false;
+
+    if (target.hierarchyParent) {
+      await this.moveHierarchyChild(target.hierarchyParent, target.path, direction);
+      window.setTimeout(() => {
+        this.refreshNoteOrderSelectionState();
+        this.focusSelectedNoteOrderButton();
+      }, 0);
+      return true;
+    }
 
     const files = this.getOrderedFilesForTag(target.tag, this.tagFileIndex.get(target.tag) || []);
     const currentIndex = files.findIndex((file) => file.path === target.path);
@@ -597,6 +625,9 @@ export class InteractionsBehavior {
 
   async moveSelectedNoteAfter(targetTagValue, targetPath) {
     const selected = this.selectedNoteOrderTarget;
+    if (selected && selected.hierarchyParent) {
+      return this.moveSelectedHierarchyNoteAfter(selected.hierarchyParent, targetPath);
+    }
     const targetTag = normalizeTag(targetTagValue);
     if (
       !selected ||
