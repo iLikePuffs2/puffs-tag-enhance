@@ -335,6 +335,7 @@ export class TagPaneBehavior {
 
       const orderButtonEl = target.closest('.puffs-tag-note-order-button');
       if (orderButtonEl) {
+        if (orderButtonEl.classList.contains('puffs-note-parent-control-button')) return;
         evt.preventDefault();
         evt.stopPropagation();
         evt.stopImmediatePropagation();
@@ -1186,12 +1187,18 @@ export class TagPaneBehavior {
 
     listEl.className = 'tree-item-children puffs-tag-note-list';
     const target = options.patch?.noteCardSearchState?.target;
-    this.renderInlineTagNoteTree(listEl, files, tagValue, isVirtual, {
+    const renderOptions = {
       surface: options.surface || 'sidebar',
       targetPath: target?.tag === tagValue ? target.path : '',
       scrollContainer: options.scrollContainer || listEl,
       rerender: () => options.view ? this.scheduleSyncView(options.view, 0) : this.refreshTagViews(),
-    });
+    };
+    const browseData = !isVirtual && this.getTagBrowseData(tagValue);
+    if (browseData?.inheritanceEnabled && browseData.inheritanceTree) {
+      this.renderTagInheritanceBrowseTree(listEl, browseData.inheritanceTree, renderOptions);
+    } else {
+      this.renderInlineTagNoteTree(listEl, files, tagValue, isVirtual, renderOptions);
+    }
   }
 
   removeNoteList(treeItemEl) {

@@ -3,6 +3,7 @@ import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
   buildVisibleHierarchyForest,
+  buildTagInheritanceGroupTree,
   getHierarchySearchKeywordError,
   mergeInheritedPaths,
   normalizeHierarchySearchKeyword,
@@ -45,6 +46,52 @@ describe('标签继承合并', () => {
     expect(result.inheritedPaths).toEqual(['one.md', 'two.md']);
     expect(result.sourcesByPath.get('one.md')).toEqual(['#子一', '#子二']);
     expect(result.sourcesByPath.get('shared.md')).toEqual(['#子一']);
+  });
+
+  it('按标签关系递归构建分组、保留跨组重复并统计子树去重数量', () => {
+    const tree = buildTagInheritanceGroupTree(
+      '#帮助',
+      { '#帮助': ['#保护', '#陪伴'], '#保护': ['#救援'] },
+      {
+        '#帮助': ['原生一.md', '共享.md'],
+        '#保护': ['保护一.md', '共享.md'],
+        '#救援': ['救援一.md', '保护一.md'],
+        '#陪伴': ['陪伴一.md'],
+      }
+    );
+
+    expect(tree?.paths).toEqual(['原生一.md', '共享.md']);
+    expect(tree?.children.map((child) => child.tag)).toEqual(['#保护', '#陪伴']);
+    expect(tree?.children[0].paths).toEqual(['保护一.md', '共享.md']);
+    expect(tree?.children[0].subtreePaths).toEqual(['保护一.md', '共享.md', '救援一.md']);
+    expect(tree?.subtreePaths).toEqual(['原生一.md', '共享.md', '保护一.md', '救援一.md', '陪伴一.md']);
+  });
+
+  it('根标签原生笔记不受排除影响，后代分组应用根排除并隐藏空组', () => {
+    const tree = buildTagInheritanceGroupTree(
+      '#父',
+      { '#父': ['#子一', '#子二'] },
+      {
+        '#父': ['共享.md'],
+        '#子一': ['共享.md', '排除.md'],
+        '#子二': ['排除.md'],
+      },
+      ['共享.md', '排除.md']
+    );
+
+    expect(tree?.paths).toEqual(['共享.md']);
+    expect(tree?.children).toEqual([]);
+    expect(tree?.subtreePaths).toEqual(['共享.md']);
+  });
+
+  it('遇到循环关系时停止当前分支', () => {
+    const tree = buildTagInheritanceGroupTree(
+      '#甲',
+      { '#甲': ['#乙'], '#乙': ['#甲'] },
+      { '#甲': ['甲.md'], '#乙': ['乙.md'] }
+    );
+    expect(tree?.children[0].tag).toBe('#乙');
+    expect(tree?.children[0].children).toEqual([]);
   });
 });
 

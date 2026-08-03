@@ -96,6 +96,19 @@
   max-width: calc(100vw - 32px);
 }
 
+.modal-container .puffs-tag-relation-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.puffs-tag-relation-modal .modal-close-button,
+.puffs-tag-relation-modal .modal-header {
+  display: none !important;
+}
+
+.puffs-tag-relation-modal .modal-content {
+  margin-top: 0 !important;
+}
+
 .modal-container .puffs-note-relation-modal {
   width: min(520px, calc(100vw - 32px));
 }
@@ -110,8 +123,16 @@
   margin-top: 0 !important;
 }
 
-.puffs-relation-modal-title {
-  margin: 0 0 14px;
+.puffs-tag-relation-modal .puffs-relation-modal-title {
+  margin: 0 0 18px;
+  color: var(--text-normal);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.puffs-tag-relation-modal .puffs-relation-modal-title + * {
+  margin-top: 0;
 }
 
 .puffs-note-relation-modal .puffs-relation-modal-title {
@@ -121,6 +142,40 @@
 .puffs-relation-input {
   width: 100%;
   min-width: 0;
+}
+
+.puffs-relation-tag-results {
+  display: flex;
+  flex-direction: column;
+  max-height: 272px;
+  margin-top: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+}
+
+.puffs-relation-tag-results.is-hidden {
+  display: none;
+}
+
+.puffs-relation-tag-result {
+  display: flex;
+  align-items: center;
+  flex: 0 0 34px;
+  min-height: 34px;
+  padding: 5px 8px;
+}
+
+.puffs-relation-tag-result:hover,
+.puffs-relation-tag-result.is-active {
+  background: var(--background-modifier-hover);
+}
+
+.puffs-relation-tag-result-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .puffs-relation-selector.is-locked .puffs-relation-input {
@@ -583,6 +638,16 @@
   display: block;
 }
 
+.puffs-inheritance-tag-group-content {
+  display: block;
+}
+
+.puffs-inheritance-tag-group-row {
+  min-height: 30px;
+  margin-inline-start: 0 !important;
+  padding-inline-start: 24px !important;
+}
+
 .puffs-inline-hierarchy-child-card {
   box-sizing: border-box;
   width: auto;
@@ -641,6 +706,19 @@
 .puffs-tag-note-order-button svg {
   width: 14px;
   height: 14px;
+}
+
+.puffs-note-parent-control-button {
+  flex: 0 0 24px;
+}
+
+.puffs-note-parent-control-button:not(.is-selected):hover {
+  background: transparent;
+  color: var(--text-faint);
+}
+
+.puffs-note-parent-control-button:not(.is-selected) svg {
+  transition: transform 100ms ease-in-out;
 }
 
 .puffs-tag-note-item.is-order-selected > .puffs-tag-note-card {

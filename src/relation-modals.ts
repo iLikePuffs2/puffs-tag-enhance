@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { Modal, Notice, TFile, setIcon } from "obsidian";
-import { getTagDisplayName, normalizeTag } from "./models";
+import { getTagDisplayName, isNestedTag, normalizeTag } from "./models";
 
 function getDirectionalInputSide(activeSide, key, visibleSides) {
   if (!Array.isArray(visibleSides) || visibleSides.length < 2) return null;
@@ -24,35 +24,140 @@ function getNoteRelationEnterAction(event, isComposing, hasCandidate = false) {
   return hasCandidate ? 'select-candidate' : 'submit';
 }
 
+function getTagRelationCandidates(tagValues, query, canUse: (tag: string) => boolean = () => true) {
+  const term = String(query || '').trim().replace(/^#/, '').toLowerCase();
+  if (!term) return [];
+  return Array.from(new Set(Array.from(tagValues || []).map(normalizeTag).filter(Boolean)))
+    .filter((tag) => !isNestedTag(tag) && canUse(tag))
+    .filter((tag) => getTagDisplayName(tag).toLowerCase().includes(term))
+    .sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN'));
+}
+
+function createTagCandidatePicker(options) {
+  const { hostEl, inputEl, getCandidates, onInput, onSelect, setComposing } = options;
+  const resultsEl = hostEl.createDiv({ cls: 'puffs-relation-tag-results' });
+  let activeIndex = 0;
+  let candidates = [];
+  let isComposing = false;
+  const render = () => {
+    resultsEl.empty();
+    candidates = getCandidates(inputEl.value);
+    resultsEl.classList.toggle('is-hidden', candidates.length === 0);
+    if (!candidates.length) {
+      activeIndex = 0;
+      return;
+    }
+    activeIndex = Math.max(0, Math.min(candidates.length - 1, activeIndex));
+    candidates.forEach((tag, index) => {
+      const rowEl = resultsEl.createDiv({ cls: 'puffs-relation-tag-result is-clickable' });
+      rowEl.classList.toggle('is-active', index === activeIndex);
+      rowEl.createDiv({ text: getTagDisplayName(tag), cls: 'puffs-relation-tag-result-name' });
+      rowEl.addEventListener('mouseenter', () => {
+        activeIndex = index;
+        resultsEl.querySelectorAll('.puffs-relation-tag-result').forEach((el, rowIndex) => {
+          el.classList.toggle('is-active', rowIndex === index);
+        });
+      });
+      rowEl.addEventListener('click', () => {
+        onSelect(tag);
+        activeIndex = 0;
+        render();
+      });
+    });
+    resultsEl.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
+  };
+  inputEl.addEventListener('compositionstart', () => {
+    isComposing = true;
+    setComposing(true);
+  });
+  inputEl.addEventListener('compositionend', () => {
+    isComposing = false;
+    setComposing(false);
+    onInput(inputEl.value);
+    activeIndex = 0;
+    render();
+  });
+  inputEl.addEventListener('input', () => {
+    if (isComposing) return;
+    onInput(inputEl.value);
+    activeIndex = 0;
+    render();
+  });
+  inputEl.addEventListener('keydown', (event) => {
+    if (isComposing || event.isComposing) return;
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && candidates.length) {
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      activeIndex = Math.max(0, Math.min(candidates.length - 1, activeIndex + delta));
+      event.preventDefault();
+      event.stopPropagation();
+      render();
+      return;
+    }
+    if (getNoteRelationEnterAction(event, isComposing, candidates.length > 0) !== 'select-candidate') return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect(candidates[activeIndex]);
+    activeIndex = 0;
+    render();
+  });
+  render();
+  return { render, resultsEl };
+}
+
 class AddParentTagModal extends Modal {
   constructor(app, plugin, childTag) {
     super(app);
     this.plugin = plugin;
     this.childTag = normalizeTag(childTag);
+    this.selectedParent = null;
+    this.isComposing = false;
+    this.isSubmitting = false;
   }
 
   onOpen() {
-    this.modalEl.classList.add('puffs-relation-modal');
+    this.modalEl.classList.add('puffs-relation-modal', 'puffs-tag-relation-modal');
     this.contentEl.empty();
-    const titleEl = this.contentEl.createEl('h3', { text: `为 ${this.childTag} 添加父标签` });
-    titleEl.className = 'puffs-relation-modal-title';
-    const inputEl = this.contentEl.createEl('input', { type: 'text' });
+    this.contentEl.createDiv({
+      text: `为 ${getTagDisplayName(this.childTag)} 添加父标签`,
+      cls: 'puffs-relation-modal-title puffs-tag-rename-title',
+    });
+    const inputEl = this.contentEl.createEl('input', { type: 'search' });
     inputEl.className = 'puffs-relation-input';
-    inputEl.placeholder = '输入父标签，可省略 #';
     const submit = async () => {
+      if (!this.selectedParent || this.isSubmitting) return;
+      this.isSubmitting = true;
       try {
-        await this.plugin.addInheritanceParent(this.childTag, inputEl.value);
+        await this.plugin.addInheritanceParent(this.childTag, this.selectedParent);
         this.close();
       } catch (error) {
         new Notice(error && error.message ? error.message : '添加父标签失败');
+      } finally {
+        this.isSubmitting = false;
       }
     };
-    inputEl.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') submit();
+    const existingParents = new Set(this.plugin.getInheritanceParents(this.childTag));
+    createTagCandidatePicker({
+      hostEl: this.contentEl,
+      inputEl,
+      getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
+        tag !== this.childTag &&
+        !existingParents.has(tag) &&
+        !this.plugin.wouldCreateTagInheritanceCycle(tag, this.childTag) &&
+        tag !== this.selectedParent
+      )),
+      onInput: () => { this.selectedParent = null; },
+      onSelect: (tag) => {
+        this.selectedParent = tag;
+        inputEl.value = getTagDisplayName(tag);
+      },
+      setComposing: (value) => { this.isComposing = value; },
     });
-    const buttonEl = this.contentEl.createEl('button', { text: '添加' });
-    buttonEl.className = 'mod-cta';
-    buttonEl.addEventListener('click', submit);
+    this.modalEl.addEventListener('keydown', (event) => {
+      if (getNoteRelationEnterAction(event, this.isComposing) !== 'submit') return;
+      event.preventDefault();
+      event.stopPropagation();
+      void submit();
+    });
     window.setTimeout(() => inputEl.focus(), 0);
   }
 }
@@ -63,40 +168,70 @@ class TagInheritanceModal extends Modal {
     this.plugin = plugin;
     this.parentTag = normalizeTag(parentTag);
     this.children = plugin.getInheritanceChildren(parentTag);
+    this.query = '';
+    this.isComposing = false;
+    this.isSubmitting = false;
   }
 
   onOpen() {
-    this.modalEl.classList.add('puffs-relation-modal');
+    this.modalEl.classList.add('puffs-relation-modal', 'puffs-tag-relation-modal');
+    this.modalEl.addEventListener('keydown', (event) => {
+      if (getNoteRelationEnterAction(event, this.isComposing) !== 'submit' || this.query.trim()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void this.submit();
+    });
     this.render();
+  }
+
+  async submit() {
+    if (this.isSubmitting) return;
+    this.isSubmitting = true;
+    try {
+      await this.plugin.setInheritanceChildren(this.parentTag, this.children);
+      this.close();
+    } catch (error) {
+      new Notice(error && error.message ? error.message : '保存继承关系失败');
+    } finally {
+      this.isSubmitting = false;
+    }
   }
 
   render() {
     this.contentEl.empty();
-    this.contentEl.createEl('h3', { text: `管理 ${this.parentTag} 的子标签`, cls: 'puffs-relation-modal-title' });
-    const addRow = this.contentEl.createDiv({ cls: 'puffs-relation-add-row' });
-    const inputEl = addRow.createEl('input', { type: 'text', cls: 'puffs-relation-input' });
-    inputEl.placeholder = '输入子标签，可省略 #';
-    const addButton = addRow.createEl('button', { text: '添加' });
-    const addChild = () => {
-      const child = normalizeTag(inputEl.value);
-      if (!child || this.children.includes(child)) return;
-      if (this.plugin.wouldCreateTagInheritanceCycle(this.parentTag, child)) {
-        new Notice('不能建立循环继承');
-        return;
-      }
-      this.children.push(child);
-      this.render();
-    };
-    addButton.addEventListener('click', addChild);
-    inputEl.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') addChild();
+    this.contentEl.createDiv({
+      text: `管理 ${getTagDisplayName(this.parentTag)} 的子标签`,
+      cls: 'puffs-relation-modal-title puffs-tag-rename-title',
     });
+    let inputEl = null;
+    if (this.children.length) {
+      inputEl = this.contentEl.createEl('input', { type: 'search', cls: 'puffs-relation-input' });
+      inputEl.value = this.query;
+      createTagCandidatePicker({
+        hostEl: this.contentEl,
+        inputEl,
+        getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
+          tag !== this.parentTag &&
+          !this.children.includes(tag) &&
+          !this.plugin.wouldCreateTagInheritanceCycle(this.parentTag, tag)
+        )),
+        onInput: (value) => { this.query = value; },
+        onSelect: (tag) => {
+          this.children.push(tag);
+          this.query = '';
+          this.render();
+        },
+        setComposing: (value) => { this.isComposing = value; },
+      });
+    } else {
+      this.query = '';
+    }
 
     const listEl = this.contentEl.createDiv({ cls: 'puffs-relation-manage-list' });
     if (!this.children.length) listEl.createDiv({ text: '暂无子标签', cls: 'puffs-relation-empty' });
     this.children.forEach((child, index) => {
       const rowEl = listEl.createDiv({ cls: 'puffs-relation-manage-row' });
-      rowEl.createSpan({ text: child, cls: 'puffs-relation-manage-name' });
+      rowEl.createSpan({ text: getTagDisplayName(child), cls: 'puffs-relation-manage-name' });
       const makeButton = (icon, label, callback, disabled = false) => {
         const button = rowEl.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': label } });
         setIcon(button, icon);
@@ -133,16 +268,14 @@ class TagInheritanceModal extends Modal {
       }
     }
 
-    const footerEl = this.contentEl.createDiv({ cls: 'puffs-relation-modal-footer' });
-    const saveButton = footerEl.createEl('button', { text: '保存', cls: 'mod-cta' });
-    saveButton.addEventListener('click', async () => {
-      try {
-        await this.plugin.setInheritanceChildren(this.parentTag, this.children);
-        this.close();
-      } catch (error) {
-        new Notice(error && error.message ? error.message : '保存继承关系失败');
+    window.setTimeout(() => {
+      if (inputEl) {
+        inputEl.focus();
+        return;
       }
-    });
+      this.modalEl.tabIndex = -1;
+      this.modalEl.focus();
+    }, 0);
   }
 }
 
@@ -395,4 +528,5 @@ export {
   getDirectionalInputSide,
   getNoteRelationEnterAction,
   getNoteRelationSubmitError,
+  getTagRelationCandidates,
 };

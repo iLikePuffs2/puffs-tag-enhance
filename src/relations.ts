@@ -12,6 +12,7 @@ import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
   buildVisibleHierarchyForest,
+  buildTagInheritanceGroupTree,
   mergeInheritedPaths,
   parseHierarchySearch,
   parseUnifiedHierarchySearch,
@@ -436,6 +437,76 @@ export class RelationsBehavior {
     return false;
   }
 
+  renderTagInheritanceBrowseTree(hostEl, tree, options = {}) {
+    hostEl.empty();
+    if (!tree) return;
+    const rootTag = normalizeTag(tree.tag);
+    const collapsed = this.collapsedInlineHierarchyBranches || new Set();
+    this.collapsedInlineHierarchyBranches = collapsed;
+    const targetPath = options.targetPath || '';
+    const renderNotes = (containerEl, node, isInheritedGroup) => {
+      const files = node.paths
+        .map((path) => this.app.vault.getAbstractFileByPath(path))
+        .filter((file) => file instanceof TFile && file.extension === 'md');
+      this.renderInlineTagNoteTree(containerEl, files, node.tag, false, {
+        ...options,
+        inheritanceRootTag: rootTag,
+        isInheritedGroup,
+        allowInheritedReorder: true,
+      });
+    };
+    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent) => {
+      if (!count) return;
+      const expanded = (!!targetPath && containsTarget) || !collapsed.has(key);
+      const itemEl = containerEl.createDiv({ cls: 'tree-item puffs-tag-list-item puffs-inheritance-tag-group' });
+      const rowEl = itemEl.createDiv({
+        cls: 'tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row puffs-inheritance-tag-group-row',
+      });
+      rowEl.dataset.puffsInheritanceGroup = key;
+      rowEl.setAttribute('aria-expanded', String(expanded));
+      const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-tag-list-toggle' });
+      toggleEl.classList.toggle('is-collapsed', !expanded);
+      setIcon(toggleEl, 'right-triangle');
+      rowEl.createDiv({ text: label, cls: 'tree-item-inner' });
+      const flairOuterEl = rowEl.createDiv({ cls: 'tree-item-flair-outer' });
+      flairOuterEl.createSpan({ text: String(count), cls: 'tree-item-flair tag-pane-tag-count' });
+      rowEl.addEventListener('click', () => {
+        this.toggleInlineHierarchyBranch(key);
+        options.rerender?.();
+        if (options.surface === 'shelf') this.refreshTagViews();
+      });
+      if (expanded) {
+        const contentEl = itemEl.createDiv({ cls: 'tree-item-children puffs-inheritance-tag-group-content' });
+        renderContent(contentEl);
+      }
+    };
+    const renderNode = (containerEl, node, lineage) => {
+      const key = `${rootTag}\u0000tag-group\u0000${lineage.join('\u0001')}`;
+      renderGroup(containerEl, getTagDisplayName(node.tag), node.subtreePaths.length, key,
+        node.subtreePaths.includes(targetPath), (contentEl) => {
+          if (!node.children.length) {
+            renderNotes(contentEl, node, true);
+            return;
+          }
+          if (node.paths.length) {
+            renderGroup(contentEl, '原生', node.paths.length, `${key}\u0000original`,
+              node.paths.includes(targetPath), (originalEl) => renderNotes(originalEl, node, true));
+          }
+          for (const child of node.children) renderNode(contentEl, child, [...lineage, child.tag]);
+        });
+    };
+
+    if (!tree.children.length) {
+      renderNotes(hostEl, tree, false);
+      return;
+    }
+    if (tree.paths.length) {
+      renderGroup(hostEl, '原生', tree.paths.length, `${rootTag}\u0000tag-group\u0000original`,
+        tree.paths.includes(targetPath), (contentEl) => renderNotes(contentEl, tree, false));
+    }
+    for (const child of tree.children) renderNode(hostEl, child, [child.tag]);
+  }
+
   renderInlineTagNoteTree(hostEl, files, tagValue, isVirtual = false, options = {}) {
     hostEl.empty();
     const tag = normalizeTag(tagValue);
@@ -448,6 +519,7 @@ export class RelationsBehavior {
     const collapsedBranches = this.collapsedInlineHierarchyBranches || new Set();
     this.collapsedInlineHierarchyBranches = collapsedBranches;
     const surface = options.surface || 'sidebar';
+    const inheritanceRootTag = normalizeTag(options.inheritanceRootTag || tag);
     const targetPath = options.targetPath || '';
     const renderedCards = [];
 
@@ -466,8 +538,8 @@ export class RelationsBehavior {
         new Set()
       );
       const expanded = forceExpanded || !collapsedBranches.has(branchKey);
-      const inherited = !!tag && !isVirtual && this.isInheritedFileForTag(tag, file.path);
-      const canTagReorder = !parentPath && !!tag && !isVirtual && !isNestedTag(tag) && !inherited;
+      const inherited = !!options.isInheritedGroup || (!!tag && !isVirtual && this.isInheritedFileForTag(tag, file.path));
+      const canTagReorder = !parentPath && !!tag && !isVirtual && !isNestedTag(tag) && (!inherited || options.allowInheritedReorder);
       const itemEl = containerEl.createDiv({
         cls: `tree-item puffs-tag-note-item${parentPath ? ' puffs-inline-hierarchy-child-item' : ''}`,
       });
@@ -482,10 +554,11 @@ export class RelationsBehavior {
       cardEl.dataset.path = file.path;
       cardEl.dataset.puffsSurface = surface;
       if (tag && !isVirtual) cardEl.dataset.puffsTag = tag;
+      if (inheritanceRootTag && inheritanceRootTag !== tag) cardEl.dataset.puffsInheritanceRootTag = inheritanceRootTag;
       if (parentPath) cardEl.dataset.puffsHierarchyParent = parentPath;
       if (inherited) {
         cardEl.dataset.puffsInherited = 'true';
-        cardEl.title = `继承自：${this.getInheritedFileSources(tag, file.path).join('、')}`;
+        cardEl.title = `继承自：${tag}`;
       }
 
       const orderButtonEl = cardEl.createEl('button', { cls: 'clickable-icon puffs-tag-note-order-button' });
@@ -498,18 +571,33 @@ export class RelationsBehavior {
       } else {
         orderButtonEl.remove();
       }
-      if (orderButtonEl.isConnected || orderButtonEl.parentElement) {
+      const hasOrderButton = orderButtonEl.isConnected || !!orderButtonEl.parentElement;
+      const usesCombinedParentControl = hasOrderButton && children.length > 0 && !isVirtual;
+      const toggleOrder = () => {
+        if (parentPath) this.toggleHierarchyNoteOrderTarget(parentPath, file.path, surface);
+        else this.toggleNoteOrderTarget(tag, file.path, surface);
+      };
+      if (usesCombinedParentControl) {
+        orderButtonEl.classList.add('puffs-note-parent-control-button', 'collapse-icon');
+        orderButtonEl.dataset.puffsInlineHierarchyBranchKey = branchKey;
+        orderButtonEl.dataset.puffsExpanded = String(expanded);
+        this.syncNoteOrderButtonSelection(orderButtonEl);
+        this.bindNoteParentControlButton(orderButtonEl, () => {
+          this.toggleInlineHierarchyBranch(branchKey);
+          options.rerender?.();
+          if (surface === 'shelf') this.refreshTagViews();
+        }, toggleOrder);
+      } else if (hasOrderButton) {
         setIcon(orderButtonEl, 'grip-vertical');
         this.syncNoteOrderButtonSelection(orderButtonEl);
         orderButtonEl.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (parentPath) this.toggleHierarchyNoteOrderTarget(parentPath, file.path, surface);
-          else this.toggleNoteOrderTarget(tag, file.path, surface);
+          toggleOrder();
         });
       }
 
-      if (children.length) {
+      if (children.length && !usesCombinedParentControl) {
         const toggleEl = cardEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-inline-hierarchy-toggle' });
         toggleEl.dataset.puffsInlineHierarchyBranchKey = branchKey;
         toggleEl.classList.toggle('is-collapsed', !expanded);
@@ -890,13 +978,14 @@ export class RelationsBehavior {
     }
 
     const tag = normalizeTag(cardEl.dataset.puffsTag);
+    const inheritanceRootTag = normalizeTag(cardEl.dataset.puffsInheritanceRootTag || tag);
     const menu = new Menu();
-    const inherited = tag && this.isInheritedFileForTag(tag, path);
+    const inherited = cardEl.dataset.puffsInherited === 'true' || (tag && this.isInheritedFileForTag(tag, path));
     if (inherited) {
       menu.addItem((item) => item
-        .setTitle(`不在 ${tag} 中继承显示`)
+        .setTitle(`不在 ${inheritanceRootTag} 中继承显示`)
         .setIcon('eye-off')
-        .onClick(() => this.excludeInheritedFile(tag, path).catch((error) => {
+        .onClick(() => this.excludeInheritedFile(inheritanceRootTag, path, true).catch((error) => {
           console.error('[Puffs Tag Enhance] Failed to exclude inherited note:', error);
           new Notice('排除继承笔记失败');
         })));
@@ -1034,10 +1123,11 @@ export class RelationsBehavior {
 
   getTagBrowseData(tagValue) {
     const tag = normalizeTag(tagValue);
-    if (!tag) return { tag: null, files: [], exactFiles: [], inheritedFiles: [], sourcesByPath: new Map() };
+    if (!tag) return { tag: null, files: [], exactFiles: [], inheritedFiles: [], sourcesByPath: new Map(), inheritanceTree: null };
     const exactFiles = this.getOrderedFilesForTag(tag, this.tagFileIndex.get(tag) || []);
     const exactPaths = exactFiles.map((file) => file.path);
     const orderedBranches = [];
+    const orderedPathsByTag = { [tag]: exactPaths };
     const visit = (sourceTag, branch = new Set([tag])) => {
       if (branch.has(sourceTag)) return;
       const nextBranch = new Set(branch);
@@ -1046,6 +1136,7 @@ export class RelationsBehavior {
         source: sourceTag,
         paths: this.getOrderedFilesForTag(sourceTag, this.tagFileIndex.get(sourceTag) || []).map((file) => file.path),
       });
+      orderedPathsByTag[sourceTag] = orderedBranches[orderedBranches.length - 1].paths;
       for (const child of this.getInheritanceChildren(sourceTag)) visit(child, nextBranch);
     };
     if (this.isTagInheritanceEnabled(tag)) {
@@ -1059,12 +1150,21 @@ export class RelationsBehavior {
     const inheritedFiles = inheritedPaths
       .map((path) => this.app.vault.getAbstractFileByPath(path))
       .filter((file) => file instanceof TFile && file.extension === 'md');
+    const inheritanceTree = this.isTagInheritanceEnabled(tag)
+      ? buildTagInheritanceGroupTree(
+        tag,
+        this.getTagInheritanceSettings().childrenByParent,
+        orderedPathsByTag,
+        this.getTagInheritanceSettings().excludedPathsByParent[tag] || []
+      )
+      : null;
     return {
       tag,
       exactFiles,
       inheritedFiles,
       files: exactFiles.concat(inheritedFiles),
       sourcesByPath,
+      inheritanceTree,
       exactCount: exactFiles.length,
       inheritedCount: inheritedFiles.length,
       inheritanceEnabled: this.isTagInheritanceEnabled(tag),
@@ -1080,9 +1180,9 @@ export class RelationsBehavior {
     return this.getTagBrowseData(tagValue).sourcesByPath.get(path) || [];
   }
 
-  async excludeInheritedFile(parentValue, path) {
+  async excludeInheritedFile(parentValue, path, allowGroupedInheritance = false) {
     const parent = normalizeTag(parentValue);
-    if (!parent || !path || !this.isInheritedFileForTag(parent, path)) return;
+    if (!parent || !path || (!allowGroupedInheritance && !this.isInheritedFileForTag(parent, path))) return;
     const inheritance = this.getTagInheritanceSettings();
     const paths = new Set(inheritance.excludedPathsByParent[parent] || []);
     paths.add(path);

@@ -538,12 +538,18 @@ class PuffsTagShelfView extends ItemView {
       const notesEl = document.createElement('div');
       notesEl.className = 'tree-item-children puffs-tag-note-list puffs-tag-shelf-notes';
       const target = this.noteCardSearchState.target;
-      this.plugin.renderInlineTagNoteTree(notesEl, files, tag, isVirtual, {
+      const renderOptions = {
         surface: 'shelf',
         targetPath: target?.tag === tag ? target.path : '',
         scrollContainer: this.listEl,
         rerender: () => this.renderTagList(),
-      });
+      };
+      const browseData = !isVirtual && this.plugin.getTagBrowseData(tag);
+      if (browseData?.inheritanceEnabled && browseData.inheritanceTree) {
+        this.plugin.renderTagInheritanceBrowseTree(notesEl, browseData.inheritanceTree, renderOptions);
+      } else {
+        this.plugin.renderInlineTagNoteTree(notesEl, files, tag, isVirtual, renderOptions);
+      }
 
       treeItemEl.appendChild(notesEl);
     }

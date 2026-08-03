@@ -3,6 +3,7 @@ import {
   getDirectionalInputSide,
   getNoteRelationEnterAction,
   getNoteRelationSubmitError,
+  getTagRelationCandidates,
 } from "./relation-modals";
 
 describe('新增父子笔记弹窗输入框方向键导航', () => {
@@ -24,6 +25,32 @@ describe('新增父子笔记弹窗输入框方向键导航', () => {
   it('只显示一个输入框时不接管原有候选导航', () => {
     expect(getDirectionalInputSide('parent', 'ArrowDown', ['parent'])).toBeNull();
     expect(getDirectionalInputSide('child', 'ArrowUp', ['child'])).toBeNull();
+  });
+});
+
+describe('标签关系候选', () => {
+  it('只返回现有扁平标签并按不含井号的中文显示名排序', () => {
+    expect(getTagRelationCandidates(
+      ['#子项', '#父项', '#父项/嵌套', '#另一个父项', '#父项'],
+      '父项'
+    )).toEqual(['#父项', '#另一个父项']);
+  });
+
+  it('支持省略井号搜索并按调用方规则排除不可用关系', () => {
+    expect(getTagRelationCandidates(
+      ['#甲', '#乙', '#丙'],
+      '#',
+      (tag: string) => tag !== '#乙'
+    )).toEqual([]);
+    expect(getTagRelationCandidates(
+      ['#甲标签', '#乙标签', '#丙'],
+      '#标签',
+      (tag: string) => tag !== '#乙标签'
+    )).toEqual(['#甲标签']);
+  });
+
+  it('空查询不展示候选', () => {
+    expect(getTagRelationCandidates(['#甲'], '')).toEqual([]);
   });
 });
 

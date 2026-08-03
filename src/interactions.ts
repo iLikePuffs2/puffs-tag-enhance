@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { Menu, Notice, Scope, TFile } from "obsidian";
+import { Menu, Notice, Scope, TFile, setIcon } from "obsidian";
 import {
   DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
   DEFAULT_MOVE_NOTE_UP_HOTKEY,
@@ -19,6 +19,8 @@ import {
 
 export class InteractionsBehavior {
   [key: string]: any;
+
+  static readonly NOTE_ORDER_LONG_PRESS_MS = 500;
 
   getOrderedFilesForTag(tagValue, files) {
     const tag = normalizeTag(tagValue);
@@ -504,8 +506,83 @@ export class InteractionsBehavior {
     );
     buttonEl.classList.toggle('is-selected', isSelected);
     buttonEl.setAttribute('aria-pressed', String(isSelected));
+    if (buttonEl.classList.contains('puffs-note-parent-control-button')) {
+      const isExpanded = buttonEl.dataset.puffsExpanded === 'true';
+      if (isSelected) {
+        setIcon(buttonEl, 'grip-vertical');
+        buttonEl.classList.remove('is-collapsed');
+      } else {
+        setIcon(buttonEl, 'right-triangle');
+        buttonEl.classList.toggle('is-collapsed', !isExpanded);
+      }
+      buttonEl.removeAttribute('aria-label');
+      buttonEl.removeAttribute('data-tooltip-position');
+      buttonEl.setAttribute('aria-expanded', String(isExpanded));
+    }
     const noteItemEl = buttonEl.closest('.puffs-tag-note-item');
     if (noteItemEl) noteItemEl.classList.toggle('is-order-selected', isSelected);
+  }
+
+  bindNoteParentControlButton(buttonEl, toggleExpansion, toggleOrder) {
+    if (!buttonEl) return () => {};
+    let longPressTimer = null;
+    let suppressNextClick = false;
+
+    const clearLongPressTimer = () => {
+      if (!longPressTimer) return;
+      globalThis.clearTimeout(longPressTimer);
+      longPressTimer = null;
+    };
+    const onPointerDown = (event) => {
+      if (event.button !== 0 || this.isNoteOrderTargetSelected(
+        buttonEl.dataset.puffsTag,
+        buttonEl.dataset.path,
+        buttonEl.dataset.puffsHierarchyParent
+      )) return;
+      clearLongPressTimer();
+      suppressNextClick = false;
+      longPressTimer = globalThis.setTimeout(() => {
+        longPressTimer = null;
+        suppressNextClick = true;
+        toggleOrder();
+      }, InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS);
+    };
+    const onPointerUp = () => clearLongPressTimer();
+    const onPointerAbort = () => {
+      clearLongPressTimer();
+      suppressNextClick = false;
+    };
+    const onClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
+      if (this.isNoteOrderTargetSelected(
+        buttonEl.dataset.puffsTag,
+        buttonEl.dataset.path,
+        buttonEl.dataset.puffsHierarchyParent
+      )) {
+        toggleOrder();
+        return;
+      }
+      toggleExpansion();
+    };
+
+    buttonEl.addEventListener('pointerdown', onPointerDown);
+    buttonEl.addEventListener('pointerup', onPointerUp);
+    buttonEl.addEventListener('pointerleave', onPointerAbort);
+    buttonEl.addEventListener('pointercancel', onPointerAbort);
+    buttonEl.addEventListener('click', onClick);
+    return () => {
+      clearLongPressTimer();
+      buttonEl.removeEventListener('pointerdown', onPointerDown);
+      buttonEl.removeEventListener('pointerup', onPointerUp);
+      buttonEl.removeEventListener('pointerleave', onPointerAbort);
+      buttonEl.removeEventListener('pointercancel', onPointerAbort);
+      buttonEl.removeEventListener('click', onClick);
+    };
   }
 
   refreshNoteOrderSelectionState() {

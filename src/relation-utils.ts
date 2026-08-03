@@ -148,6 +148,39 @@ export function mergeInheritedPaths(
   return { inheritedPaths, sourcesByPath };
 }
 
+export type TagInheritanceGroupNode = {
+  tag: string;
+  paths: string[];
+  children: TagInheritanceGroupNode[];
+  subtreePaths: string[];
+};
+
+export function buildTagInheritanceGroupTree(
+  rootTag: string,
+  childrenByParent: Record<string, string[]>,
+  orderedPathsByTag: Record<string, string[]>,
+  excludedPaths: string[] = []
+): TagInheritanceGroupNode | null {
+  if (!rootTag) return null;
+  const excluded = new Set(excludedPaths || []);
+  const visit = (tag: string, branch: Set<string>, isRoot = false): TagInheritanceGroupNode | null => {
+    if (!tag || branch.has(tag)) return null;
+    const nextBranch = new Set(branch);
+    nextBranch.add(tag);
+    const paths = Array.from(new Set(orderedPathsByTag[tag] || []))
+      .filter((path) => path && (isRoot || !excluded.has(path)));
+    const children = (childrenByParent[tag] || [])
+      .map((child) => visit(child, nextBranch))
+      .filter((child): child is TagInheritanceGroupNode => !!child && child.subtreePaths.length > 0);
+    const subtreePaths = Array.from(new Set([
+      ...paths,
+      ...children.flatMap((child) => child.subtreePaths),
+    ]));
+    return { tag, paths, children, subtreePaths };
+  };
+  return visit(rootTag, new Set(), true);
+}
+
 export function compareHierarchyParentItems(
   left: { directCount: number; name: string },
   right: { directCount: number; name: string }

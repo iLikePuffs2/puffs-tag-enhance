@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TFile } from "obsidian";
 import { InteractionsBehavior } from "./interactions";
 
@@ -52,5 +52,94 @@ describe('固定标签与父笔记排序', () => {
 
     expect(behavior.getOrderedRootFilesForTag('#标签', files).map((file: any) => file.path))
       .toEqual(['父一.md', '父二.md']);
+  });
+
+  const createPointerButton = () => {
+    const listeners = new Map<string, Set<(event: any) => void>>();
+    return {
+      dataset: { puffsTag: '#标签', path: '父.md' },
+      addEventListener(type: string, listener: (event: any) => void) {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type)?.add(listener);
+      },
+      removeEventListener(type: string, listener: (event: any) => void) {
+        listeners.get(type)?.delete(listener);
+      },
+      emit(type: string, properties: Record<string, unknown> = {}) {
+        const event = {
+          button: 0,
+          preventDefault: vi.fn(),
+          stopPropagation: vi.fn(),
+          ...properties,
+        };
+        for (const listener of listeners.get(type) || []) listener(event);
+        return event;
+      },
+    } as any;
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  it('父笔记组合按钮短按只切换展开状态', () => {
+    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    behavior.isNoteOrderTargetSelected = () => false;
+    const button = createPointerButton();
+    const toggleExpansion = vi.fn();
+    const toggleOrder = vi.fn();
+
+    behavior.bindNoteParentControlButton(button, toggleExpansion, toggleOrder);
+    button.emit('pointerdown');
+    button.emit('pointerup');
+    button.emit('click');
+
+    expect(toggleExpansion).toHaveBeenCalledOnce();
+    expect(toggleOrder).not.toHaveBeenCalled();
+  });
+
+  it('父笔记组合按钮长按 500ms 只进入排序且释放时不折叠', () => {
+    vi.useFakeTimers();
+    let selected = false;
+    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    behavior.isNoteOrderTargetSelected = () => selected;
+    const button = createPointerButton();
+    const toggleExpansion = vi.fn();
+    const toggleOrder = vi.fn(() => { selected = !selected; });
+
+    behavior.bindNoteParentControlButton(button, toggleExpansion, toggleOrder);
+    button.emit('pointerdown');
+    vi.advanceTimersByTime(InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS - 1);
+    expect(toggleOrder).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    button.emit('pointerup');
+    button.emit('click');
+
+    expect(InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS).toBe(500);
+    expect(toggleOrder).toHaveBeenCalledOnce();
+    expect(toggleExpansion).not.toHaveBeenCalled();
+  });
+
+  it('排序选中态单击只取消排序，移出按钮会取消未完成的长按', () => {
+    vi.useFakeTimers();
+    let selected = true;
+    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    behavior.isNoteOrderTargetSelected = () => selected;
+    const button = createPointerButton();
+    const toggleExpansion = vi.fn();
+    const toggleOrder = vi.fn(() => { selected = !selected; });
+
+    behavior.bindNoteParentControlButton(button, toggleExpansion, toggleOrder);
+    button.emit('click');
+    expect(toggleOrder).toHaveBeenCalledOnce();
+    expect(toggleExpansion).not.toHaveBeenCalled();
+
+    button.emit('pointerdown');
+    button.emit('pointerleave');
+    vi.advanceTimersByTime(InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS);
+    expect(toggleOrder).toHaveBeenCalledOnce();
+
+    button.emit('pointerdown');
+    button.emit('pointercancel');
+    vi.advanceTimersByTime(InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS);
+    expect(toggleOrder).toHaveBeenCalledOnce();
   });
 });
