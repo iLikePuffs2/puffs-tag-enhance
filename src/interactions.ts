@@ -16,6 +16,7 @@ import {
   tagMatchesAnySearchTerm,
   tagMatchesSearchText
 } from "./models";
+import { compareTagItemsByCount } from "./relation-utils";
 
 export class InteractionsBehavior {
   [key: string]: any;
@@ -280,10 +281,10 @@ export class InteractionsBehavior {
       };
       })
       .filter((item) => item.files.length > 0 || item.hasInheritance)
-      .sort((a, b) => {
-        const countDiff = b.files.length - a.files.length;
-        return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
-      });
+      .sort((a, b) => compareTagItemsByCount(
+        { count: a.files.length, name: a.displayName },
+        { count: b.files.length, name: b.displayName }
+      ));
 
     const matchingItems = unionTerms
       ? items.filter((item) => tagMatchesAnySearchTerm(item.tag, unionTerms))

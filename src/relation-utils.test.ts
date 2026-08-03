@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
+  compareTagItemsByCount,
   createHierarchyNavigationHistory,
   buildVisibleHierarchyForest,
   buildTagInheritanceGroupTree,
@@ -144,6 +145,16 @@ describe('父子笔记搜索和排序', () => {
       { directCount: 2, name: '阿' },
     ];
     items.sort(compareHierarchyParentItems);
+    expect(items.map((item) => item.name)).toEqual(['李', '阿', '赵']);
+  });
+
+  it('标签通用排序按可见笔记数量降序并以中文名称兜底', () => {
+    const items = [
+      { count: 2, name: '赵' },
+      { count: 3, name: '李' },
+      { count: 2, name: '阿' },
+    ];
+    items.sort(compareTagItemsByCount);
     expect(items.map((item) => item.name)).toEqual(['李', '阿', '赵']);
   });
 });

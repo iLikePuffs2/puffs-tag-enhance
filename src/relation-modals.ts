@@ -33,6 +33,39 @@ function getTagRelationCandidates(tagValues, query, canUse: (tag: string) => boo
     .sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN'));
 }
 
+function groupExcludedPathsBySource(
+  paths: string[],
+  sourcesByPath: Map<string, string[]>,
+  orderedSources: string[] = []
+) {
+  const normalizedPaths = Array.from(new Set((paths || []).filter(Boolean)));
+  const discoveredSources = [];
+  const seenSources = new Set();
+  for (const source of orderedSources || []) {
+    const tag = normalizeTag(source);
+    if (!tag || seenSources.has(tag)) continue;
+    seenSources.add(tag);
+    discoveredSources.push(tag);
+  }
+  for (const path of normalizedPaths) {
+    for (const source of sourcesByPath.get(path) || []) {
+      const tag = normalizeTag(source);
+      if (!tag || seenSources.has(tag)) continue;
+      seenSources.add(tag);
+      discoveredSources.push(tag);
+    }
+  }
+  const groups = discoveredSources
+    .map((source) => ({
+      source,
+      paths: normalizedPaths.filter((path) => (sourcesByPath.get(path) || []).includes(source)),
+    }))
+    .filter((group) => group.paths.length > 0);
+  const unknownPaths = normalizedPaths.filter((path) => !(sourcesByPath.get(path) || []).length);
+  if (unknownPaths.length) groups.push({ source: null, paths: unknownPaths });
+  return groups;
+}
+
 function createTagCandidatePicker(options) {
   const { hostEl, inputEl, getCandidates, onInput, onSelect, setComposing } = options;
   const resultsEl = hostEl.createDiv({ cls: 'puffs-relation-tag-results' });
@@ -162,15 +195,51 @@ class AddParentTagModal extends Modal {
   }
 }
 
+class RemoveChildTagConfirmModal extends Modal {
+  constructor(app, parentTag, childTag, onConfirm) {
+    super(app);
+    this.parentTag = parentTag;
+    this.childTag = childTag;
+    this.onConfirm = onConfirm;
+  }
+
+  onOpen() {
+    this.modalEl.classList.add('puffs-relation-confirm-modal');
+    this.contentEl.empty();
+    this.contentEl.createDiv({ text: '移除子标签', cls: 'puffs-relation-modal-title' });
+    this.contentEl.createDiv({
+      text: `确定要从「${getTagDisplayName(this.parentTag)}」的子标签中移除「${getTagDisplayName(this.childTag)}」吗？此操作只解除继承关系，不会删除标签或笔记。`,
+      cls: 'puffs-relation-confirm-message',
+    });
+    const footerEl = this.contentEl.createDiv({ cls: 'puffs-relation-modal-footer' });
+    const removeButton = footerEl.createEl('button', { text: '移除', cls: 'mod-warning' });
+    removeButton.addEventListener('click', () => {
+      this.close();
+      this.onConfirm();
+    });
+    this.modalEl.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+  }
+}
+
 class TagInheritanceModal extends Modal {
   constructor(app, plugin, parentTag) {
     super(app);
     this.plugin = plugin;
     this.parentTag = normalizeTag(parentTag);
-    this.children = plugin.getInheritanceChildren(parentTag);
+    this.children = plugin.sortTagsByVisibleCount(plugin.getInheritanceChildren(parentTag));
     this.query = '';
     this.isComposing = false;
     this.isSubmitting = false;
+    this.searchHostEl = null;
+    this.inputEl = null;
+    this.picker = null;
+    this.childrenListEl = null;
+    this.exclusionsSectionEl = null;
+    this.exclusionGroupsEl = null;
   }
 
   onOpen() {
@@ -181,12 +250,107 @@ class TagInheritanceModal extends Modal {
       event.stopPropagation();
       void this.submit();
     });
-    this.render();
+    this.buildLayout();
+  }
+
+  buildLayout() {
+    this.contentEl.empty();
+    this.contentEl.createDiv({
+      text: `管理 ${getTagDisplayName(this.parentTag)} 的子标签`,
+      cls: 'puffs-relation-modal-title puffs-tag-rename-title',
+    });
+    this.searchHostEl = this.contentEl.createDiv({ cls: 'puffs-relation-tag-search' });
+    this.inputEl = this.searchHostEl.createEl('input', { type: 'search', cls: 'puffs-relation-input' });
+    this.inputEl.value = this.query;
+    this.picker = createTagCandidatePicker({
+      hostEl: this.searchHostEl,
+      inputEl: this.inputEl,
+      getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
+        tag !== this.parentTag &&
+        !this.children.includes(tag) &&
+        !this.plugin.wouldCreateTagInheritanceCycle(this.parentTag, tag)
+      )),
+      onInput: (value) => { this.query = value; },
+      onSelect: (tag) => {
+        void this.addChild(tag);
+      },
+      setComposing: (value) => { this.isComposing = value; },
+    });
+
+    this.childrenListEl = this.contentEl.createDiv({ cls: 'puffs-relation-child-list' });
+    this.exclusionsSectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-exclusions' });
+    this.exclusionsSectionEl.createEl('h4', { text: '已排除笔记' });
+    this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: 'puffs-relation-exclusion-groups' });
+    this.renderChildren();
+    this.renderExclusionGroups();
+
+    window.setTimeout(() => {
+      if (this.inputEl) {
+        this.inputEl.focus();
+        return;
+      }
+      this.modalEl.tabIndex = -1;
+      this.modalEl.focus();
+    }, 0);
+  }
+
+  renderChildren() {
+    if (!this.childrenListEl) return;
+    this.children = this.plugin.sortTagsByVisibleCount(this.children);
+    const existingRows = new Map(
+      Array.from(this.childrenListEl.querySelectorAll('.puffs-relation-child-row'))
+        .map((row) => [row.dataset.puffsTag, row])
+    );
+    this.childrenListEl.querySelector('.puffs-relation-empty')?.remove();
+    for (const child of this.children) {
+      let rowEl = existingRows.get(child);
+      if (!rowEl) {
+        rowEl = this.childrenListEl.createDiv({ cls: 'puffs-relation-child-row' });
+        rowEl.dataset.puffsTag = child;
+        const iconEl = rowEl.createSpan({ cls: 'puffs-relation-child-icon' });
+        setIcon(iconEl, 'tag');
+        rowEl.createSpan({ cls: 'puffs-relation-manage-name' });
+        rowEl.createSpan({ cls: 'puffs-relation-child-count' });
+        const removeButton = rowEl.createEl('button', {
+          cls: 'clickable-icon puffs-relation-child-remove',
+          attr: { 'aria-label': `移除 ${getTagDisplayName(child)}` },
+        });
+        setIcon(removeButton, 'x');
+        removeButton.addEventListener('click', () => {
+          new RemoveChildTagConfirmModal(this.app, this.parentTag, child, () => {
+            void this.removeChild(child);
+          }).open();
+        });
+      }
+      rowEl.querySelector('.puffs-relation-manage-name').textContent = getTagDisplayName(child);
+      rowEl.querySelector('.puffs-relation-child-count').textContent = String(this.plugin.getTagVisibleNoteCount(child));
+      this.childrenListEl.appendChild(rowEl);
+      existingRows.delete(child);
+    }
+    for (const rowEl of existingRows.values()) rowEl.remove();
+    if (!this.children.length) {
+      this.childrenListEl.createDiv({ text: '暂无子标签', cls: 'puffs-relation-empty' });
+    }
+    this.syncMutationState();
+  }
+
+  syncMutationState() {
+    if (this.inputEl) this.inputEl.disabled = this.isSubmitting;
+    for (const button of this.childrenListEl?.querySelectorAll('.puffs-relation-child-remove') || []) {
+      button.disabled = this.isSubmitting;
+    }
+  }
+
+  updateChildren(nextChildren) {
+    this.children = this.plugin.sortTagsByVisibleCount(nextChildren);
+    this.renderChildren();
+    this.picker?.render();
   }
 
   async submit() {
     if (this.isSubmitting) return;
     this.isSubmitting = true;
+    this.syncMutationState();
     try {
       await this.plugin.setInheritanceChildren(this.parentTag, this.children);
       this.close();
@@ -194,88 +358,84 @@ class TagInheritanceModal extends Modal {
       new Notice(error && error.message ? error.message : '保存继承关系失败');
     } finally {
       this.isSubmitting = false;
+      this.syncMutationState();
     }
   }
 
-  render() {
-    this.contentEl.empty();
-    this.contentEl.createDiv({
-      text: `管理 ${getTagDisplayName(this.parentTag)} 的子标签`,
-      cls: 'puffs-relation-modal-title puffs-tag-rename-title',
-    });
-    let inputEl = null;
-    if (this.children.length) {
-      inputEl = this.contentEl.createEl('input', { type: 'search', cls: 'puffs-relation-input' });
-      inputEl.value = this.query;
-      createTagCandidatePicker({
-        hostEl: this.contentEl,
-        inputEl,
-        getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
-          tag !== this.parentTag &&
-          !this.children.includes(tag) &&
-          !this.plugin.wouldCreateTagInheritanceCycle(this.parentTag, tag)
-        )),
-        onInput: (value) => { this.query = value; },
-        onSelect: (tag) => {
-          this.children.push(tag);
-          this.query = '';
-          this.render();
-        },
-        setComposing: (value) => { this.isComposing = value; },
-      });
-    } else {
-      this.query = '';
-    }
+  addChild(tag) {
+    if (!tag || this.children.includes(tag)) return;
+    this.updateChildren([...this.children, tag]);
+    this.query = '';
+    if (this.inputEl) this.inputEl.value = '';
+    this.picker?.render();
+    globalThis.setTimeout(() => this.inputEl?.focus(), 0);
+  }
 
-    const listEl = this.contentEl.createDiv({ cls: 'puffs-relation-manage-list' });
-    if (!this.children.length) listEl.createDiv({ text: '暂无子标签', cls: 'puffs-relation-empty' });
-    this.children.forEach((child, index) => {
-      const rowEl = listEl.createDiv({ cls: 'puffs-relation-manage-row' });
-      rowEl.createSpan({ text: getTagDisplayName(child), cls: 'puffs-relation-manage-name' });
-      const makeButton = (icon, label, callback, disabled = false) => {
-        const button = rowEl.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': label } });
-        setIcon(button, icon);
-        button.disabled = disabled;
-        button.addEventListener('click', callback);
-      };
-      makeButton('arrow-up', '上移', () => {
-        [this.children[index - 1], this.children[index]] = [this.children[index], this.children[index - 1]];
-        this.render();
-      }, index === 0);
-      makeButton('arrow-down', '下移', () => {
-        [this.children[index], this.children[index + 1]] = [this.children[index + 1], this.children[index]];
-        this.render();
-      }, index === this.children.length - 1);
-      makeButton('x', '移除', () => {
-        this.children.splice(index, 1);
-        this.render();
-      });
-    });
+  removeChild(child) {
+    if (!child || !this.children.includes(child)) return;
+    this.updateChildren(this.children.filter((tag) => tag !== child));
+    globalThis.setTimeout(() => this.inputEl?.focus(), 0);
+  }
 
+  renderExclusionGroups() {
+    if (!this.exclusionsSectionEl || !this.exclusionGroupsEl) return;
     const exclusions = this.plugin.getTagInheritanceSettings().excludedPathsByParent[this.parentTag] || [];
-    if (exclusions.length) {
-      this.contentEl.createEl('h4', { text: '已排除笔记' });
-      const exclusionListEl = this.contentEl.createDiv({ cls: 'puffs-relation-manage-list' });
-      for (const path of exclusions) {
-        const rowEl = exclusionListEl.createDiv({ cls: 'puffs-relation-manage-row' });
+    this.exclusionsSectionEl.classList.toggle('is-hidden', exclusions.length === 0);
+    this.exclusionGroupsEl.empty();
+    if (!exclusions.length) return;
+    const sourcesByPath = new Map(exclusions.map((path) => [
+      path,
+      this.plugin.getInheritedFileSources(this.parentTag, path),
+    ]));
+    const groups = groupExcludedPathsBySource(
+      exclusions,
+      sourcesByPath,
+      this.plugin.getTagDescendants(this.parentTag)
+    );
+    for (const group of groups) {
+      const groupEl = this.exclusionGroupsEl.createDiv({ cls: 'puffs-relation-exclusion-group' });
+      groupEl.dataset.puffsSource = group.source || '';
+      const headingEl = groupEl.createDiv({ cls: 'puffs-relation-exclusion-heading' });
+      if (group.source) {
+        const iconEl = headingEl.createSpan({ cls: 'puffs-relation-exclusion-icon' });
+        setIcon(iconEl, 'tag');
+      }
+      headingEl.createSpan({ text: group.source ? getTagDisplayName(group.source) : '来源未知' });
+      const listEl = groupEl.createDiv({ cls: 'puffs-relation-exclusion-list' });
+      for (const path of group.paths) {
+        const rowEl = listEl.createDiv({ cls: 'puffs-relation-manage-row' });
+        rowEl.dataset.puffsPath = path;
         const file = this.app.vault.getAbstractFileByPath(path);
         rowEl.createSpan({ text: file && file.basename ? file.basename : path, cls: 'puffs-relation-manage-name' });
         const restoreButton = rowEl.createEl('button', { text: '恢复' });
         restoreButton.addEventListener('click', async () => {
-          await this.plugin.restoreInheritedFile(this.parentTag, path);
-          this.render();
+          if (restoreButton.disabled) return;
+          restoreButton.disabled = true;
+          try {
+            await this.plugin.restoreInheritedFile(this.parentTag, path);
+            this.removeExcludedPath(path);
+          } catch (error) {
+            console.error('[Puffs Tag Enhance] Failed to restore inherited note:', error);
+            new Notice('恢复继承笔记失败');
+            restoreButton.disabled = false;
+          }
         });
       }
     }
+  }
 
-    window.setTimeout(() => {
-      if (inputEl) {
-        inputEl.focus();
-        return;
-      }
-      this.modalEl.tabIndex = -1;
-      this.modalEl.focus();
-    }, 0);
+  removeExcludedPath(path) {
+    if (!this.exclusionGroupsEl || !this.exclusionsSectionEl) return;
+    for (const rowEl of Array.from(this.exclusionGroupsEl.querySelectorAll('.puffs-relation-manage-row'))) {
+      if (rowEl.dataset.puffsPath === path) rowEl.remove();
+    }
+    for (const groupEl of Array.from(this.exclusionGroupsEl.querySelectorAll('.puffs-relation-exclusion-group'))) {
+      if (!groupEl.querySelector('.puffs-relation-manage-row')) groupEl.remove();
+    }
+    this.exclusionsSectionEl.classList.toggle(
+      'is-hidden',
+      !this.exclusionGroupsEl.querySelector('.puffs-relation-manage-row')
+    );
   }
 }
 
@@ -529,4 +689,5 @@ export {
   getNoteRelationEnterAction,
   getNoteRelationSubmitError,
   getTagRelationCandidates,
+  groupExcludedPathsBySource,
 };

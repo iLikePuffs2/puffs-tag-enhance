@@ -81,6 +81,31 @@ describe('关系文件迁移', () => {
   });
 });
 
+describe('子标签自动排序', () => {
+  it('按包含继承结果的可见笔记数量排序，并让关系遍历使用相同顺序', () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} });
+    behavior.settings.relations.tagInheritance = {
+      childrenByParent: {
+        '#父': ['#少', '#多', '#继承'],
+        '#继承': ['#后代'],
+      },
+      enabledParents: ['#继承'],
+      excludedPathsByParent: { '#继承': ['后代/排除.md'] },
+    };
+    const files = (paths: string[]) => paths.map((path) => new (TFile as any)(path));
+    behavior.tagFileIndex = new Map([
+      ['#少', files(['少/一.md'])],
+      ['#多', files(['多/一.md', '多/二.md', '多/三.md'])],
+      ['#继承', files(['继承/原生.md'])],
+      ['#后代', files(['后代/一.md', '后代/二.md', '后代/三.md', '后代/排除.md'])],
+    ]);
+
+    expect(behavior.getTagVisibleNoteCount('#继承')).toBe(4);
+    expect(behavior.getInheritanceChildren('#父')).toEqual(['#继承', '#多', '#少']);
+    expect(behavior.getTagDescendants('#父')).toEqual(['#继承', '#后代', '#多', '#少']);
+  });
+});
+
 describe('批量父子关系', () => {
   it('父子虚拟标签每次进入搜索时默认展开', () => {
     const behavior = Object.create(RelationsBehavior.prototype) as any;

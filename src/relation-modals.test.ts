@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  TagInheritanceModal,
   getDirectionalInputSide,
   getNoteRelationEnterAction,
   getNoteRelationSubmitError,
   getTagRelationCandidates,
+  groupExcludedPathsBySource,
 } from "./relation-modals";
 
 describe('新增父子笔记弹窗输入框方向键导航', () => {
@@ -51,6 +53,69 @@ describe('标签关系候选', () => {
 
   it('空查询不展示候选', () => {
     expect(getTagRelationCandidates(['#甲'], '')).toEqual([]);
+  });
+});
+
+describe('已排除继承笔记分组', () => {
+  it('按来源顺序分组，并让多来源笔记在各组重复出现', () => {
+    const sources = new Map([
+      ['共享.md', ['#子二', '#子一']],
+      ['子一.md', ['#子一']],
+      ['未知.md', []],
+    ]);
+    expect(groupExcludedPathsBySource(
+      ['共享.md', '子一.md', '未知.md'],
+      sources,
+      ['#子一', '#子二']
+    )).toEqual([
+      { source: '#子一', paths: ['共享.md', '子一.md'] },
+      { source: '#子二', paths: ['共享.md'] },
+      { source: null, paths: ['未知.md'] },
+    ]);
+  });
+
+  it('去重路径并在已知顺序后追加新发现来源', () => {
+    const sources = new Map([['笔记.md', ['#未排序来源']]]);
+    expect(groupExcludedPathsBySource(['笔记.md', '笔记.md'], sources, ['#空来源']))
+      .toEqual([{ source: '#未排序来源', paths: ['笔记.md'] }]);
+  });
+});
+
+describe('管理子标签延迟保存', () => {
+  it('子标签变更只更新待保存列表', () => {
+    const modal = Object.create(TagInheritanceModal.prototype) as any;
+    modal.parentTag = '#父';
+    modal.children = ['#旧'];
+    modal.isSubmitting = false;
+    modal.inputEl = null;
+    modal.childrenListEl = null;
+    modal.renderChildren = vi.fn();
+    modal.picker = { render: vi.fn() };
+    modal.plugin = {
+      sortTagsByVisibleCount: (tags: string[]) => [...tags].sort(),
+    };
+
+    modal.updateChildren(['#旧', '#新']);
+    expect(modal.children).toEqual(['#新', '#旧']);
+    expect(modal.renderChildren).toHaveBeenCalled();
+  });
+
+  it('提交时持久化当前待保存列表', async () => {
+    const modal = Object.create(TagInheritanceModal.prototype) as any;
+    modal.parentTag = '#父';
+    modal.children = ['#新', '#旧'];
+    modal.isSubmitting = false;
+    modal.inputEl = null;
+    modal.childrenListEl = null;
+    modal.close = vi.fn();
+    modal.plugin = {
+      setInheritanceChildren: vi.fn(async () => undefined),
+    };
+
+    await modal.submit();
+    expect(modal.plugin.setInheritanceChildren).toHaveBeenCalledWith('#父', ['#新', '#旧']);
+    expect(modal.close).toHaveBeenCalled();
+    expect(modal.isSubmitting).toBe(false);
   });
 });
 

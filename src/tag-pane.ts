@@ -18,7 +18,7 @@ import {
   tagMatchesAnySearchTerm,
   tagMatchesSearchText
 } from "./models";
-import { createHierarchyNavigationHistory } from "./relation-utils";
+import { compareTagItemsByCount, createHierarchyNavigationHistory } from "./relation-utils";
 import { PuffsTagRenameModal } from "./modals";
 import {
   getAvailableSidebarToolbarButtons,
@@ -925,19 +925,19 @@ export class TagPaneBehavior {
 
     const fallbackTags = Array.from(this.getLogicalTagSet())
       .filter((tag) => !seen.has(tag))
-      .sort((a, b) => {
-        const countDiff = this.getTagBrowseData(b).files.length - this.getTagBrowseData(a).files.length;
-        return countDiff || getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN');
-      });
+      .sort((a, b) => compareTagItemsByCount(
+        { count: this.getTagBrowseData(a).files.length, name: getTagDisplayName(a) },
+        { count: this.getTagBrowseData(b).files.length, name: getTagDisplayName(b) }
+      ));
 
     for (const tag of fallbackTags) {
       pushTag(tag);
     }
 
-    items.sort((a, b) => {
-      const countDiff = b.files.length - a.files.length;
-      return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
-    });
+    items.sort((a, b) => compareTagItemsByCount(
+      { count: a.files.length, name: a.displayName },
+      { count: b.files.length, name: b.displayName }
+    ));
 
     return includePinned ? this.prependPinnedTagItem(items, queryValue) : items;
   }
@@ -995,10 +995,10 @@ export class TagPaneBehavior {
       visitCombinations(0, []);
     }
 
-    items.sort((a, b) => {
-      const countDiff = b.files.length - a.files.length;
-      return countDiff || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN');
-    });
+    items.sort((a, b) => compareTagItemsByCount(
+      { count: a.files.length, name: a.displayName },
+      { count: b.files.length, name: b.displayName }
+    ));
     return items;
   }
 

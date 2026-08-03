@@ -185,7 +185,17 @@ export function compareHierarchyParentItems(
   left: { directCount: number; name: string },
   right: { directCount: number; name: string }
 ): number {
-  return right.directCount - left.directCount || left.name.localeCompare(right.name, 'zh-Hans-CN');
+  return compareTagItemsByCount(
+    { count: left.directCount, name: left.name },
+    { count: right.directCount, name: right.name }
+  );
+}
+
+export function compareTagItemsByCount(
+  left: { count: number; name: string },
+  right: { count: number; name: string }
+): number {
+  return right.count - left.count || left.name.localeCompare(right.name, 'zh-Hans-CN');
 }
 
 export type HierarchyNavigationSnapshot = {

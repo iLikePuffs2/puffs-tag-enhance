@@ -11,6 +11,7 @@ import { AddParentTagModal, NoteRelationModal, TagInheritanceModal } from "./rel
 import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
+  compareTagItemsByCount,
   createHierarchyNavigationHistory,
   buildVisibleHierarchyForest,
   buildTagInheritanceGroupTree,
@@ -1078,7 +1079,47 @@ export class RelationsBehavior {
 
   getInheritanceChildren(tagValue) {
     const tag = normalizeTag(tagValue);
-    return tag ? [...(this.getTagInheritanceSettings().childrenByParent[tag] || [])] : [];
+    if (!tag) return [];
+    return [...(this.getTagInheritanceSettings().childrenByParent[tag] || [])]
+      .sort((left, right) => this.compareTagsByVisibleCount(left, right));
+  }
+
+  getTagVisibleNoteCount(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag) return 0;
+    const paths = new Set((this.tagFileIndex.get(tag) || []).map((file) => file.path));
+    if (!this.isTagInheritanceEnabled(tag)) return paths.size;
+    const excluded = new Set(this.getTagInheritanceSettings().excludedPathsByParent[tag] || []);
+    const adjacency = this.getTagInheritanceSettings().childrenByParent;
+    for (const descendant of collectDirectedDescendants(adjacency, tag)) {
+      for (const file of this.tagFileIndex.get(descendant) || []) {
+        if (!excluded.has(file.path)) paths.add(file.path);
+      }
+    }
+    return paths.size;
+  }
+
+  compareTagsByVisibleCount(leftValue, rightValue) {
+    const left = normalizeTag(leftValue) || '';
+    const right = normalizeTag(rightValue) || '';
+    return compareTagItemsByCount(
+      { count: this.getTagVisibleNoteCount(left), name: getTagDisplayName(left) },
+      { count: this.getTagVisibleNoteCount(right), name: getTagDisplayName(right) }
+    );
+  }
+
+  sortTagsByVisibleCount(tagValues) {
+    return Array.from(new Set((tagValues || []).map(normalizeTag).filter(Boolean)))
+      .sort((left, right) => this.compareTagsByVisibleCount(left, right));
+  }
+
+  getSortedTagInheritanceAdjacency() {
+    const result = {};
+    for (const parent of Object.keys(this.getTagInheritanceSettings().childrenByParent)) {
+      const children = this.getInheritanceChildren(parent);
+      if (children.length) result[parent] = children;
+    }
+    return result;
   }
 
   getInheritanceParents(tagValue) {
@@ -1110,7 +1151,7 @@ export class RelationsBehavior {
   getTagDescendants(tagValue) {
     const root = normalizeTag(tagValue);
     if (!root) return [];
-    return collectDirectedDescendants(this.getTagInheritanceSettings().childrenByParent, root);
+    return collectDirectedDescendants(this.getSortedTagInheritanceAdjacency(), root);
   }
 
   wouldCreateTagInheritanceCycle(parentValue, childValue) {
@@ -1216,7 +1257,7 @@ export class RelationsBehavior {
     const inheritanceTree = this.isTagInheritanceEnabled(tag)
       ? buildTagInheritanceGroupTree(
         tag,
-        this.getTagInheritanceSettings().childrenByParent,
+        this.getSortedTagInheritanceAdjacency(),
         orderedPathsByTag,
         this.getTagInheritanceSettings().excludedPathsByParent[tag] || []
       )
