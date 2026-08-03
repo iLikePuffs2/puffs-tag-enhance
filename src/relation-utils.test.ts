@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
+  createHierarchyNavigationHistory,
   buildVisibleHierarchyForest,
   buildTagInheritanceGroupTree,
   getHierarchySearchKeywordError,
   mergeInheritedPaths,
+  moveHierarchyNavigation,
   normalizeHierarchySearchKeyword,
   parseHierarchySearch,
   parseUnifiedHierarchySearch,
+  pushHierarchyNavigation,
   sanitizeAcyclicAdjacency,
   wouldCreateDirectedCycle,
 } from "./relation-utils";
@@ -142,5 +145,47 @@ describe('父子笔记搜索和排序', () => {
     ];
     items.sort(compareHierarchyParentItems);
     expect(items.map((item) => item.name)).toEqual(['李', '阿', '赵']);
+  });
+});
+
+describe('父子关系定位历史', () => {
+  it('支持连续定位及前进后退，并在离开时保存实时状态', () => {
+    const history = createHierarchyNavigationHistory();
+    pushHierarchyNavigation(history, { query: '爱情', scrollTop: 120 }, { query: '=父*子', scrollTop: 0 });
+    pushHierarchyNavigation(history, { query: '=父*手动修改', scrollTop: 260 }, { query: '==孙', scrollTop: 0 });
+
+    expect(moveHierarchyNavigation(history, -1, { query: '==孙', scrollTop: 40 }))
+      .toEqual({ query: '=父*手动修改', scrollTop: 260 });
+    expect(moveHierarchyNavigation(history, -1, { query: '=父*手动修改', scrollTop: 280 }))
+      .toEqual({ query: '爱情', scrollTop: 120 });
+    expect(moveHierarchyNavigation(history, 1, { query: '爱情', scrollTop: 130 }))
+      .toEqual({ query: '=父*手动修改', scrollTop: 280 });
+    expect(moveHierarchyNavigation(history, 1, { query: '=父*手动修改', scrollTop: 300 }))
+      .toEqual({ query: '==孙', scrollTop: 40 });
+  });
+
+  it('在旧历史项重新定位时清除原前进分支', () => {
+    const history = createHierarchyNavigationHistory();
+    pushHierarchyNavigation(history, { query: '原搜索', scrollTop: 10 }, { query: '=甲', scrollTop: 0 });
+    pushHierarchyNavigation(history, { query: '=甲', scrollTop: 20 }, { query: '=乙', scrollTop: 0 });
+    moveHierarchyNavigation(history, -1, { query: '=乙', scrollTop: 30 });
+    pushHierarchyNavigation(history, { query: '=甲修改', scrollTop: 40 }, { query: '=丙', scrollTop: 0 });
+
+    expect(history.entries).toEqual([
+      { query: '原搜索', scrollTop: 10 },
+      { query: '=甲修改', scrollTop: 40 },
+      { query: '=丙', scrollTop: 0 },
+    ]);
+    expect(moveHierarchyNavigation(history, 1, { query: '=丙', scrollTop: 50 })).toBeNull();
+    expect(moveHierarchyNavigation(history, -1, { query: '=丙', scrollTop: 60 }))
+      .toEqual({ query: '=甲修改', scrollTop: 40 });
+  });
+
+  it('历史边界不移动索引，但保留当前实时状态', () => {
+    const history = createHierarchyNavigationHistory();
+    pushHierarchyNavigation(history, { query: '', scrollTop: 0 }, { query: '=父', scrollTop: 0 });
+    expect(moveHierarchyNavigation(history, 1, { query: '=父修改', scrollTop: 88 })).toBeNull();
+    expect(history.index).toBe(1);
+    expect(history.entries[1]).toEqual({ query: '=父修改', scrollTop: 88 });
   });
 });

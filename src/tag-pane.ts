@@ -18,6 +18,7 @@ import {
   tagMatchesAnySearchTerm,
   tagMatchesSearchText
 } from "./models";
+import { createHierarchyNavigationHistory } from "./relation-utils";
 import { PuffsTagRenameModal } from "./modals";
 import {
   getAvailableSidebarToolbarButtons,
@@ -137,6 +138,7 @@ export class TagPaneBehavior {
       lastRenderedSearchQuery: this.getTagSearchValue(view),
       hierarchySearchActive: false,
       hierarchyState: this.createHierarchySurfaceState(),
+      hierarchyNavigationHistory: createHierarchyNavigationHistory(),
       hierarchyPageEl: null,
       scrollBottomButtonEl: null,
       scrollTopButtonEl: null,

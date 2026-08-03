@@ -187,3 +187,59 @@ export function compareHierarchyParentItems(
 ): number {
   return right.directCount - left.directCount || left.name.localeCompare(right.name, 'zh-Hans-CN');
 }
+
+export type HierarchyNavigationSnapshot = {
+  query: string;
+  scrollTop: number;
+};
+
+export type HierarchyNavigationHistory = {
+  entries: HierarchyNavigationSnapshot[];
+  index: number;
+  restoreRequestId: number;
+};
+
+export function createHierarchyNavigationHistory(): HierarchyNavigationHistory {
+  return { entries: [], index: -1, restoreRequestId: 0 };
+}
+
+const copyHierarchyNavigationSnapshot = (
+  snapshot: HierarchyNavigationSnapshot
+): HierarchyNavigationSnapshot => ({
+  query: String(snapshot?.query ?? ''),
+  scrollTop: Number.isFinite(snapshot?.scrollTop) ? Math.max(0, snapshot.scrollTop) : 0,
+});
+
+export function pushHierarchyNavigation(
+  history: HierarchyNavigationHistory,
+  current: HierarchyNavigationSnapshot,
+  target: HierarchyNavigationSnapshot
+): HierarchyNavigationSnapshot {
+  const currentSnapshot = copyHierarchyNavigationSnapshot(current);
+  const targetSnapshot = copyHierarchyNavigationSnapshot(target);
+  if (history.index < 0 || history.index >= history.entries.length) {
+    history.entries = [currentSnapshot];
+    history.index = 0;
+  } else {
+    history.entries[history.index] = currentSnapshot;
+    history.entries = history.entries.slice(0, history.index + 1);
+  }
+  history.entries.push(targetSnapshot);
+  history.index = history.entries.length - 1;
+  history.restoreRequestId += 1;
+  return { ...targetSnapshot };
+}
+
+export function moveHierarchyNavigation(
+  history: HierarchyNavigationHistory,
+  direction: -1 | 1,
+  current: HierarchyNavigationSnapshot
+): HierarchyNavigationSnapshot | null {
+  if (history.index < 0 || history.index >= history.entries.length) return null;
+  history.entries[history.index] = copyHierarchyNavigationSnapshot(current);
+  const nextIndex = history.index + direction;
+  if (nextIndex < 0 || nextIndex >= history.entries.length) return null;
+  history.index = nextIndex;
+  history.restoreRequestId += 1;
+  return { ...history.entries[nextIndex] };
+}

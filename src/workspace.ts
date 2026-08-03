@@ -177,6 +177,7 @@ export class WorkspaceBehavior {
 
   registerKeyboardHandler() {
     this.keydownHandler = (evt) => {
+      if (this.handleHierarchyNavigationHotkey(evt)) return;
       if (!this.isQuickSearchHotkey(evt)) return;
 
       const view = this.getFocusedTagView();
@@ -188,6 +189,7 @@ export class WorkspaceBehavior {
       this.toggleTagSearch(view);
     };
 
+    window.addEventListener('keydown', this.keydownHandler, true);
     document.addEventListener('keydown', this.keydownHandler, true);
     this.pointerdownHandler = (evt) => {
       if (!this.selectedNoteOrderTarget) return;
@@ -249,6 +251,7 @@ export class WorkspaceBehavior {
     document.addEventListener('contextmenu', this.noteOrderContextMenuHandler, true);
 
     this.register(() => {
+      window.removeEventListener('keydown', this.keydownHandler, true);
       document.removeEventListener('keydown', this.keydownHandler, true);
       document.removeEventListener('pointerdown', this.pointerdownHandler, true);
       document.removeEventListener('contextmenu', this.noteOrderContextMenuHandler, true);
@@ -256,6 +259,34 @@ export class WorkspaceBehavior {
       this.pointerdownHandler = null;
       this.noteOrderContextMenuHandler = null;
     });
+  }
+
+  getActiveHierarchyNavigationSurface() {
+    const tagView = this.getFocusedTagView();
+    if (tagView) return { view: tagView, surface: 'sidebar' };
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE) || []) {
+      const view = leaf.view;
+      if (view && typeof view.isActiveView === 'function' && view.isActiveView()) {
+        return { view, surface: 'shelf' };
+      }
+    }
+    return null;
+  }
+
+  handleHierarchyNavigationHotkey(evt) {
+    if (
+      !evt.altKey || evt.ctrlKey || evt.metaKey || evt.shiftKey ||
+      (evt.key !== 'ArrowLeft' && evt.key !== 'ArrowRight')
+    ) return false;
+    const target = this.getActiveHierarchyNavigationSurface();
+    if (!target) return false;
+    const history = this.getHierarchyNavigationHistory(target.view, target.surface);
+    if (history.entries.length < 2) return false;
+    evt.preventDefault();
+    evt.stopPropagation();
+    evt.stopImmediatePropagation();
+    this.navigateHierarchyHistory(target.view, target.surface, evt.key === 'ArrowLeft' ? -1 : 1);
+    return true;
   }
 
   eventMatchesHotkey(evt, hotkey) {

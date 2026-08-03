@@ -6,6 +6,7 @@ import {
   createNoteCardSearchState,
   parseNoteCardSearch
 } from "./models";
+import { createHierarchyNavigationHistory } from "./relation-utils";
 
 class PuffsTagShelfView extends ItemView {
   constructor(leaf, plugin) {
@@ -26,6 +27,7 @@ class PuffsTagShelfView extends ItemView {
     this.summaryNoteCountEl = null;
     this.hierarchyState = this.plugin.createHierarchySurfaceState();
     this.hierarchySearchActive = false;
+    this.hierarchyNavigationHistory = createHierarchyNavigationHistory();
     this.expandAllButtonEl = null;
     this.scrollBottomButtonEl = null;
     this.scrollTopButtonEl = null;
@@ -58,6 +60,7 @@ class PuffsTagShelfView extends ItemView {
       this.searchHotkeyHandler = null;
     }
     this.plugin.clearNoteCardSearchState(this.noteCardSearchState, this.expandedTags);
+    this.hierarchyNavigationHistory = createHierarchyNavigationHistory();
     this.searchComponent = null;
   }
 

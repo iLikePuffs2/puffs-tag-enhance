@@ -11,11 +11,14 @@ import { AddParentTagModal, NoteRelationModal, TagInheritanceModal } from "./rel
 import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
+  createHierarchyNavigationHistory,
   buildVisibleHierarchyForest,
   buildTagInheritanceGroupTree,
   mergeInheritedPaths,
+  moveHierarchyNavigation,
   parseHierarchySearch,
   parseUnifiedHierarchySearch,
+  pushHierarchyNavigation,
   sanitizeAcyclicAdjacency,
   wouldCreateDirectedCycle,
 } from "./relation-utils";
@@ -927,6 +930,81 @@ export class RelationsBehavior {
     this.refreshTagShelfViews();
   }
 
+  getHierarchyNavigationHistory(view, surface) {
+    if (surface === 'shelf') {
+      if (!view.hierarchyNavigationHistory) {
+        view.hierarchyNavigationHistory = createHierarchyNavigationHistory();
+      }
+      return view.hierarchyNavigationHistory;
+    }
+    const patch = this.viewPatches.get(view) || this.patchTagView(view);
+    if (!patch.hierarchyNavigationHistory) {
+      patch.hierarchyNavigationHistory = createHierarchyNavigationHistory();
+    }
+    return patch.hierarchyNavigationHistory;
+  }
+
+  getHierarchyNavigationScrollEl(view, surface) {
+    if (surface === 'shelf') return view.contentEl || null;
+    return view.containerEl?.querySelector('.tag-container') || view.tagPaneEl || null;
+  }
+
+  captureHierarchyNavigationSnapshot(view, surface) {
+    const query = surface === 'shelf' ? view.searchQuery : this.getTagSearchValue(view);
+    const scrollEl = this.getHierarchyNavigationScrollEl(view, surface);
+    return { query: String(query || ''), scrollTop: scrollEl?.scrollTop || 0 };
+  }
+
+  applyHierarchyNavigationSnapshot(view, surface, snapshot) {
+    const history = this.getHierarchyNavigationHistory(view, surface);
+    const restoreRequestId = history.restoreRequestId;
+    if (surface === 'shelf') {
+      view.searchQuery = snapshot.query;
+      view.hierarchyState.activeMatchIndex = -1;
+      view.searchComponent?.setValue(snapshot.query);
+      view.renderTagList();
+    } else {
+      const patch = this.viewPatches.get(view) || this.patchTagView(view);
+      patch.hierarchyState.activeMatchIndex = -1;
+      if (!view.isShowingSearch && typeof view.setShowSearch === 'function') view.setShowSearch(true);
+      const searchComponent = view.searchComponent;
+      if (searchComponent && typeof searchComponent.setValue === 'function') searchComponent.setValue(snapshot.query);
+      const inputEl = searchComponent && searchComponent.inputEl;
+      if (inputEl) inputEl.value = snapshot.query;
+      if (typeof view.updateSearch === 'function') view.updateSearch();
+      this.scheduleSyncView(view, 0);
+    }
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      if (history.restoreRequestId !== restoreRequestId) return;
+      const scrollEl = this.getHierarchyNavigationScrollEl(view, surface);
+      if (scrollEl?.isConnected) scrollEl.scrollTop = snapshot.scrollTop;
+      const inputEl = view.searchComponent?.inputEl;
+      if (inputEl?.isConnected) inputEl.focus({ preventScroll: true });
+    }));
+  }
+
+  navigateHierarchyHistory(view, surface, direction) {
+    const history = this.getHierarchyNavigationHistory(view, surface);
+    if (history.entries.length < 2) return false;
+    const snapshot = moveHierarchyNavigation(
+      history,
+      direction,
+      this.captureHierarchyNavigationSnapshot(view, surface)
+    );
+    if (snapshot) this.applyHierarchyNavigationSnapshot(view, surface, snapshot);
+    return true;
+  }
+
+  pushHierarchyNavigationForView(view, surface, query) {
+    const history = this.getHierarchyNavigationHistory(view, surface);
+    const target = pushHierarchyNavigation(
+      history,
+      this.captureHierarchyNavigationSnapshot(view, surface),
+      { query, scrollTop: 0 }
+    );
+    this.applyHierarchyNavigationSnapshot(view, surface, target);
+  }
+
   openHierarchyForNote(path, sourceEl) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile) || file.extension !== 'md') return;
@@ -941,28 +1019,13 @@ export class RelationsBehavior {
     for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)) {
       const view = leaf.view;
       if (!view || !view.contentEl || !view.contentEl.contains(sourceEl)) continue;
-      view.searchQuery = query;
-      view.hierarchyState.activeMatchIndex = -1;
-      if (view.searchComponent && typeof view.searchComponent.setValue === 'function') {
-        view.searchComponent.setValue(query);
-      }
-      view.renderTagList();
-      window.setTimeout(() => view.searchComponent?.inputEl?.focus(), 0);
+      this.pushHierarchyNavigationForView(view, 'shelf', query);
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType('tag')) {
       const view = leaf.view;
       if (!view || !view.containerEl || !view.containerEl.contains(sourceEl)) continue;
-      const patch = this.viewPatches.get(view) || this.patchTagView(view);
-      patch.hierarchyState.activeMatchIndex = -1;
-      if (!view.isShowingSearch && typeof view.setShowSearch === 'function') view.setShowSearch(true);
-      const searchComponent = view.searchComponent;
-      if (searchComponent && typeof searchComponent.setValue === 'function') searchComponent.setValue(query);
-      const inputEl = searchComponent && searchComponent.inputEl;
-      if (inputEl) inputEl.value = query;
-      if (typeof view.updateSearch === 'function') view.updateSearch();
-      this.scheduleSyncView(view, 0);
-      window.setTimeout(() => inputEl?.focus(), 50);
+      this.pushHierarchyNavigationForView(view, 'sidebar', query);
       return;
     }
   }
