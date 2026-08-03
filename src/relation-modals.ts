@@ -244,12 +244,6 @@ class TagInheritanceModal extends Modal {
 
   onOpen() {
     this.modalEl.classList.add('puffs-relation-modal', 'puffs-tag-relation-modal');
-    this.modalEl.addEventListener('keydown', (event) => {
-      if (getNoteRelationEnterAction(event, this.isComposing) !== 'submit' || this.query.trim()) return;
-      event.preventDefault();
-      event.stopPropagation();
-      void this.submit();
-    });
     this.buildLayout();
   }
 
@@ -347,33 +341,37 @@ class TagInheritanceModal extends Modal {
     this.picker?.render();
   }
 
-  async submit() {
+  async persistChildren(nextChildren) {
     if (this.isSubmitting) return;
     this.isSubmitting = true;
     this.syncMutationState();
     try {
-      await this.plugin.setInheritanceChildren(this.parentTag, this.children);
-      this.close();
+      const sortedChildren = this.plugin.sortTagsByVisibleCount(nextChildren);
+      await this.plugin.setInheritanceChildren(this.parentTag, sortedChildren);
+      this.updateChildren(sortedChildren);
+      this.renderExclusionGroups();
+      return true;
     } catch (error) {
       new Notice(error && error.message ? error.message : '保存继承关系失败');
+      return false;
     } finally {
       this.isSubmitting = false;
       this.syncMutationState();
     }
   }
 
-  addChild(tag) {
-    if (!tag || this.children.includes(tag)) return;
-    this.updateChildren([...this.children, tag]);
+  async addChild(tag) {
+    if (!tag || this.children.includes(tag) || this.isSubmitting) return;
+    if (!await this.persistChildren([...this.children, tag])) return;
     this.query = '';
     if (this.inputEl) this.inputEl.value = '';
     this.picker?.render();
     globalThis.setTimeout(() => this.inputEl?.focus(), 0);
   }
 
-  removeChild(child) {
-    if (!child || !this.children.includes(child)) return;
-    this.updateChildren(this.children.filter((tag) => tag !== child));
+  async removeChild(child) {
+    if (!child || !this.children.includes(child) || this.isSubmitting) return;
+    if (!await this.persistChildren(this.children.filter((tag) => tag !== child))) return;
     globalThis.setTimeout(() => this.inputEl?.focus(), 0);
   }
 

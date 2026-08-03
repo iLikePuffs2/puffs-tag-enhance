@@ -12,6 +12,12 @@ export class TFile {
 
 export class Modal {}
 export class Menu {}
-export class Notice {}
+export class Notice {
+  static messages: unknown[] = [];
+
+  constructor(message: unknown) {
+    Notice.messages.push(message);
+  }
+}
 export const normalizePath = (value: string) => value;
 export const setIcon = () => {};

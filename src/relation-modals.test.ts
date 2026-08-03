@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { Notice } from "obsidian";
 import {
   TagInheritanceModal,
   getDirectionalInputSide,
@@ -81,41 +82,76 @@ describe('已排除继承笔记分组', () => {
   });
 });
 
-describe('管理子标签延迟保存', () => {
-  it('子标签变更只更新待保存列表', () => {
+describe('管理子标签立即保存', () => {
+  function createModal(children = ['#旧']) {
     const modal = Object.create(TagInheritanceModal.prototype) as any;
     modal.parentTag = '#父';
-    modal.children = ['#旧'];
+    modal.children = children;
     modal.isSubmitting = false;
     modal.inputEl = null;
     modal.childrenListEl = null;
     modal.renderChildren = vi.fn();
+    modal.renderExclusionGroups = vi.fn();
     modal.picker = { render: vi.fn() };
     modal.plugin = {
       sortTagsByVisibleCount: (tags: string[]) => [...tags].sort(),
-    };
-
-    modal.updateChildren(['#旧', '#新']);
-    expect(modal.children).toEqual(['#新', '#旧']);
-    expect(modal.renderChildren).toHaveBeenCalled();
-  });
-
-  it('提交时持久化当前待保存列表', async () => {
-    const modal = Object.create(TagInheritanceModal.prototype) as any;
-    modal.parentTag = '#父';
-    modal.children = ['#新', '#旧'];
-    modal.isSubmitting = false;
-    modal.inputEl = null;
-    modal.childrenListEl = null;
-    modal.close = vi.fn();
-    modal.plugin = {
       setInheritanceChildren: vi.fn(async () => undefined),
     };
+    return modal;
+  }
 
-    await modal.submit();
+  it('新增后立即持久化并更新列表，不关闭弹窗', async () => {
+    const modal = createModal();
+    modal.close = vi.fn();
+
+    await modal.addChild('#新');
     expect(modal.plugin.setInheritanceChildren).toHaveBeenCalledWith('#父', ['#新', '#旧']);
-    expect(modal.close).toHaveBeenCalled();
+    expect(modal.children).toEqual(['#新', '#旧']);
+    expect(modal.renderChildren).toHaveBeenCalled();
+    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
+    expect(modal.close).not.toHaveBeenCalled();
     expect(modal.isSubmitting).toBe(false);
+  });
+
+  it('删除后立即持久化并更新列表，不关闭弹窗', async () => {
+    const modal = createModal(['#旧', '#新']);
+    modal.close = vi.fn();
+
+    await modal.removeChild('#旧');
+    expect(modal.plugin.setInheritanceChildren).toHaveBeenCalledWith('#父', ['#新']);
+    expect(modal.children).toEqual(['#新']);
+    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
+    expect(modal.close).not.toHaveBeenCalled();
+    expect(modal.isSubmitting).toBe(false);
+  });
+
+  it('连续增删时每次操作都持久化最新列表', async () => {
+    const modal = createModal();
+
+    await modal.addChild('#新');
+    await modal.addChild('#另一个');
+    await modal.removeChild('#旧');
+
+    expect(modal.plugin.setInheritanceChildren.mock.calls).toEqual([
+      ['#父', ['#新', '#旧']],
+      ['#父', ['#另一个', '#新', '#旧']],
+      ['#父', ['#另一个', '#新']],
+    ]);
+    expect(modal.children).toEqual(['#另一个', '#新']);
+  });
+
+  it('保存失败时保留原列表、恢复控件状态并提示错误', async () => {
+    const modal = createModal();
+    modal.plugin.setInheritanceChildren.mockRejectedValueOnce(new Error('保存失败'));
+    (Notice as any).messages = [];
+
+    await modal.addChild('#新');
+
+    expect(modal.children).toEqual(['#旧']);
+    expect(modal.renderChildren).not.toHaveBeenCalled();
+    expect(modal.renderExclusionGroups).not.toHaveBeenCalled();
+    expect(modal.isSubmitting).toBe(false);
+    expect((Notice as any).messages).toEqual(['保存失败']);
   });
 });
 

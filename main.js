@@ -4425,12 +4425,6 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
   }
   onOpen() {
     this.modalEl.classList.add("puffs-relation-modal", "puffs-tag-relation-modal");
-    this.modalEl.addEventListener("keydown", (event) => {
-      if (getNoteRelationEnterAction(event, this.isComposing) !== "submit" || this.query.trim()) return;
-      event.preventDefault();
-      event.stopPropagation();
-      void this.submit();
-    });
     this.buildLayout();
   }
   buildLayout() {
@@ -4523,24 +4517,28 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     this.renderChildren();
     (_a = this.picker) == null ? void 0 : _a.render();
   }
-  async submit() {
+  async persistChildren(nextChildren) {
     if (this.isSubmitting) return;
     this.isSubmitting = true;
     this.syncMutationState();
     try {
-      await this.plugin.setInheritanceChildren(this.parentTag, this.children);
-      this.close();
+      const sortedChildren = this.plugin.sortTagsByVisibleCount(nextChildren);
+      await this.plugin.setInheritanceChildren(this.parentTag, sortedChildren);
+      this.updateChildren(sortedChildren);
+      this.renderExclusionGroups();
+      return true;
     } catch (error) {
       new import_obsidian10.Notice(error && error.message ? error.message : "\u4FDD\u5B58\u7EE7\u627F\u5173\u7CFB\u5931\u8D25");
+      return false;
     } finally {
       this.isSubmitting = false;
       this.syncMutationState();
     }
   }
-  addChild(tag) {
+  async addChild(tag) {
     var _a;
-    if (!tag || this.children.includes(tag)) return;
-    this.updateChildren([...this.children, tag]);
+    if (!tag || this.children.includes(tag) || this.isSubmitting) return;
+    if (!await this.persistChildren([...this.children, tag])) return;
     this.query = "";
     if (this.inputEl) this.inputEl.value = "";
     (_a = this.picker) == null ? void 0 : _a.render();
@@ -4549,9 +4547,9 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
       return (_a2 = this.inputEl) == null ? void 0 : _a2.focus();
     }, 0);
   }
-  removeChild(child) {
-    if (!child || !this.children.includes(child)) return;
-    this.updateChildren(this.children.filter((tag) => tag !== child));
+  async removeChild(child) {
+    if (!child || !this.children.includes(child) || this.isSubmitting) return;
+    if (!await this.persistChildren(this.children.filter((tag) => tag !== child))) return;
     globalThis.setTimeout(() => {
       var _a;
       return (_a = this.inputEl) == null ? void 0 : _a.focus();
@@ -5355,7 +5353,6 @@ var RelationsBehavior = class {
       if (parentPath) cardEl.dataset.puffsHierarchyParent = parentPath;
       if (inherited) {
         cardEl.dataset.puffsInherited = "true";
-        cardEl.title = `\u7EE7\u627F\u81EA\uFF1A${tag}`;
       }
       const orderButtonEl = cardEl.createEl("button", { cls: "clickable-icon puffs-tag-note-order-button" });
       orderButtonEl.dataset.path = file.path;
@@ -5808,7 +5805,7 @@ var RelationsBehavior = class {
     const menu = new import_obsidian11.Menu();
     const inherited = cardEl.dataset.puffsInherited === "true" || tag && this.isInheritedFileForTag(tag, path);
     if (inherited) {
-      menu.addItem((item) => item.setTitle(`\u4E0D\u5728 ${inheritanceRootTag} \u4E2D\u7EE7\u627F\u663E\u793A`).setIcon("eye-off").onClick(() => this.excludeInheritedFile(inheritanceRootTag, path, true).catch((error) => {
+      menu.addItem((item) => item.setTitle(`\u4E0D\u5728 ${getTagDisplayName(inheritanceRootTag)} \u4E2D\u7EE7\u627F\u663E\u793A`).setIcon("eye-off").onClick(() => this.excludeInheritedFile(inheritanceRootTag, path, true).catch((error) => {
         console.error("[Puffs Tag Enhance] Failed to exclude inherited note:", error);
         new import_obsidian11.Notice("\u6392\u9664\u7EE7\u627F\u7B14\u8BB0\u5931\u8D25");
       })));
@@ -6149,7 +6146,7 @@ var RelationsBehavior = class {
     const tag = normalizeTag(tagValue);
     if (!tag || !path || !this.isInheritedFileForTag(tag, path)) return false;
     const menu = new import_obsidian11.Menu();
-    menu.addItem((item) => item.setTitle(`\u4E0D\u5728 ${tag} \u4E2D\u7EE7\u627F\u663E\u793A`).setIcon("eye-off").onClick(() => this.excludeInheritedFile(tag, path).catch((error) => {
+    menu.addItem((item) => item.setTitle(`\u4E0D\u5728 ${getTagDisplayName(tag)} \u4E2D\u7EE7\u627F\u663E\u793A`).setIcon("eye-off").onClick(() => this.excludeInheritedFile(tag, path).catch((error) => {
       console.error("[Puffs Tag Enhance] Failed to exclude inherited note:", error);
       new import_obsidian11.Notice("\u6392\u9664\u7EE7\u627F\u7B14\u8BB0\u5931\u8D25");
     })));

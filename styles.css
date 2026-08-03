@@ -297,11 +297,17 @@
   min-width: 20px;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
+  line-height: calc(var(--font-ui-medium) * var(--line-height-tight));
   text-align: right;
+}
+
+.puffs-relation-child-row .puffs-relation-manage-name {
+  flex: 0 1 auto;
 }
 
 .puffs-relation-child-remove {
   flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .puffs-relation-child-remove:hover,

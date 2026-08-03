@@ -562,7 +562,6 @@ export class RelationsBehavior {
       if (parentPath) cardEl.dataset.puffsHierarchyParent = parentPath;
       if (inherited) {
         cardEl.dataset.puffsInherited = 'true';
-        cardEl.title = `继承自：${tag}`;
       }
 
       const orderButtonEl = cardEl.createEl('button', { cls: 'clickable-icon puffs-tag-note-order-button' });
@@ -1047,7 +1046,7 @@ export class RelationsBehavior {
     const inherited = cardEl.dataset.puffsInherited === 'true' || (tag && this.isInheritedFileForTag(tag, path));
     if (inherited) {
       menu.addItem((item) => item
-        .setTitle(`不在 ${inheritanceRootTag} 中继承显示`)
+        .setTitle(`不在 ${getTagDisplayName(inheritanceRootTag)} 中继承显示`)
         .setIcon('eye-off')
         .onClick(() => this.excludeInheritedFile(inheritanceRootTag, path, true).catch((error) => {
           console.error('[Puffs Tag Enhance] Failed to exclude inherited note:', error);
@@ -1429,7 +1428,7 @@ export class RelationsBehavior {
     if (!tag || !path || !this.isInheritedFileForTag(tag, path)) return false;
     const menu = new Menu();
     menu.addItem((item) => item
-      .setTitle(`不在 ${tag} 中继承显示`)
+      .setTitle(`不在 ${getTagDisplayName(tag)} 中继承显示`)
       .setIcon('eye-off')
       .onClick(() => this.excludeInheritedFile(tag, path).catch((error) => {
         console.error('[Puffs Tag Enhance] Failed to exclude inherited note:', error);
