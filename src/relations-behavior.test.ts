@@ -81,6 +81,65 @@ describe('关系文件迁移', () => {
   });
 });
 
+describe('标签绑定笔记生命周期', () => {
+  const makeBehavior = (bindings: Record<string, string>, paths: string[]) => {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    const files = new Map(paths.map((path) => [path, new (TFile as any)(path)]));
+    behavior.settings = { tagBoundNoteByTag: { ...bindings } };
+    behavior.app = { vault: { getAbstractFileByPath: (path: string) => files.get(path) || null } };
+    behavior.tagFileIndex = new Map([['#标签', []], ['#目标', []]]);
+    behavior.saveSettings = vi.fn().mockResolvedValue(undefined);
+    return behavior;
+  };
+
+  it('绑定和解绑只修改独立映射，不改变标签索引', async () => {
+    const behavior = makeBehavior({}, ['绑定.md']);
+    const originalIndex = behavior.tagFileIndex;
+
+    await behavior.setTagBoundNote('#标签', '绑定.md');
+    expect(behavior.settings.tagBoundNoteByTag).toEqual({ '#标签': '绑定.md' });
+    expect(behavior.tagFileIndex).toBe(originalIndex);
+
+    await behavior.setTagBoundNote('#标签', null);
+    expect(behavior.settings.tagBoundNoteByTag).toEqual({});
+    expect(behavior.saveSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it('标签改名迁移绑定，合并时保留目标标签绑定', () => {
+    const behavior = makeBehavior({ '#来源': '来源.md', '#目标': '目标.md' }, ['来源.md', '目标.md']);
+    expect(behavior.migrateTagBoundNote('#来源', '#目标')).toBe(true);
+    expect(behavior.settings.tagBoundNoteByTag).toEqual({ '#目标': '目标.md' });
+
+    behavior.settings.tagBoundNoteByTag = { '#来源': '来源.md' };
+    behavior.migrateTagBoundNote('#来源', '#新标签');
+    expect(behavior.settings.tagBoundNoteByTag).toEqual({ '#新标签': '来源.md' });
+  });
+
+  it('笔记改名时迁移路径，删除时解除全部相关绑定', () => {
+    const behavior = makeBehavior({ '#标签': '旧.md', '#目标': '旧.md' }, ['旧.md', '目录/新.md']);
+    behavior.handleTagBoundNoteFileRename(new (TFile as any)('目录/新.md'), '旧.md');
+    expect(behavior.settings.tagBoundNoteByTag).toEqual({
+      '#标签': '目录/新.md',
+      '#目标': '目录/新.md',
+    });
+
+    behavior.handleTagBoundNoteFileDelete(new (TFile as any)('目录/新.md'));
+    expect(behavior.settings.tagBoundNoteByTag).toEqual({});
+    expect(behavior.saveSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it('清理已消失标签和不存在的绑定文件', () => {
+    const behavior = makeBehavior({
+      '#标签': '保留.md',
+      '#消失': '保留.md',
+      '#缺失': '缺失.md',
+    }, ['保留.md']);
+
+    expect(behavior.reconcileTagBoundNotes(new Map([['#标签', []], ['#缺失', []]]))).toBe(true);
+    expect(behavior.settings.tagBoundNoteByTag).toEqual({ '#标签': '保留.md' });
+  });
+});
+
 describe('子标签自动排序', () => {
   it('按包含继承结果的可见笔记数量排序，并让关系遍历使用相同顺序', () => {
     const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} });

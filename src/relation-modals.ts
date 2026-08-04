@@ -24,6 +24,27 @@ function getNoteRelationEnterAction(event, isComposing, hasCandidate = false) {
   return hasCandidate ? 'select-candidate' : 'submit';
 }
 
+function getNoteBindingCandidates(files, query, getAliases: (file: TFile) => string[] = () => []) {
+  const term = String(query || '').trim().toLowerCase();
+  if (!term) return [];
+
+  return Array.from(files || [])
+    .map((file: TFile) => {
+      if (!(file instanceof TFile) || file.extension !== 'md') return null;
+      if (file.basename.toLowerCase().includes(term)) {
+        return { file, displayName: file.basename, alias: '' };
+      }
+      const alias = Array.from(new Set(getAliases(file) || []))
+        .find((value) => String(value).toLowerCase().includes(term));
+      return alias ? { file, displayName: alias, alias } : null;
+    })
+    .filter(Boolean)
+    .sort((left: any, right: any) => (
+      left.displayName.localeCompare(right.displayName, 'zh-Hans-CN') ||
+      left.file.path.localeCompare(right.file.path, 'zh-Hans-CN')
+    ));
+}
+
 function getTagRelationCandidates(tagValues, query, canUse: (tag: string) => boolean = () => true) {
   const term = String(query || '').trim().replace(/^#/, '').toLowerCase();
   if (!term) return [];
@@ -437,6 +458,177 @@ class TagInheritanceModal extends Modal {
   }
 }
 
+class TagNoteBindingModal extends Modal {
+  constructor(app, plugin, tagValue) {
+    super(app);
+    this.plugin = plugin;
+    this.tag = normalizeTag(tagValue);
+    this.originalPath = this.plugin.getTagBoundNotePath(this.tag);
+    this.selectedPath = this.originalPath;
+    this.query = '';
+    this.activeIndex = 0;
+    this.candidates = [];
+    this.isComposing = false;
+    this.isSubmitting = false;
+    this.hasPersisted = false;
+  }
+
+  onOpen() {
+    this.modalEl.classList.add(
+      'puffs-relation-modal',
+      'puffs-note-relation-modal',
+      'puffs-tag-note-binding-modal'
+    );
+    this.contentEl.empty();
+    this.contentEl.createDiv({
+      text: `${this.originalPath ? '换绑' : '绑定'} ${getTagDisplayName(this.tag)} 的笔记`,
+      cls: 'puffs-relation-modal-title puffs-tag-rename-title',
+    });
+    const selectedEl = this.contentEl.createDiv({ cls: 'puffs-relation-selected-list' });
+    const inputEl = this.contentEl.createEl('input', {
+      type: 'search',
+      cls: 'puffs-relation-input',
+    });
+    const resultsEl = this.contentEl.createDiv({ cls: 'puffs-relation-note-results' });
+
+    const renderSelection = () => {
+      selectedEl.empty();
+      if (!this.selectedPath) return;
+      const file = this.app.vault.getAbstractFileByPath(this.selectedPath);
+      if (!(file instanceof TFile) || file.extension !== 'md') {
+        this.selectedPath = null;
+        return;
+      }
+      const chipEl = selectedEl.createDiv({ cls: 'puffs-relation-selected-chip' });
+      chipEl.createSpan({ text: file.basename, attr: { title: file.path } });
+      const removeButton = chipEl.createEl('button', {
+        cls: 'clickable-icon',
+        attr: { 'aria-label': '解除绑定' },
+      });
+      setIcon(removeButton, 'x');
+      removeButton.addEventListener('click', () => {
+        this.selectedPath = null;
+        renderSelection();
+        renderResults();
+        inputEl.focus();
+      });
+    };
+
+    const selectCandidate = (candidate) => {
+      if (!candidate) return;
+      this.selectedPath = candidate.file.path;
+      this.query = '';
+      inputEl.value = '';
+      this.activeIndex = 0;
+      renderSelection();
+      renderResults();
+      inputEl.focus();
+    };
+
+    const renderResults = () => {
+      resultsEl.empty();
+      this.candidates = getNoteBindingCandidates(
+        this.app.vault.getMarkdownFiles(),
+        this.query,
+        (file) => this.plugin.getNoteAliases(file)
+      ).filter((candidate: any) => candidate.file.path !== this.selectedPath);
+      resultsEl.classList.toggle('is-empty-query', !this.query.trim());
+      if (!this.query.trim()) return;
+      if (!this.candidates.length) {
+        resultsEl.createDiv({ text: '没有可绑定的笔记。', cls: 'puffs-relation-empty' });
+        return;
+      }
+      this.activeIndex = Math.max(0, Math.min(this.activeIndex, this.candidates.length - 1));
+      this.candidates.forEach((candidate, index) => {
+        const rowEl = resultsEl.createDiv({ cls: 'puffs-relation-note-result is-clickable' });
+        rowEl.classList.toggle('is-active', index === this.activeIndex);
+        rowEl.createDiv({ text: candidate.displayName, cls: 'puffs-relation-note-result-name' });
+        rowEl.createDiv({ text: candidate.file.path, cls: 'puffs-relation-note-result-path' });
+        rowEl.addEventListener('mouseenter', () => {
+          this.activeIndex = index;
+          resultsEl.querySelectorAll('.puffs-relation-note-result').forEach((el, rowIndex) => {
+            el.classList.toggle('is-active', rowIndex === index);
+          });
+        });
+        rowEl.addEventListener('click', () => selectCandidate(candidate));
+      });
+      resultsEl.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
+    };
+
+    inputEl.addEventListener('compositionstart', () => { this.isComposing = true; });
+    inputEl.addEventListener('compositionend', () => {
+      this.isComposing = false;
+      this.query = inputEl.value;
+      this.activeIndex = 0;
+      renderResults();
+    });
+    inputEl.addEventListener('input', () => {
+      if (this.isComposing) return;
+      this.query = inputEl.value;
+      this.activeIndex = 0;
+      renderResults();
+    });
+    inputEl.addEventListener('keydown', (event) => {
+      if (this.isComposing || event.isComposing || !this.candidates.length) return;
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      this.activeIndex = Math.max(0, Math.min(this.candidates.length - 1, this.activeIndex + delta));
+      event.preventDefault();
+      event.stopPropagation();
+      renderResults();
+    });
+    this.modalEl.addEventListener('keydown', (event) => {
+      const action = getNoteRelationEnterAction(event, this.isComposing, this.candidates.length > 0);
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === 'select-candidate') {
+        selectCandidate(this.candidates[this.activeIndex]);
+        return;
+      }
+      void this.submit();
+    });
+
+    renderSelection();
+    renderResults();
+    globalThis.setTimeout(() => inputEl.focus(), 0);
+  }
+
+  async persistSelection() {
+    if (this.hasPersisted) return;
+    this.hasPersisted = true;
+    try {
+      if (this.selectedPath !== this.originalPath) {
+        await this.plugin.setTagBoundNote(this.tag, this.selectedPath);
+      }
+    } catch (error) {
+      this.hasPersisted = false;
+      throw error;
+    }
+  }
+
+  async submit() {
+    if (this.isSubmitting) return;
+    this.isSubmitting = true;
+    try {
+      await this.persistSelection();
+      this.close();
+    } catch (error) {
+      new Notice(error && error.message ? error.message : '保存绑定笔记失败');
+    } finally {
+      this.isSubmitting = false;
+    }
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    void this.persistSelection().catch((error) => {
+      console.error('[Puffs Tag Enhance] Failed to persist tag note binding:', error);
+      new Notice(error && error.message ? error.message : '保存绑定笔记失败');
+    });
+  }
+}
+
 class NoteRelationModal extends Modal {
   constructor(app, plugin, sourcePath = null, mode = null) {
     super(app);
@@ -682,9 +874,11 @@ class NoteRelationModal extends Modal {
 export {
   AddParentTagModal,
   NoteRelationModal,
+  TagNoteBindingModal,
   TagInheritanceModal,
   getDirectionalInputSide,
   getNoteRelationEnterAction,
+  getNoteBindingCandidates,
   getNoteRelationSubmitError,
   getTagRelationCandidates,
   groupExcludedPathsBySource,

@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS = {
   tagSidebarPreferredFiles: {},
   noteOrderByTag: {},
   noteDisplayNameByTag: {},
+  tagBoundNoteByTag: {},
   newNotePosition: 'end',
   toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
   moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,

@@ -7,7 +7,12 @@ import {
   isNestedTag,
   normalizeTag,
 } from "./models";
-import { AddParentTagModal, NoteRelationModal, TagInheritanceModal } from "./relation-modals";
+import {
+  AddParentTagModal,
+  NoteRelationModal,
+  TagInheritanceModal,
+  TagNoteBindingModal,
+} from "./relation-modals";
 import {
   collectDirectedDescendants,
   compareHierarchyParentItems,
@@ -1408,6 +1413,88 @@ export class RelationsBehavior {
     if (changed) this.saveSettings();
   }
 
+  getTagBoundNotePath(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !this.settings.tagBoundNoteByTag) return null;
+    const path = this.settings.tagBoundNoteByTag[tag];
+    if (typeof path !== 'string' || !path) return null;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof TFile && file.extension === 'md' ? path : null;
+  }
+
+  getTagBoundNoteFile(tagValue) {
+    const path = this.getTagBoundNotePath(tagValue);
+    if (!path) return null;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof TFile && file.extension === 'md' ? file : null;
+  }
+
+  async setTagBoundNote(tagValue, pathValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !this.tagFileIndex.has(tag)) throw new Error('标签已不存在');
+    const path = typeof pathValue === 'string' ? pathValue.trim() : '';
+    if (!this.settings.tagBoundNoteByTag || typeof this.settings.tagBoundNoteByTag !== 'object') {
+      this.settings.tagBoundNoteByTag = {};
+    }
+    if (!path) {
+      delete this.settings.tagBoundNoteByTag[tag];
+      await this.saveSettings();
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== 'md') throw new Error('所选笔记已不存在');
+    this.settings.tagBoundNoteByTag[tag] = file.path;
+    await this.saveSettings();
+  }
+
+  migrateTagBoundNote(oldTagValue, newTagValue) {
+    const oldTag = normalizeTag(oldTagValue);
+    const newTag = normalizeTag(newTagValue);
+    const bindings = this.settings.tagBoundNoteByTag;
+    if (!oldTag || !newTag || oldTag === newTag || !bindings || !bindings[oldTag]) return false;
+    if (!bindings[newTag]) bindings[newTag] = bindings[oldTag];
+    delete bindings[oldTag];
+    return true;
+  }
+
+  reconcileTagBoundNotes(nextIndex) {
+    const current = this.settings.tagBoundNoteByTag || {};
+    const next = {};
+    for (const [tag, path] of Object.entries(current)) {
+      if (!nextIndex.has(tag)) continue;
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile) || file.extension !== 'md') continue;
+      next[tag] = file.path;
+    }
+    const changed = JSON.stringify(next) !== JSON.stringify(current);
+    if (changed) this.settings.tagBoundNoteByTag = next;
+    return changed;
+  }
+
+  handleTagBoundNoteFileRename(file, oldPath) {
+    if (!(file instanceof TFile) || file.extension !== 'md' || !oldPath || !file.path) return;
+    const bindings = this.settings.tagBoundNoteByTag || {};
+    let changed = false;
+    for (const [tag, path] of Object.entries(bindings)) {
+      if (path !== oldPath) continue;
+      bindings[tag] = file.path;
+      changed = true;
+    }
+    if (changed) this.saveSettings();
+  }
+
+  handleTagBoundNoteFileDelete(file) {
+    if (!(file instanceof TFile) || file.extension !== 'md' || !file.path) return;
+    const bindings = this.settings.tagBoundNoteByTag || {};
+    let changed = false;
+    for (const [tag, path] of Object.entries(bindings)) {
+      if (path !== file.path) continue;
+      delete bindings[tag];
+      changed = true;
+    }
+    if (changed) this.saveSettings();
+  }
+
   showTagContextMenu(event, tagValue) {
     const tag = normalizeTag(tagValue);
     if (!tag) return false;
@@ -1419,6 +1506,20 @@ export class RelationsBehavior {
     menu.addItem((item) => item.setTitle('管理子标签').setIcon('git-fork').onClick(() => {
       new TagInheritanceModal(this.app, this, tag).open();
     }));
+    menu.addSeparator();
+    const boundFile = this.getTagBoundNoteFile(tag);
+    if (boundFile) {
+      menu.addItem((item) => item.setTitle('打开笔记').setIcon('file-text').onClick(() => {
+        this.openFileInMainWorkspace(boundFile);
+      }));
+      menu.addItem((item) => item.setTitle('换绑笔记').setIcon('replace').onClick(() => {
+        new TagNoteBindingModal(this.app, this, tag).open();
+      }));
+    } else {
+      menu.addItem((item) => item.setTitle('绑定笔记').setIcon('link').onClick(() => {
+        new TagNoteBindingModal(this.app, this, tag).open();
+      }));
+    }
     menu.showAtMouseEvent(event);
     return true;
   }

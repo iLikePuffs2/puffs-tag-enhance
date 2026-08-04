@@ -47,6 +47,7 @@ export class TagIndexBehavior {
       this.handlePreferredFileRename(file, oldPath);
       this.handleNoteOrderFileRename(file, oldPath);
       this.handleNoteDisplayNameFileRename(file, oldPath);
+      this.handleTagBoundNoteFileRename(file, oldPath);
       this.handleRelationFileRename(file, oldPath);
       this.refreshTagViews();
       this.refreshTagShelfViews();
@@ -55,6 +56,7 @@ export class TagIndexBehavior {
       this.handlePreferredFileDelete(file);
       this.handleNoteOrderFileDelete(file);
       this.handleNoteDisplayNameFileDelete(file);
+      this.handleTagBoundNoteFileDelete(file);
       this.handleRelationFileDelete(file);
       scheduleRefresh(file);
     }));
@@ -201,9 +203,10 @@ export class TagIndexBehavior {
       });
     }
 
+    const metadataCacheReady = this.isMetadataCacheReadyForNoteOrderTracking();
     let noteOrderChanged = false;
     if (!this.noteOrderTrackingReady) {
-      if (this.isMetadataCacheReadyForNoteOrderTracking()) {
+      if (metadataCacheReady) {
         noteOrderChanged = this.initializeNoteOrders(nextIndex);
         this.noteOrderTrackingReady = true;
       }
@@ -211,13 +214,17 @@ export class TagIndexBehavior {
       noteOrderChanged = this.reconcileNoteOrders(nextIndex, changedPath);
     }
 
+    if (!this.tagBindingTrackingReady && metadataCacheReady) this.tagBindingTrackingReady = true;
     this.tagFileIndex = nextIndex;
     this.reconcileExpandedTags();
     const pinnedTagChanged = this.reconcilePinnedTag();
     const noteDisplayNamesChanged = !this.activeTagRename
       ? this.reconcileNoteDisplayNames(nextIndex)
       : false;
-    return noteOrderChanged || pinnedTagChanged || noteDisplayNamesChanged;
+    const tagBoundNotesChanged = this.tagBindingTrackingReady && !this.activeTagRename
+      ? this.reconcileTagBoundNotes(nextIndex)
+      : false;
+    return noteOrderChanged || pinnedTagChanged || noteDisplayNamesChanged || tagBoundNotesChanged;
   }
 
   reconcileNoteDisplayNames(nextIndex) {
@@ -393,6 +400,7 @@ export class TagIndexBehavior {
         this.settings.pinnedTag = newTag;
       }
       this.migrateTagRelations(oldTag, newTag);
+      this.migrateTagBoundNote(oldTag, newTag);
 
       if (migratedOrder.length > 0) {
         this.settings.noteOrderByTag[newTag] = migratedOrder;

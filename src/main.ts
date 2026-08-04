@@ -29,6 +29,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.activeSidebarSelectionOperation = null;
     this.initialTagIndexRefreshTimers = [];
     this.noteOrderTrackingReady = false;
+    this.tagBindingTrackingReady = false;
     this.settingsSavePromise = Promise.resolve();
     this.backupTimer = null;
     this.activeTagRename = null;

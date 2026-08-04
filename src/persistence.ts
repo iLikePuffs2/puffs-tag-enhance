@@ -46,6 +46,9 @@ export class PersistenceBehavior {
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
       this.settings.noteDisplayNameByTag
     );
+    this.settings.tagBoundNoteByTag = this.normalizeTagBoundNoteByTag(
+      this.settings.tagBoundNoteByTag
+    );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
     if (savedSettings.backupFileName) {
@@ -103,6 +106,9 @@ export class PersistenceBehavior {
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
       this.settings.noteDisplayNameByTag
+    );
+    this.settings.tagBoundNoteByTag = this.normalizeTagBoundNoteByTag(
+      this.settings.tagBoundNoteByTag
     );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
@@ -251,6 +257,23 @@ export class PersistenceBehavior {
       }
 
       if (Object.keys(entries).length > 0) result[tag] = entries;
+    }
+
+    return result;
+  }
+
+  normalizeTagBoundNoteByTag(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+
+    const result = {};
+    for (const [rawTag, rawPath] of Object.entries(value)) {
+      const tag = normalizeTag(rawTag);
+      const path = typeof rawPath === 'string' ? rawPath.trim() : '';
+      if (!tag || !path || Object.prototype.hasOwnProperty.call(result, tag)) continue;
+
+      const file = this.app?.vault?.getAbstractFileByPath?.(path);
+      if (!file || file.extension !== 'md') continue;
+      result[tag] = path;
     }
 
     return result;

@@ -1,13 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
-import { Notice } from "obsidian";
+import { Notice, TFile } from "obsidian";
 import {
   TagInheritanceModal,
   getDirectionalInputSide,
+  getNoteBindingCandidates,
   getNoteRelationEnterAction,
   getNoteRelationSubmitError,
   getTagRelationCandidates,
   groupExcludedPathsBySource,
 } from "./relation-modals";
+
+describe('标签绑定笔记候选', () => {
+  const files = [
+    new (TFile as any)('目录/Alpha.md'),
+    new (TFile as any)('目录/Beta.md'),
+  ];
+  const aliases: Record<string, string[]> = {
+    '目录/Beta.md': ['共同别名', '第二别名'],
+  };
+
+  it('支持按文件名与 alias 匹配并返回展示路径', () => {
+    expect(getNoteBindingCandidates(files, 'alpha', (file: any) => aliases[file.path] || []))
+      .toEqual([{ file: files[0], displayName: 'Alpha', alias: '' }]);
+    expect(getNoteBindingCandidates(files, '共同', (file: any) => aliases[file.path] || []))
+      .toEqual([{ file: files[1], displayName: '共同别名', alias: '共同别名' }]);
+  });
+
+  it('空查询不展示候选，并忽略非 Markdown 文件', () => {
+    const attachment = new (TFile as any)('附件.png');
+    expect(getNoteBindingCandidates([...files, attachment], '', () => [])).toEqual([]);
+    expect(getNoteBindingCandidates([attachment], '附件', () => [])).toEqual([]);
+  });
+});
 
 describe('新增父子笔记弹窗输入框方向键导航', () => {
   const sides = ['parent', 'child'];

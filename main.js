@@ -282,6 +282,7 @@ var DEFAULT_SETTINGS = {
   tagSidebarPreferredFiles: {},
   noteOrderByTag: {},
   noteDisplayNameByTag: {},
+  tagBoundNoteByTag: {},
   newNotePosition: "end",
   toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
   moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,
@@ -1213,6 +1214,9 @@ var PersistenceBehavior = class {
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
       this.settings.noteDisplayNameByTag
     );
+    this.settings.tagBoundNoteByTag = this.normalizeTagBoundNoteByTag(
+      this.settings.tagBoundNoteByTag
+    );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
     if (savedSettings.backupFileName) {
@@ -1267,6 +1271,9 @@ var PersistenceBehavior = class {
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
       this.settings.noteDisplayNameByTag
+    );
+    this.settings.tagBoundNoteByTag = this.normalizeTagBoundNoteByTag(
+      this.settings.tagBoundNoteByTag
     );
     this.settings.backupIntervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     this.settings.backupFolderPath = normalizeBackupFolderPath(this.settings.backupFolderPath);
@@ -1382,6 +1389,20 @@ var PersistenceBehavior = class {
         entries[path] = displayName;
       }
       if (Object.keys(entries).length > 0) result[tag] = entries;
+    }
+    return result;
+  }
+  normalizeTagBoundNoteByTag(value) {
+    var _a, _b, _c;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const result = {};
+    for (const [rawTag, rawPath] of Object.entries(value)) {
+      const tag = normalizeTag(rawTag);
+      const path = typeof rawPath === "string" ? rawPath.trim() : "";
+      if (!tag || !path || Object.prototype.hasOwnProperty.call(result, tag)) continue;
+      const file = (_c = (_b = (_a = this.app) == null ? void 0 : _a.vault) == null ? void 0 : _b.getAbstractFileByPath) == null ? void 0 : _c.call(_b, path);
+      if (!file || file.extension !== "md") continue;
+      result[tag] = path;
     }
     return result;
   }
@@ -2631,6 +2652,7 @@ var TagIndexBehavior = class {
       this.handlePreferredFileRename(file, oldPath);
       this.handleNoteOrderFileRename(file, oldPath);
       this.handleNoteDisplayNameFileRename(file, oldPath);
+      this.handleTagBoundNoteFileRename(file, oldPath);
       this.handleRelationFileRename(file, oldPath);
       this.refreshTagViews();
       this.refreshTagShelfViews();
@@ -2639,6 +2661,7 @@ var TagIndexBehavior = class {
       this.handlePreferredFileDelete(file);
       this.handleNoteOrderFileDelete(file);
       this.handleNoteDisplayNameFileDelete(file);
+      this.handleTagBoundNoteFileDelete(file);
       this.handleRelationFileDelete(file);
       scheduleRefresh(file);
     }));
@@ -2754,20 +2777,23 @@ var TagIndexBehavior = class {
         return byName || a.path.localeCompare(b.path, "zh-Hans-CN");
       });
     }
+    const metadataCacheReady = this.isMetadataCacheReadyForNoteOrderTracking();
     let noteOrderChanged = false;
     if (!this.noteOrderTrackingReady) {
-      if (this.isMetadataCacheReadyForNoteOrderTracking()) {
+      if (metadataCacheReady) {
         noteOrderChanged = this.initializeNoteOrders(nextIndex);
         this.noteOrderTrackingReady = true;
       }
     } else if (this.noteOrderTrackingReady && !this.activeTagRename) {
       noteOrderChanged = this.reconcileNoteOrders(nextIndex, changedPath);
     }
+    if (!this.tagBindingTrackingReady && metadataCacheReady) this.tagBindingTrackingReady = true;
     this.tagFileIndex = nextIndex;
     this.reconcileExpandedTags();
     const pinnedTagChanged = this.reconcilePinnedTag();
     const noteDisplayNamesChanged = !this.activeTagRename ? this.reconcileNoteDisplayNames(nextIndex) : false;
-    return noteOrderChanged || pinnedTagChanged || noteDisplayNamesChanged;
+    const tagBoundNotesChanged = this.tagBindingTrackingReady && !this.activeTagRename ? this.reconcileTagBoundNotes(nextIndex) : false;
+    return noteOrderChanged || pinnedTagChanged || noteDisplayNamesChanged || tagBoundNotesChanged;
   }
   reconcileNoteDisplayNames(nextIndex) {
     const nextDisplayNames = {};
@@ -2908,6 +2934,7 @@ var TagIndexBehavior = class {
         this.settings.pinnedTag = newTag;
       }
       this.migrateTagRelations(oldTag, newTag);
+      this.migrateTagBoundNote(oldTag, newTag);
       if (migratedOrder.length > 0) {
         this.settings.noteOrderByTag[newTag] = migratedOrder;
       } else {
@@ -4237,6 +4264,18 @@ function getNoteRelationEnterAction(event, isComposing, hasCandidate = false) {
   if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || isComposing || event.isComposing || event.keyCode === 229) return null;
   return hasCandidate ? "select-candidate" : "submit";
 }
+function getNoteBindingCandidates(files, query, getAliases = () => []) {
+  const term = String(query || "").trim().toLowerCase();
+  if (!term) return [];
+  return Array.from(files || []).map((file) => {
+    if (!(file instanceof import_obsidian10.TFile) || file.extension !== "md") return null;
+    if (file.basename.toLowerCase().includes(term)) {
+      return { file, displayName: file.basename, alias: "" };
+    }
+    const alias = Array.from(new Set(getAliases(file) || [])).find((value) => String(value).toLowerCase().includes(term));
+    return alias ? { file, displayName: alias, alias } : null;
+  }).filter(Boolean).sort((left, right) => left.displayName.localeCompare(right.displayName, "zh-Hans-CN") || left.file.path.localeCompare(right.file.path, "zh-Hans-CN"));
+}
 function getTagRelationCandidates(tagValues, query, canUse = () => true) {
   const term = String(query || "").trim().replace(/^#/, "").toLowerCase();
   if (!term) return [];
@@ -4628,6 +4667,170 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
       "is-hidden",
       !this.exclusionGroupsEl.querySelector(".puffs-relation-manage-row")
     );
+  }
+};
+var TagNoteBindingModal = class extends import_obsidian10.Modal {
+  constructor(app, plugin, tagValue) {
+    super(app);
+    this.plugin = plugin;
+    this.tag = normalizeTag(tagValue);
+    this.originalPath = this.plugin.getTagBoundNotePath(this.tag);
+    this.selectedPath = this.originalPath;
+    this.query = "";
+    this.activeIndex = 0;
+    this.candidates = [];
+    this.isComposing = false;
+    this.isSubmitting = false;
+    this.hasPersisted = false;
+  }
+  onOpen() {
+    this.modalEl.classList.add(
+      "puffs-relation-modal",
+      "puffs-note-relation-modal",
+      "puffs-tag-note-binding-modal"
+    );
+    this.contentEl.empty();
+    this.contentEl.createDiv({
+      text: `${this.originalPath ? "\u6362\u7ED1" : "\u7ED1\u5B9A"} ${getTagDisplayName(this.tag)} \u7684\u7B14\u8BB0`,
+      cls: "puffs-relation-modal-title puffs-tag-rename-title"
+    });
+    const selectedEl = this.contentEl.createDiv({ cls: "puffs-relation-selected-list" });
+    const inputEl = this.contentEl.createEl("input", {
+      type: "search",
+      cls: "puffs-relation-input"
+    });
+    const resultsEl = this.contentEl.createDiv({ cls: "puffs-relation-note-results" });
+    const renderSelection = () => {
+      selectedEl.empty();
+      if (!this.selectedPath) return;
+      const file = this.app.vault.getAbstractFileByPath(this.selectedPath);
+      if (!(file instanceof import_obsidian10.TFile) || file.extension !== "md") {
+        this.selectedPath = null;
+        return;
+      }
+      const chipEl = selectedEl.createDiv({ cls: "puffs-relation-selected-chip" });
+      chipEl.createSpan({ text: file.basename, attr: { title: file.path } });
+      const removeButton = chipEl.createEl("button", {
+        cls: "clickable-icon",
+        attr: { "aria-label": "\u89E3\u9664\u7ED1\u5B9A" }
+      });
+      (0, import_obsidian10.setIcon)(removeButton, "x");
+      removeButton.addEventListener("click", () => {
+        this.selectedPath = null;
+        renderSelection();
+        renderResults();
+        inputEl.focus();
+      });
+    };
+    const selectCandidate = (candidate) => {
+      if (!candidate) return;
+      this.selectedPath = candidate.file.path;
+      this.query = "";
+      inputEl.value = "";
+      this.activeIndex = 0;
+      renderSelection();
+      renderResults();
+      inputEl.focus();
+    };
+    const renderResults = () => {
+      var _a;
+      resultsEl.empty();
+      this.candidates = getNoteBindingCandidates(
+        this.app.vault.getMarkdownFiles(),
+        this.query,
+        (file) => this.plugin.getNoteAliases(file)
+      ).filter((candidate) => candidate.file.path !== this.selectedPath);
+      resultsEl.classList.toggle("is-empty-query", !this.query.trim());
+      if (!this.query.trim()) return;
+      if (!this.candidates.length) {
+        resultsEl.createDiv({ text: "\u6CA1\u6709\u53EF\u7ED1\u5B9A\u7684\u7B14\u8BB0\u3002", cls: "puffs-relation-empty" });
+        return;
+      }
+      this.activeIndex = Math.max(0, Math.min(this.activeIndex, this.candidates.length - 1));
+      this.candidates.forEach((candidate, index) => {
+        const rowEl = resultsEl.createDiv({ cls: "puffs-relation-note-result is-clickable" });
+        rowEl.classList.toggle("is-active", index === this.activeIndex);
+        rowEl.createDiv({ text: candidate.displayName, cls: "puffs-relation-note-result-name" });
+        rowEl.createDiv({ text: candidate.file.path, cls: "puffs-relation-note-result-path" });
+        rowEl.addEventListener("mouseenter", () => {
+          this.activeIndex = index;
+          resultsEl.querySelectorAll(".puffs-relation-note-result").forEach((el, rowIndex) => {
+            el.classList.toggle("is-active", rowIndex === index);
+          });
+        });
+        rowEl.addEventListener("click", () => selectCandidate(candidate));
+      });
+      (_a = resultsEl.querySelector(".is-active")) == null ? void 0 : _a.scrollIntoView({ block: "nearest" });
+    };
+    inputEl.addEventListener("compositionstart", () => {
+      this.isComposing = true;
+    });
+    inputEl.addEventListener("compositionend", () => {
+      this.isComposing = false;
+      this.query = inputEl.value;
+      this.activeIndex = 0;
+      renderResults();
+    });
+    inputEl.addEventListener("input", () => {
+      if (this.isComposing) return;
+      this.query = inputEl.value;
+      this.activeIndex = 0;
+      renderResults();
+    });
+    inputEl.addEventListener("keydown", (event) => {
+      if (this.isComposing || event.isComposing || !this.candidates.length) return;
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      this.activeIndex = Math.max(0, Math.min(this.candidates.length - 1, this.activeIndex + delta));
+      event.preventDefault();
+      event.stopPropagation();
+      renderResults();
+    });
+    this.modalEl.addEventListener("keydown", (event) => {
+      const action = getNoteRelationEnterAction(event, this.isComposing, this.candidates.length > 0);
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "select-candidate") {
+        selectCandidate(this.candidates[this.activeIndex]);
+        return;
+      }
+      void this.submit();
+    });
+    renderSelection();
+    renderResults();
+    globalThis.setTimeout(() => inputEl.focus(), 0);
+  }
+  async persistSelection() {
+    if (this.hasPersisted) return;
+    this.hasPersisted = true;
+    try {
+      if (this.selectedPath !== this.originalPath) {
+        await this.plugin.setTagBoundNote(this.tag, this.selectedPath);
+      }
+    } catch (error) {
+      this.hasPersisted = false;
+      throw error;
+    }
+  }
+  async submit() {
+    if (this.isSubmitting) return;
+    this.isSubmitting = true;
+    try {
+      await this.persistSelection();
+      this.close();
+    } catch (error) {
+      new import_obsidian10.Notice(error && error.message ? error.message : "\u4FDD\u5B58\u7ED1\u5B9A\u7B14\u8BB0\u5931\u8D25");
+    } finally {
+      this.isSubmitting = false;
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
+    void this.persistSelection().catch((error) => {
+      console.error("[Puffs Tag Enhance] Failed to persist tag note binding:", error);
+      new import_obsidian10.Notice(error && error.message ? error.message : "\u4FDD\u5B58\u7ED1\u5B9A\u7B14\u8BB0\u5931\u8D25");
+    });
   }
 };
 var NoteRelationModal = class extends import_obsidian10.Modal {
@@ -6143,6 +6346,81 @@ var RelationsBehavior = class {
     }
     if (changed) this.saveSettings();
   }
+  getTagBoundNotePath(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !this.settings.tagBoundNoteByTag) return null;
+    const path = this.settings.tagBoundNoteByTag[tag];
+    if (typeof path !== "string" || !path) return null;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof import_obsidian11.TFile && file.extension === "md" ? path : null;
+  }
+  getTagBoundNoteFile(tagValue) {
+    const path = this.getTagBoundNotePath(tagValue);
+    if (!path) return null;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof import_obsidian11.TFile && file.extension === "md" ? file : null;
+  }
+  async setTagBoundNote(tagValue, pathValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || !this.tagFileIndex.has(tag)) throw new Error("\u6807\u7B7E\u5DF2\u4E0D\u5B58\u5728");
+    const path = typeof pathValue === "string" ? pathValue.trim() : "";
+    if (!this.settings.tagBoundNoteByTag || typeof this.settings.tagBoundNoteByTag !== "object") {
+      this.settings.tagBoundNoteByTag = {};
+    }
+    if (!path) {
+      delete this.settings.tagBoundNoteByTag[tag];
+      await this.saveSettings();
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md") throw new Error("\u6240\u9009\u7B14\u8BB0\u5DF2\u4E0D\u5B58\u5728");
+    this.settings.tagBoundNoteByTag[tag] = file.path;
+    await this.saveSettings();
+  }
+  migrateTagBoundNote(oldTagValue, newTagValue) {
+    const oldTag = normalizeTag(oldTagValue);
+    const newTag = normalizeTag(newTagValue);
+    const bindings = this.settings.tagBoundNoteByTag;
+    if (!oldTag || !newTag || oldTag === newTag || !bindings || !bindings[oldTag]) return false;
+    if (!bindings[newTag]) bindings[newTag] = bindings[oldTag];
+    delete bindings[oldTag];
+    return true;
+  }
+  reconcileTagBoundNotes(nextIndex) {
+    const current = this.settings.tagBoundNoteByTag || {};
+    const next = {};
+    for (const [tag, path] of Object.entries(current)) {
+      if (!nextIndex.has(tag)) continue;
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md") continue;
+      next[tag] = file.path;
+    }
+    const changed = JSON.stringify(next) !== JSON.stringify(current);
+    if (changed) this.settings.tagBoundNoteByTag = next;
+    return changed;
+  }
+  handleTagBoundNoteFileRename(file, oldPath) {
+    if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md" || !oldPath || !file.path) return;
+    const bindings = this.settings.tagBoundNoteByTag || {};
+    let changed = false;
+    for (const [tag, path] of Object.entries(bindings)) {
+      if (path !== oldPath) continue;
+      bindings[tag] = file.path;
+      changed = true;
+    }
+    if (changed) this.saveSettings();
+  }
+  handleTagBoundNoteFileDelete(file) {
+    if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md" || !file.path) return;
+    const bindings = this.settings.tagBoundNoteByTag || {};
+    let changed = false;
+    for (const [tag, path] of Object.entries(bindings)) {
+      if (path !== file.path) continue;
+      delete bindings[tag];
+      changed = true;
+    }
+    if (changed) this.saveSettings();
+  }
   showTagContextMenu(event, tagValue) {
     const tag = normalizeTag(tagValue);
     if (!tag) return false;
@@ -6154,6 +6432,20 @@ var RelationsBehavior = class {
     menu.addItem((item) => item.setTitle("\u7BA1\u7406\u5B50\u6807\u7B7E").setIcon("git-fork").onClick(() => {
       new TagInheritanceModal(this.app, this, tag).open();
     }));
+    menu.addSeparator();
+    const boundFile = this.getTagBoundNoteFile(tag);
+    if (boundFile) {
+      menu.addItem((item) => item.setTitle("\u6253\u5F00\u7B14\u8BB0").setIcon("file-text").onClick(() => {
+        this.openFileInMainWorkspace(boundFile);
+      }));
+      menu.addItem((item) => item.setTitle("\u6362\u7ED1\u7B14\u8BB0").setIcon("replace").onClick(() => {
+        new TagNoteBindingModal(this.app, this, tag).open();
+      }));
+    } else {
+      menu.addItem((item) => item.setTitle("\u7ED1\u5B9A\u7B14\u8BB0").setIcon("link").onClick(() => {
+        new TagNoteBindingModal(this.app, this, tag).open();
+      }));
+    }
     menu.showAtMouseEvent(event);
     return true;
   }
@@ -6189,6 +6481,7 @@ var PuffsTagEnhancePlugin = class extends import_obsidian12.Plugin {
     this.activeSidebarSelectionOperation = null;
     this.initialTagIndexRefreshTimers = [];
     this.noteOrderTrackingReady = false;
+    this.tagBindingTrackingReady = false;
     this.settingsSavePromise = Promise.resolve();
     this.backupTimer = null;
     this.activeTagRename = null;
