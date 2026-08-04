@@ -21,6 +21,10 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.inlineHierarchyExpansionVersion = 0;
     this.relationStructureVersion = 0;
     this.selectedNoteOrderTarget = null;
+    this.activeTagOrderParent = null;
+    this.activeTagOrderSurface = '';
+    this.selectedTagOrderTarget = null;
+    this.tagOrderModeVisibilityTimer = null;
     this.noteOrderHotkeyScope = null;
     this.viewPatches = new WeakMap();
     this.lastMainLeaf = null;
@@ -79,6 +83,10 @@ class PuffsTagEnhancePlugin extends Plugin {
   onunload() {
     this.isUnloaded = true;
     this.deactivateNoteOrderHotkeyScope();
+    if (this.tagOrderModeVisibilityTimer) {
+      globalThis.clearTimeout(this.tagOrderModeVisibilityTimer);
+      this.tagOrderModeVisibilityTimer = null;
+    }
     this.clearBackupTimer();
     this.clearInitialTagIndexRefreshTimers();
     this.clearTagRenameProtectionTimer();

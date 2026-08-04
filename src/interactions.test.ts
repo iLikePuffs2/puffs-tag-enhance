@@ -143,3 +143,143 @@ describe('固定标签与父笔记排序', () => {
     expect(toggleOrder).toHaveBeenCalledOnce();
   });
 });
+
+describe('子标签排序', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const createTagControlButton = (dataset: Record<string, string>) => {
+    const listeners = new Map<string, Set<(event: any) => void>>();
+    return {
+      dataset,
+      addEventListener(type: string, listener: (event: any) => void) {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type)?.add(listener);
+      },
+      removeEventListener(type: string, listener: (event: any) => void) {
+        listeners.get(type)?.delete(listener);
+      },
+      emit(type: string, properties: Record<string, unknown> = {}) {
+        const event = {
+          button: 0,
+          preventDefault: vi.fn(),
+          stopPropagation: vi.fn(),
+          ...properties,
+        };
+        for (const listener of listeners.get(type) || []) listener(event);
+        return event;
+      },
+    } as any;
+  };
+
+  it('右键跳跃移动仅修改当前父级并保持其他父级独立', async () => {
+    const childrenByParent: Record<string, string[]> = {
+      '#父': ['#甲', '#乙', '#丙'],
+      '#另一父': ['#甲', '#丁'],
+    };
+    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    behavior.activeTagOrderParent = '#父';
+    behavior.selectedTagOrderTarget = { parentTag: '#父', tag: '#甲', surface: 'sidebar' };
+    behavior.getInheritanceChildren = (parent: string) => [...childrenByParent[parent]];
+    behavior.setInheritanceChildren = vi.fn(async (parent: string, children: string[]) => {
+      childrenByParent[parent] = [...children];
+    });
+    behavior.refreshTagOrderSelectionState = vi.fn();
+
+    await expect(behavior.moveSelectedTagAfter('#父', '#乙')).resolves.toBe(true);
+    expect(childrenByParent['#父']).toEqual(['#乙', '#甲', '#丙']);
+    expect(childrenByParent['#另一父']).toEqual(['#甲', '#丁']);
+    await expect(behavior.moveSelectedTagAfter('#另一父', '#丁')).resolves.toBe(false);
+  });
+
+  it('父级模式与子标签选择分离，并与笔记排序互斥', () => {
+    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    behavior.selectedNoteOrderTarget = { tag: '#标签', path: '笔记.md' };
+    behavior.activeTagOrderParent = null;
+    behavior.selectedTagOrderTarget = null;
+    behavior.hasInheritanceChildren = () => true;
+    behavior.deactivateNoteOrderHotkeyScope = vi.fn();
+    behavior.refreshNoteOrderHotkeyScope = vi.fn();
+    behavior.refreshOrderSelectionState = vi.fn();
+
+    behavior.toggleTagOrderMode('#父', 'shelf');
+    expect(behavior.selectedNoteOrderTarget).toBeNull();
+    expect(behavior.activeTagOrderParent).toBe('#父');
+    expect(behavior.selectedTagOrderTarget).toBeNull();
+
+    behavior.toggleTagOrderTarget('#父', '#子', 'shelf');
+    expect(behavior.selectedTagOrderTarget).toEqual({ parentTag: '#父', tag: '#子', surface: 'shelf' });
+
+    behavior.toggleNoteOrderTarget('#标签', '笔记.md', 'sidebar');
+    expect(behavior.activeTagOrderParent).toBeNull();
+    expect(behavior.selectedTagOrderTarget).toBeNull();
+    expect(behavior.selectedNoteOrderTarget).toEqual({ tag: '#标签', path: '笔记.md', surface: 'sidebar' });
+  });
+
+  it('长按父标签进入或退出模式且释放时不折叠', () => {
+    vi.useFakeTimers();
+    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    behavior.activeTagOrderParent = null;
+    behavior.activeTagOrderSurface = '';
+    behavior.selectedNoteOrderTarget = null;
+    behavior.selectedTagOrderTarget = null;
+    behavior.hasInheritanceChildren = () => true;
+    behavior.deactivateNoteOrderHotkeyScope = vi.fn();
+    behavior.refreshOrderSelectionState = vi.fn();
+    const button = createTagControlButton({
+      puffsTagOrderTag: '#父',
+      puffsHasChildren: 'true',
+      puffsSurface: 'shelf',
+      puffsExpanded: 'false',
+    });
+    const toggleExpansion = vi.fn();
+    behavior.bindTagHierarchyControlButton(button, toggleExpansion);
+
+    button.emit('pointerdown');
+    vi.advanceTimersByTime(InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS);
+    button.emit('pointerup');
+    button.emit('click');
+    expect(behavior.activeTagOrderParent).toBe('#父');
+    expect(behavior.selectedTagOrderTarget).toBeNull();
+    expect(toggleExpansion).toHaveBeenCalledOnce();
+
+    button.emit('pointerdown');
+    vi.advanceTimersByTime(InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS);
+    button.emit('pointerup');
+    button.emit('click');
+    expect(behavior.activeTagOrderParent).toBeNull();
+    expect(toggleExpansion).toHaveBeenCalledOnce();
+  });
+
+  it('父级模式中子按钮点击选中，点击外部只取消选中', () => {
+    vi.useFakeTimers();
+    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    behavior.activeTagOrderParent = '#父';
+    behavior.activeTagOrderSurface = 'sidebar';
+    behavior.selectedNoteOrderTarget = null;
+    behavior.selectedTagOrderTarget = null;
+    behavior.deactivateNoteOrderHotkeyScope = vi.fn();
+    behavior.refreshNoteOrderHotkeyScope = vi.fn();
+    behavior.refreshOrderSelectionState = vi.fn();
+    const button = createTagControlButton({
+      puffsTagOrderParent: '#父',
+      puffsTagOrderTag: '#子',
+      puffsHasChildren: 'true',
+      puffsSurface: 'sidebar',
+    });
+    const toggleExpansion = vi.fn();
+    behavior.bindTagHierarchyControlButton(button, toggleExpansion);
+
+    button.emit('pointerdown');
+    vi.advanceTimersByTime(InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS);
+    expect(behavior.activeTagOrderParent).toBe('#父');
+    expect(toggleExpansion).not.toHaveBeenCalled();
+
+    button.emit('click');
+    expect(behavior.selectedTagOrderTarget).toEqual({ parentTag: '#父', tag: '#子', surface: 'sidebar' });
+    expect(toggleExpansion).not.toHaveBeenCalled();
+
+    behavior.clearOrderTarget();
+    expect(behavior.activeTagOrderParent).toBe('#父');
+    expect(behavior.selectedTagOrderTarget).toBeNull();
+  });
+});

@@ -201,7 +201,9 @@ class TagInheritanceModal extends Modal {
     const related = relationMode === 'parents'
       ? plugin.getInheritanceParents(subjectTag)
       : plugin.getInheritanceChildren(subjectTag);
-    this.children = plugin.sortTagsByVisibleCount(related);
+    this.children = relationMode === 'parents'
+      ? plugin.sortTagsByVisibleCount(related)
+      : [...related];
     this.query = '';
     this.isComposing = false;
     this.isSubmitting = false;
@@ -267,7 +269,9 @@ class TagInheritanceModal extends Modal {
 
   renderChildren() {
     if (!this.childrenListEl) return;
-    this.children = this.plugin.sortTagsByVisibleCount(this.children);
+    if (this.relationMode === 'parents') {
+      this.children = this.plugin.sortTagsByVisibleCount(this.children);
+    }
     const existingRows = new Map(
       Array.from(this.childrenListEl.querySelectorAll('.puffs-relation-child-row'))
         .map((row) => [row.dataset.puffsTag, row])
@@ -316,7 +320,9 @@ class TagInheritanceModal extends Modal {
   }
 
   updateChildren(nextChildren) {
-    this.children = this.plugin.sortTagsByVisibleCount(nextChildren);
+    this.children = this.relationMode === 'parents'
+      ? this.plugin.sortTagsByVisibleCount(nextChildren)
+      : [...nextChildren];
     this.renderChildren();
     this.picker?.render();
   }
@@ -326,13 +332,15 @@ class TagInheritanceModal extends Modal {
     this.isSubmitting = true;
     this.syncMutationState();
     try {
-      const sortedChildren = this.plugin.sortTagsByVisibleCount(nextChildren);
+      const orderedChildren = this.relationMode === 'parents'
+        ? this.plugin.sortTagsByVisibleCount(nextChildren)
+        : [...nextChildren];
       if (this.relationMode === 'parents') {
-        await this.plugin.setInheritanceParents(this.parentTag, sortedChildren);
+        await this.plugin.setInheritanceParents(this.parentTag, orderedChildren);
       } else {
-        await this.plugin.setInheritanceChildren(this.parentTag, sortedChildren);
+        await this.plugin.setInheritanceChildren(this.parentTag, orderedChildren);
       }
-      this.updateChildren(sortedChildren);
+      this.updateChildren(orderedChildren);
       this.renderExclusionGroups();
       return true;
     } catch (error) {

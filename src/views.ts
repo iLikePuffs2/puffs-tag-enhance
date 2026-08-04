@@ -428,6 +428,7 @@ class PuffsTagShelfView extends ItemView {
       this.noteCardSearchState
     );
     this.updateToolbarState();
+    this.plugin.scheduleTagOrderModeVisibilityReconcile();
   }
 
   updateSummary(items) {
@@ -486,6 +487,28 @@ class PuffsTagShelfView extends ItemView {
     toggleEl.classList.toggle('is-collapsed', !isExpanded);
     toggleEl.setAttribute('aria-hidden', 'true');
     setIcon(toggleEl, 'right-triangle');
+    const canOrderChildren = !isVirtual && item.hasInheritance && item.inheritanceEnabled;
+    const toggleExpansion = () => {
+      if (this.expandedTags.has(tag)) {
+        this.expandedTags.delete(tag);
+        this.plugin.clearInlineHierarchyBranchState(tag);
+      } else {
+        this.expandedTags.add(tag);
+      }
+      this.renderTagList();
+    };
+    if (canOrderChildren) {
+      toggleEl.classList.add('puffs-tag-order-parent-button');
+      toggleEl.dataset.puffsTagOrderTag = tag;
+      toggleEl.dataset.puffsSurface = 'shelf';
+      toggleEl.dataset.puffsExpanded = String(isExpanded);
+      toggleEl.dataset.puffsHasChildren = 'true';
+      toggleEl.removeAttribute('aria-hidden');
+      toggleEl.tabIndex = 0;
+      toggleEl.setAttribute('role', 'button');
+      this.plugin.bindTagHierarchyControlButton(toggleEl, toggleExpansion);
+      this.plugin.syncTagOrderButtonSelection(toggleEl);
+    }
 
     const innerEl = document.createElement('div');
     innerEl.className = 'tree-item-inner';
@@ -562,13 +585,8 @@ class PuffsTagShelfView extends ItemView {
     treeItemEl.appendChild(tagEl);
 
     tagEl.addEventListener('click', () => {
-      if (this.expandedTags.has(tag)) {
-        this.expandedTags.delete(tag);
-        this.plugin.clearInlineHierarchyBranchState(tag);
-      } else {
-        this.expandedTags.add(tag);
-      }
-      this.renderTagList();
+      if (this.plugin.isTagOrderModeActive(tag)) this.plugin.exitTagOrderMode(false);
+      toggleExpansion();
     });
 
     tagEl.addEventListener('contextmenu', (event) => {

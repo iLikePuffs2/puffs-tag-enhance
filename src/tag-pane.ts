@@ -357,6 +357,8 @@ export class TagPaneBehavior {
         return;
       }
 
+      if (target.closest('.puffs-tag-order-parent-button')) return;
+
       const noteCardEl = target.closest('.puffs-tag-note-card');
       if (noteCardEl) {
         evt.preventDefault();
@@ -372,6 +374,7 @@ export class TagPaneBehavior {
       evt.preventDefault();
       evt.stopPropagation();
       evt.stopImmediatePropagation();
+      if (this.isTagOrderModeActive(tagEl.dataset.puffsTag)) this.exitTagOrderMode(false);
       this.toggleTagExpansion(tagEl.dataset.puffsTag, view);
     };
 
@@ -829,6 +832,7 @@ export class TagPaneBehavior {
         if (scrollEl && scrollEl.isConnected) scrollEl.scrollTop = 0;
       });
     }
+    this.scheduleTagOrderModeVisibilityReconcile();
   }
 
   syncAutoSingleSearchResult(view, patch, items, queryValue = this.resolvePinnedSearchQuery(
@@ -1044,6 +1048,22 @@ export class TagPaneBehavior {
     toggleEl.classList.toggle('is-collapsed', !isExpanded);
     toggleEl.setAttribute('aria-hidden', 'true');
     setIcon(toggleEl, 'right-triangle');
+    const canOrderChildren = !isVirtual && item.hasInheritance && item.inheritanceEnabled;
+    if (canOrderChildren) {
+      toggleEl.classList.add('puffs-tag-order-parent-button');
+      toggleEl.dataset.puffsTagOrderTag = tag;
+      toggleEl.dataset.puffsSurface = 'sidebar';
+      toggleEl.dataset.puffsExpanded = String(isExpanded);
+      toggleEl.dataset.puffsHasChildren = 'true';
+      toggleEl.removeAttribute('aria-hidden');
+      toggleEl.tabIndex = 0;
+      toggleEl.setAttribute('role', 'button');
+      this.bindTagHierarchyControlButton(
+        toggleEl,
+        () => this.toggleTagExpansion(tag, view)
+      );
+      this.syncTagOrderButtonSelection(toggleEl);
+    }
 
     const innerEl = document.createElement('div');
     innerEl.className = 'tree-item-inner';

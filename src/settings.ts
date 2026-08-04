@@ -68,8 +68,8 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('选中笔记上移快捷键')
-      .setDesc('点击笔记左侧的任务列表按钮后，使用该快捷键将笔记上移一格')
+      .setName('选中项上移快捷键')
+      .setDesc('选中笔记或子标签的排序按钮后，使用该快捷键将当前项上移一格')
       .addText((text) => {
         text
           .setValue(this.plugin.getMoveNoteUpHotkeyDisplay())
@@ -80,8 +80,8 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('选中笔记下移快捷键')
-      .setDesc('点击笔记左侧的任务列表按钮后，使用该快捷键将笔记下移一格')
+      .setName('选中项下移快捷键')
+      .setDesc('选中笔记或子标签的排序按钮后，使用该快捷键将当前项下移一格')
       .addText((text) => {
         text
           .setValue(this.plugin.getMoveNoteDownHotkeyDisplay())

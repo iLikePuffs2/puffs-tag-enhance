@@ -141,8 +141,8 @@ describe('标签绑定笔记生命周期', () => {
   });
 });
 
-describe('子标签自动排序', () => {
-  it('按包含继承结果的可见笔记数量排序，并让关系遍历使用相同顺序', () => {
+describe('子标签手动排序', () => {
+  it('直接使用每个父级保存的顺序，并让关系遍历使用相同顺序', () => {
     const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} });
     behavior.settings.relations.tagInheritance = {
       childrenByParent: {
@@ -161,8 +161,32 @@ describe('子标签自动排序', () => {
     ]);
 
     expect(behavior.getTagVisibleNoteCount('#继承')).toBe(4);
-    expect(behavior.getInheritanceChildren('#父')).toEqual(['#继承', '#多', '#少']);
-    expect(behavior.getTagDescendants('#父')).toEqual(['#继承', '#后代', '#多', '#少']);
+    expect(behavior.getInheritanceChildren('#父')).toEqual(['#少', '#多', '#继承']);
+    expect(behavior.getTagDescendants('#父')).toEqual(['#少', '#多', '#继承', '#后代']);
+  });
+
+  it('v1 关系按升级前的可见数量顺序固化一次', () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} });
+    behavior.settings.relations.version = 1;
+    behavior.settings.relations.tagInheritance.childrenByParent = {
+      '#父': ['#少', '#多'],
+      '#另一父': ['#少', '#多'],
+    };
+    const files = (paths: string[]) => paths.map((path) => new (TFile as any)(path));
+    behavior.tagFileIndex = new Map([
+      ['#少', files(['少.md'])],
+      ['#多', files(['多一.md', '多二.md'])],
+    ]);
+
+    expect(behavior.initializeTagInheritanceOrder()).toBe(true);
+    expect(behavior.settings.relations.version).toBe(2);
+    expect(behavior.settings.relations.tagInheritance.childrenByParent).toEqual({
+      '#父': ['#多', '#少'],
+      '#另一父': ['#多', '#少'],
+    });
+    behavior.settings.relations.tagInheritance.childrenByParent['#父'] = ['#少', '#多'];
+    expect(behavior.initializeTagInheritanceOrder()).toBe(false);
+    expect(behavior.getInheritanceChildren('#父')).toEqual(['#少', '#多']);
   });
 });
 

@@ -39,7 +39,7 @@ const DEFAULT_SETTINGS = {
   noteHierarchySearchKeyword: DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   sidebarToolbarButtons: createDefaultSidebarToolbarButtons(),
   relations: {
-    version: 1,
+    version: 2,
     tagInheritance: {
       childrenByParent: {},
       enabledParents: [],

@@ -214,8 +214,11 @@ export class TagIndexBehavior {
       noteOrderChanged = this.reconcileNoteOrders(nextIndex, changedPath);
     }
 
-    if (!this.tagBindingTrackingReady && metadataCacheReady) this.tagBindingTrackingReady = true;
     this.tagFileIndex = nextIndex;
+    const tagInheritanceOrderChanged = metadataCacheReady
+      ? this.initializeTagInheritanceOrder()
+      : false;
+    if (!this.tagBindingTrackingReady && metadataCacheReady) this.tagBindingTrackingReady = true;
     this.reconcileExpandedTags();
     const pinnedTagChanged = this.reconcilePinnedTag();
     const noteDisplayNamesChanged = !this.activeTagRename
@@ -224,7 +227,7 @@ export class TagIndexBehavior {
     const tagBoundNotesChanged = this.tagBindingTrackingReady && !this.activeTagRename
       ? this.reconcileTagBoundNotes(nextIndex)
       : false;
-    return noteOrderChanged || pinnedTagChanged || noteDisplayNamesChanged || tagBoundNotesChanged;
+    return noteOrderChanged || tagInheritanceOrderChanged || pinnedTagChanged || noteDisplayNamesChanged || tagBoundNotesChanged;
   }
 
   reconcileNoteDisplayNames(nextIndex) {

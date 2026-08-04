@@ -524,7 +524,53 @@ export class InteractionsBehavior {
     if (noteItemEl) noteItemEl.classList.toggle('is-order-selected', isSelected);
   }
 
-  bindNoteParentControlButton(buttonEl, toggleExpansion, toggleOrder) {
+  isTagOrderTargetSelected(parentTagValue, tagValue) {
+    const parentTag = normalizeTag(parentTagValue);
+    const tag = normalizeTag(tagValue);
+    return !!(
+      this.selectedTagOrderTarget &&
+      this.selectedTagOrderTarget.parentTag === parentTag &&
+      this.selectedTagOrderTarget.tag === tag
+    );
+  }
+
+  isTagOrderModeActive(parentTagValue) {
+    const parentTag = normalizeTag(parentTagValue);
+    return !!parentTag && this.activeTagOrderParent === parentTag;
+  }
+
+  syncTagOrderButtonSelection(buttonEl) {
+    if (!buttonEl) return;
+    const parentTag = normalizeTag(buttonEl.dataset.puffsTagOrderParent);
+    const tag = normalizeTag(buttonEl.dataset.puffsTagOrderTag);
+    const hasChildren = buttonEl.dataset.puffsHasChildren === 'true';
+    const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
+    const isSelected = this.isTagOrderTargetSelected(
+      parentTag,
+      tag
+    );
+    const isModeParent = hasChildren && this.isTagOrderModeActive(tag);
+    const isExpanded = buttonEl.dataset.puffsExpanded === 'true';
+    buttonEl.classList.toggle('is-sort-mode', isSortMode);
+    buttonEl.classList.toggle('is-selected', isSelected);
+    buttonEl.classList.toggle('is-order-mode-parent', isModeParent);
+    buttonEl.setAttribute('aria-pressed', String(isSelected || isModeParent));
+    if (isSortMode) {
+      setIcon(buttonEl, 'grip-vertical');
+      buttonEl.classList.remove('is-collapsed');
+    } else {
+      setIcon(buttonEl, 'right-triangle');
+      buttonEl.classList.toggle('is-collapsed', !isExpanded);
+    }
+    buttonEl.setAttribute('aria-expanded', String(isExpanded));
+    const rowEl = buttonEl.closest('.puffs-inheritance-tag-group-row');
+    if (rowEl) {
+      rowEl.classList.toggle('is-order-selected', isSelected);
+      rowEl.classList.toggle('is-order-mode-parent', isModeParent);
+    }
+  }
+
+  bindOrderControlButton(buttonEl, isSelected, toggleExpansion, toggleOrder) {
     if (!buttonEl) return () => {};
     let longPressTimer = null;
     let suppressNextClick = false;
@@ -535,11 +581,7 @@ export class InteractionsBehavior {
       longPressTimer = null;
     };
     const onPointerDown = (event) => {
-      if (event.button !== 0 || this.isNoteOrderTargetSelected(
-        buttonEl.dataset.puffsTag,
-        buttonEl.dataset.path,
-        buttonEl.dataset.puffsHierarchyParent
-      )) return;
+      if (event.button !== 0 || isSelected()) return;
       clearLongPressTimer();
       suppressNextClick = false;
       longPressTimer = globalThis.setTimeout(() => {
@@ -560,14 +602,87 @@ export class InteractionsBehavior {
         suppressNextClick = false;
         return;
       }
-      if (this.isNoteOrderTargetSelected(
-        buttonEl.dataset.puffsTag,
-        buttonEl.dataset.path,
-        buttonEl.dataset.puffsHierarchyParent
-      )) {
+      if (isSelected()) {
         toggleOrder();
         return;
       }
+      toggleExpansion();
+    };
+
+    buttonEl.addEventListener('pointerdown', onPointerDown);
+    buttonEl.addEventListener('pointerup', onPointerUp);
+    buttonEl.addEventListener('pointerleave', onPointerAbort);
+    buttonEl.addEventListener('pointercancel', onPointerAbort);
+    buttonEl.addEventListener('click', onClick);
+    return () => {
+      clearLongPressTimer();
+      buttonEl.removeEventListener('pointerdown', onPointerDown);
+      buttonEl.removeEventListener('pointerup', onPointerUp);
+      buttonEl.removeEventListener('pointerleave', onPointerAbort);
+      buttonEl.removeEventListener('pointercancel', onPointerAbort);
+      buttonEl.removeEventListener('click', onClick);
+    };
+  }
+
+  bindNoteParentControlButton(buttonEl, toggleExpansion, toggleOrder) {
+    return this.bindOrderControlButton(
+      buttonEl,
+      () => this.isNoteOrderTargetSelected(
+        buttonEl.dataset.puffsTag,
+        buttonEl.dataset.path,
+        buttonEl.dataset.puffsHierarchyParent
+      ),
+      toggleExpansion,
+      toggleOrder
+    );
+  }
+
+  bindTagHierarchyControlButton(buttonEl, toggleExpansion) {
+    if (!buttonEl) return () => {};
+    let longPressTimer = null;
+    let suppressNextClick = false;
+
+    const clearLongPressTimer = () => {
+      if (!longPressTimer) return;
+      globalThis.clearTimeout(longPressTimer);
+      longPressTimer = null;
+    };
+    const onPointerDown = (event) => {
+      const parentTag = buttonEl.dataset.puffsTagOrderParent;
+      const tag = buttonEl.dataset.puffsTagOrderTag;
+      const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
+      if (event.button !== 0 || isSortMode || buttonEl.dataset.puffsHasChildren !== 'true') return;
+      clearLongPressTimer();
+      suppressNextClick = false;
+      longPressTimer = globalThis.setTimeout(() => {
+        longPressTimer = null;
+        suppressNextClick = true;
+        const wasActive = this.isTagOrderModeActive(tag);
+        this.toggleTagOrderMode(tag, buttonEl.dataset.puffsSurface || '');
+        if (!wasActive && this.isTagOrderModeActive(tag) && buttonEl.dataset.puffsExpanded !== 'true') {
+          toggleExpansion();
+        }
+      }, InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS);
+    };
+    const onPointerUp = () => clearLongPressTimer();
+    const onPointerAbort = () => {
+      clearLongPressTimer();
+      suppressNextClick = false;
+    };
+    const onClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
+      const parentTag = buttonEl.dataset.puffsTagOrderParent;
+      const tag = buttonEl.dataset.puffsTagOrderTag;
+      if (parentTag && this.isTagOrderModeActive(parentTag)) {
+        this.toggleTagOrderTarget(parentTag, tag, buttonEl.dataset.puffsSurface || '');
+        return;
+      }
+      if (this.isTagOrderModeActive(tag)) this.exitTagOrderMode(false);
       toggleExpansion();
     };
 
@@ -592,8 +707,34 @@ export class InteractionsBehavior {
     });
   }
 
+  refreshTagOrderSelectionState() {
+    document.querySelectorAll('.puffs-tag-order-button, .puffs-tag-order-parent-button').forEach((buttonEl) => {
+      this.syncTagOrderButtonSelection(buttonEl);
+    });
+  }
+
+  scheduleTagOrderModeVisibilityReconcile() {
+    if (!this.activeTagOrderParent || this.tagOrderModeVisibilityTimer) return;
+    this.tagOrderModeVisibilityTimer = globalThis.setTimeout(() => {
+      this.tagOrderModeVisibilityTimer = null;
+      if (!this.activeTagOrderParent) return;
+      const isVisible = Array.from(document.querySelectorAll('.puffs-tag-order-parent-button'))
+        .some((buttonEl) =>
+          normalizeTag(buttonEl.dataset.puffsTagOrderTag) === this.activeTagOrderParent &&
+          buttonEl.dataset.puffsExpanded === 'true' &&
+          buttonEl.offsetParent !== null
+        );
+      if (!isVisible) this.exitTagOrderMode();
+    }, 0);
+  }
+
+  refreshOrderSelectionState() {
+    this.refreshNoteOrderSelectionState();
+    this.refreshTagOrderSelectionState();
+  }
+
   activateNoteOrderHotkeyScope() {
-    if (this.noteOrderHotkeyScope || !this.selectedNoteOrderTarget) return;
+    if (this.noteOrderHotkeyScope || (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget)) return;
 
     const scope = new Scope();
     const registerMoveHotkey = (settingValue, fallback, direction) => {
@@ -601,9 +742,9 @@ export class InteractionsBehavior {
       scope.register(hotkey.modifiers, hotkey.key, (evt) => {
         evt.preventDefault();
         evt.stopPropagation();
-        this.moveSelectedNote(direction).catch((error) => {
-          console.error('[Puffs Tag Enhance] Failed to move selected note:', error);
-          new Notice('调整笔记顺序失败');
+        this.moveSelectedOrderTarget(direction).catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to move selected item:', error);
+          new Notice('调整顺序失败');
         });
         return false;
       });
@@ -630,7 +771,7 @@ export class InteractionsBehavior {
   }
 
   refreshNoteOrderHotkeyScope() {
-    const shouldReactivate = !!this.selectedNoteOrderTarget;
+    const shouldReactivate = !!(this.selectedNoteOrderTarget || this.selectedTagOrderTarget);
     this.deactivateNoteOrderHotkeyScope();
     if (shouldReactivate) this.activateNoteOrderHotkeyScope();
   }
@@ -643,10 +784,11 @@ export class InteractionsBehavior {
       this.selectedNoteOrderTarget = null;
       this.deactivateNoteOrderHotkeyScope();
     } else {
+      this.exitTagOrderMode(false);
       this.selectedNoteOrderTarget = { tag, path, surface };
       this.refreshNoteOrderHotkeyScope();
     }
-    this.refreshNoteOrderSelectionState();
+    this.refreshOrderSelectionState();
   }
 
   toggleHierarchyNoteOrderTarget(parentPath, path, surface = '') {
@@ -655,17 +797,80 @@ export class InteractionsBehavior {
       this.selectedNoteOrderTarget = null;
       this.deactivateNoteOrderHotkeyScope();
     } else {
+      this.exitTagOrderMode(false);
       this.selectedNoteOrderTarget = { hierarchyParent: parentPath, path, surface };
       this.refreshNoteOrderHotkeyScope();
     }
-    this.refreshNoteOrderSelectionState();
+    this.refreshOrderSelectionState();
+  }
+
+  toggleTagOrderTarget(parentTagValue, tagValue, surface = '') {
+    const parentTag = normalizeTag(parentTagValue);
+    const tag = normalizeTag(tagValue);
+    if (!parentTag || !tag || !this.isTagOrderModeActive(parentTag)) return;
+    if (this.isTagOrderTargetSelected(parentTag, tag)) {
+      this.selectedTagOrderTarget = null;
+      this.deactivateNoteOrderHotkeyScope();
+    } else {
+      this.selectedNoteOrderTarget = null;
+      this.selectedTagOrderTarget = { parentTag, tag, surface };
+      this.refreshNoteOrderHotkeyScope();
+    }
+    this.refreshOrderSelectionState();
+  }
+
+  toggleTagOrderMode(parentTagValue, surface = '') {
+    const parentTag = normalizeTag(parentTagValue);
+    if (!parentTag || !this.hasInheritanceChildren(parentTag)) return;
+    if (this.isTagOrderModeActive(parentTag)) {
+      this.exitTagOrderMode();
+      return;
+    }
+    this.selectedNoteOrderTarget = null;
+    this.selectedTagOrderTarget = null;
+    this.activeTagOrderParent = parentTag;
+    this.activeTagOrderSurface = surface;
+    this.deactivateNoteOrderHotkeyScope();
+    this.refreshOrderSelectionState();
+  }
+
+  exitTagOrderMode(refresh = true) {
+    if (!this.activeTagOrderParent && !this.selectedTagOrderTarget) return;
+    this.activeTagOrderParent = null;
+    this.activeTagOrderSurface = '';
+    this.selectedTagOrderTarget = null;
+    this.deactivateNoteOrderHotkeyScope();
+    if (refresh) this.refreshOrderSelectionState();
   }
 
   clearNoteOrderTarget() {
     if (!this.selectedNoteOrderTarget) return;
     this.selectedNoteOrderTarget = null;
     this.deactivateNoteOrderHotkeyScope();
-    this.refreshNoteOrderSelectionState();
+    this.refreshOrderSelectionState();
+  }
+
+  clearTagOrderTarget() {
+    if (!this.selectedTagOrderTarget) return;
+    this.selectedTagOrderTarget = null;
+    this.deactivateNoteOrderHotkeyScope();
+    this.refreshOrderSelectionState();
+  }
+
+  clearOrderTarget() {
+    if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
+    if (this.selectedNoteOrderTarget) {
+      this.selectedNoteOrderTarget = null;
+      this.deactivateNoteOrderHotkeyScope();
+      this.refreshOrderSelectionState();
+      return;
+    }
+    this.clearTagOrderTarget();
+  }
+
+  async moveSelectedOrderTarget(direction) {
+    if (this.selectedTagOrderTarget) return this.moveSelectedTag(direction);
+    return this.moveSelectedNote(direction);
   }
 
   focusSelectedNoteOrderButton() {
@@ -689,6 +894,92 @@ export class InteractionsBehavior {
         button.offsetParent !== null
       );
     if (buttonEl) buttonEl.focus({ preventScroll: true });
+  }
+
+  focusSelectedTagOrderButton() {
+    if (!this.selectedTagOrderTarget) return;
+    const { parentTag, tag, surface } = this.selectedTagOrderTarget;
+    const buttons = Array.from(document.querySelectorAll('.puffs-tag-order-button'));
+    const buttonEl =
+      buttons.find((button) =>
+        button.dataset.puffsTagOrderParent === parentTag &&
+        button.dataset.puffsTagOrderTag === tag &&
+        button.dataset.puffsSurface === surface &&
+        button.offsetParent !== null
+      ) ||
+      buttons.find((button) =>
+        button.dataset.puffsTagOrderParent === parentTag &&
+        button.dataset.puffsTagOrderTag === tag &&
+        button.offsetParent !== null
+      );
+    if (buttonEl) buttonEl.focus({ preventScroll: true });
+  }
+
+  async moveSelectedTag(direction) {
+    const target = this.selectedTagOrderTarget;
+    if (!target || (direction !== -1 && direction !== 1)) return false;
+    const children = this.getInheritanceChildren(target.parentTag);
+    const currentIndex = children.indexOf(target.tag);
+    if (currentIndex < 0) {
+      this.clearTagOrderTarget();
+      return false;
+    }
+    const nextIndex = currentIndex + direction;
+    if (nextIndex < 0 || nextIndex >= children.length) return false;
+    await this.reorderChildTag(
+      target.parentTag,
+      target.tag,
+      children[nextIndex],
+      direction < 0 ? 'before' : 'after'
+    );
+    globalThis.setTimeout(() => {
+      this.refreshTagOrderSelectionState();
+      this.focusSelectedTagOrderButton();
+    }, 0);
+    return true;
+  }
+
+  async moveSelectedTagAfter(parentTagValue, targetTagValue) {
+    const selected = this.selectedTagOrderTarget;
+    const parentTag = normalizeTag(parentTagValue);
+    const targetTag = normalizeTag(targetTagValue);
+    if (
+      !selected ||
+      !parentTag ||
+      selected.parentTag !== parentTag ||
+      !targetTag ||
+      selected.tag === targetTag
+    ) {
+      return false;
+    }
+    const children = this.getInheritanceChildren(parentTag);
+    const movingIndex = children.indexOf(selected.tag);
+    const targetIndex = children.indexOf(targetTag);
+    if (movingIndex < 0) {
+      this.clearTagOrderTarget();
+      return false;
+    }
+    if (targetIndex < 0 || movingIndex === targetIndex + 1) return false;
+    await this.reorderChildTag(parentTag, selected.tag, targetTag, 'after');
+    globalThis.setTimeout(() => this.refreshTagOrderSelectionState(), 0);
+    return true;
+  }
+
+  async reorderChildTag(parentTagValue, movingTagValue, targetTagValue, placement) {
+    const parentTag = normalizeTag(parentTagValue);
+    const movingTag = normalizeTag(movingTagValue);
+    const targetTag = normalizeTag(targetTagValue);
+    if (!parentTag || !movingTag || !targetTag || movingTag === targetTag) return false;
+    const children = this.getInheritanceChildren(parentTag);
+    const movingIndex = children.indexOf(movingTag);
+    const targetIndex = children.indexOf(targetTag);
+    if (movingIndex < 0 || targetIndex < 0) return false;
+    children.splice(movingIndex, 1);
+    const nextTargetIndex = children.indexOf(targetTag);
+    const insertIndex = placement === 'after' ? nextTargetIndex + 1 : nextTargetIndex;
+    children.splice(insertIndex, 0, movingTag);
+    await this.setInheritanceChildren(parentTag, children);
+    return true;
   }
 
   async moveSelectedNote(direction) {

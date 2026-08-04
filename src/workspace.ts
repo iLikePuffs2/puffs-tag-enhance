@@ -192,19 +192,46 @@ export class WorkspaceBehavior {
     window.addEventListener('keydown', this.keydownHandler, true);
     document.addEventListener('keydown', this.keydownHandler, true);
     this.pointerdownHandler = (evt) => {
-      if (!this.selectedNoteOrderTarget) return;
+      if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
       if (target && target.closest('.puffs-tag-note-order-button')) return;
+      if (target && target.closest('.puffs-tag-order-button')) return;
       if (target && target.closest('.puffs-tag-scroll-top-button')) return;
       if (target && target.closest('.puffs-tag-scroll-bottom-button')) return;
       if (this.isNoteOrderSearchControl(target)) return;
       if (this.isTagSidebarScrollbarPointer(evt, target)) return;
-      if (evt.button === 2 && target && target.closest('.puffs-tag-note-card')) return;
-      this.clearNoteOrderTarget();
+      if (evt.button === 2 && target) {
+        if (this.selectedNoteOrderTarget && target.closest('.puffs-tag-note-card')) return;
+        if (this.selectedTagOrderTarget && target.closest('.puffs-inheritance-tag-group-row')) return;
+      }
+      this.clearOrderTarget();
     };
     document.addEventListener('pointerdown', this.pointerdownHandler, true);
 
     this.noteOrderContextMenuHandler = (evt) => {
+      const selectedTag = this.selectedTagOrderTarget;
+      if (selectedTag) {
+        const target = evt.target instanceof Element ? evt.target : null;
+        if (!target || target.closest('.puffs-tag-order-button')) return;
+        const rowEl = target.closest('.puffs-inheritance-tag-group-row');
+        if (!rowEl) return;
+        const parentTag = normalizeTag(rowEl.dataset.puffsTagOrderParent);
+        const tag = normalizeTag(rowEl.dataset.puffsTagOrderTag);
+        if (parentTag === selectedTag.parentTag && tag === selectedTag.tag) return;
+        if (!parentTag || parentTag !== selectedTag.parentTag || !tag) {
+          this.clearTagOrderTarget();
+          return;
+        }
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        this.moveSelectedTagAfter(parentTag, tag).catch((error) => {
+          console.error('[Puffs Tag Enhance] Failed to move selected tag after target:', error);
+          new Notice('调整子标签顺序失败');
+        });
+        return;
+      }
+
       const selected = this.selectedNoteOrderTarget;
       if (!selected) return;
 

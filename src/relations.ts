@@ -30,7 +30,7 @@ import {
 } from "./relation-utils";
 
 const createEmptyRelations = () => ({
-  version: 1,
+  version: 2,
   tagInheritance: {
     childrenByParent: {},
     enabledParents: [],
@@ -48,6 +48,7 @@ export class RelationsBehavior {
   normalizeRelationSettings(value = this.settings.relations) {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const result = createEmptyRelations();
+    result.version = Number(source.version) >= 2 ? 2 : 1;
     const inheritance = source.tagInheritance && typeof source.tagInheritance === 'object'
       ? source.tagInheritance
       : {};
@@ -493,7 +494,17 @@ export class RelationsBehavior {
         allowInheritedReorder: true,
       });
     };
-    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent, tagValue = null) => {
+    const renderGroup = (
+      containerEl,
+      label,
+      count,
+      key,
+      containsTarget,
+      renderContent,
+      tagValue = null,
+      parentTagValue = null,
+      hasTagChildren = false
+    ) => {
       if (!count) return;
       const expanded = (!!targetPath && containsTarget) || !collapsed.has(key);
       const itemEl = containerEl.createDiv({ cls: 'tree-item puffs-tag-list-item puffs-inheritance-tag-group' });
@@ -502,14 +513,39 @@ export class RelationsBehavior {
       });
       rowEl.dataset.puffsInheritanceGroup = key;
       if (tagValue) rowEl.dataset.puffsInheritanceTag = tagValue;
+      if (tagValue && parentTagValue) {
+        rowEl.dataset.puffsTagOrderParent = parentTagValue;
+        rowEl.dataset.puffsTagOrderTag = tagValue;
+      }
       rowEl.setAttribute('aria-expanded', String(expanded));
       const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-tag-list-toggle' });
       toggleEl.classList.toggle('is-collapsed', !expanded);
       setIcon(toggleEl, 'right-triangle');
+      if (tagValue && parentTagValue) {
+        toggleEl.classList.add('puffs-tag-order-button');
+        toggleEl.dataset.puffsTagOrderParent = parentTagValue;
+        toggleEl.dataset.puffsTagOrderTag = tagValue;
+        toggleEl.dataset.puffsSurface = options.surface || '';
+        toggleEl.dataset.puffsExpanded = String(expanded);
+        toggleEl.dataset.puffsHasChildren = String(hasTagChildren);
+        if (hasTagChildren) toggleEl.classList.add('puffs-tag-order-parent-button');
+        toggleEl.tabIndex = 0;
+        toggleEl.setAttribute('role', 'button');
+        this.bindTagHierarchyControlButton(
+          toggleEl,
+          () => {
+            this.toggleInlineHierarchyBranch(key);
+            options.rerender?.();
+            if (options.surface === 'shelf') this.refreshTagViews();
+          }
+        );
+        this.syncTagOrderButtonSelection(toggleEl);
+      }
       rowEl.createDiv({ text: label, cls: 'tree-item-inner' });
       const flairOuterEl = rowEl.createDiv({ cls: 'tree-item-flair-outer' });
       flairOuterEl.createSpan({ text: String(count), cls: 'tree-item-flair tag-pane-tag-count' });
       rowEl.addEventListener('click', () => {
+        if (tagValue && this.isTagOrderModeActive(tagValue)) this.exitTagOrderMode(false);
         this.toggleInlineHierarchyBranch(key);
         options.rerender?.();
         if (options.surface === 'shelf') this.refreshTagViews();
@@ -526,10 +562,9 @@ export class RelationsBehavior {
         renderContent(contentEl);
       }
     };
-    const renderNode = (containerEl, node, lineage) => {
+    const renderNode = (containerEl, node, lineage, directParentTag) => {
       const key = `${rootTag}\u0000tag-group\u0000${lineage.join('\u0001')}`;
-      renderGroup(containerEl, getTagDisplayName(node.tag), node.subtreePaths.length, key,
-        node.subtreePaths.includes(targetPath), (contentEl) => {
+      const renderNodeContent = (contentEl) => {
           if (!node.children.length) {
             renderNotes(contentEl, node, true);
             return;
@@ -538,8 +573,12 @@ export class RelationsBehavior {
             renderGroup(contentEl, '原生', node.paths.length, `${key}\u0000original`,
               node.paths.includes(targetPath), (originalEl) => renderNotes(originalEl, node, true));
           }
-          for (const child of node.children) renderNode(contentEl, child, [...lineage, child.tag]);
-        }, node.tag);
+          for (const child of node.children) {
+            renderNode(contentEl, child, [...lineage, child.tag], node.tag);
+          }
+        };
+      renderGroup(containerEl, getTagDisplayName(node.tag), node.subtreePaths.length, key,
+        node.subtreePaths.includes(targetPath), renderNodeContent, node.tag, directParentTag, node.children.length > 0);
     };
 
     if (!tree.children.length) {
@@ -550,7 +589,8 @@ export class RelationsBehavior {
       renderGroup(hostEl, '原生', tree.paths.length, `${rootTag}\u0000tag-group\u0000original`,
         tree.paths.includes(targetPath), (contentEl) => renderNotes(contentEl, tree, false));
     }
-    for (const child of tree.children) renderNode(hostEl, child, [child.tag]);
+    for (const child of tree.children) renderNode(hostEl, child, [child.tag], tree.tag);
+    this.scheduleTagOrderModeVisibilityReconcile();
   }
 
   renderInlineTagNoteTree(hostEl, files, tagValue, isVirtual = false, options = {}) {
@@ -1122,8 +1162,22 @@ export class RelationsBehavior {
   getInheritanceChildren(tagValue) {
     const tag = normalizeTag(tagValue);
     if (!tag) return [];
-    return [...(this.getTagInheritanceSettings().childrenByParent[tag] || [])]
-      .sort((left, right) => this.compareTagsByVisibleCount(left, right));
+    return [...(this.getTagInheritanceSettings().childrenByParent[tag] || [])];
+  }
+
+  initializeTagInheritanceOrder() {
+    const relations = this.settings.relations;
+    if (!relations || Number(relations.version) >= 2) return false;
+
+    const inheritance = this.getTagInheritanceSettings();
+    const nextChildrenByParent = {};
+    for (const [parent, children] of Object.entries(inheritance.childrenByParent)) {
+      const orderedChildren = this.sortTagsByVisibleCount(children);
+      if (orderedChildren.length > 0) nextChildrenByParent[parent] = orderedChildren;
+    }
+    inheritance.childrenByParent = nextChildrenByParent;
+    relations.version = 2;
+    return true;
   }
 
   getTagVisibleNoteCount(tagValue) {

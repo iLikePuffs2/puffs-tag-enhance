@@ -294,7 +294,7 @@ var DEFAULT_SETTINGS = {
   noteHierarchySearchKeyword: DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   sidebarToolbarButtons: createDefaultSidebarToolbarButtons(),
   relations: {
-    version: 1,
+    version: 2,
     tagInheritance: {
       childrenByParent: {},
       enabledParents: [],
@@ -978,6 +978,7 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
       this.noteCardSearchState
     );
     this.updateToolbarState();
+    this.plugin.scheduleTagOrderModeVisibilityReconcile();
   }
   updateSummary(items) {
     const uniqueNotePaths = /* @__PURE__ */ new Set();
@@ -1024,6 +1025,28 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     toggleEl.classList.toggle("is-collapsed", !isExpanded);
     toggleEl.setAttribute("aria-hidden", "true");
     (0, import_obsidian2.setIcon)(toggleEl, "right-triangle");
+    const canOrderChildren = !isVirtual && item.hasInheritance && item.inheritanceEnabled;
+    const toggleExpansion = () => {
+      if (this.expandedTags.has(tag)) {
+        this.expandedTags.delete(tag);
+        this.plugin.clearInlineHierarchyBranchState(tag);
+      } else {
+        this.expandedTags.add(tag);
+      }
+      this.renderTagList();
+    };
+    if (canOrderChildren) {
+      toggleEl.classList.add("puffs-tag-order-parent-button");
+      toggleEl.dataset.puffsTagOrderTag = tag;
+      toggleEl.dataset.puffsSurface = "shelf";
+      toggleEl.dataset.puffsExpanded = String(isExpanded);
+      toggleEl.dataset.puffsHasChildren = "true";
+      toggleEl.removeAttribute("aria-hidden");
+      toggleEl.tabIndex = 0;
+      toggleEl.setAttribute("role", "button");
+      this.plugin.bindTagHierarchyControlButton(toggleEl, toggleExpansion);
+      this.plugin.syncTagOrderButtonSelection(toggleEl);
+    }
     const innerEl = document.createElement("div");
     innerEl.className = "tree-item-inner";
     const textEl = document.createElement("div");
@@ -1090,13 +1113,8 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     tagEl.appendChild(flairOuterEl);
     treeItemEl.appendChild(tagEl);
     tagEl.addEventListener("click", () => {
-      if (this.expandedTags.has(tag)) {
-        this.expandedTags.delete(tag);
-        this.plugin.clearInlineHierarchyBranchState(tag);
-      } else {
-        this.expandedTags.add(tag);
-      }
-      this.renderTagList();
+      if (this.plugin.isTagOrderModeActive(tag)) this.plugin.exitTagOrderMode(false);
+      toggleExpansion();
     });
     tagEl.addEventListener("contextmenu", (event) => {
       if (isVirtual) return;
@@ -1154,12 +1172,12 @@ var PuffsTagEnhanceSettingTab = class extends import_obsidian3.PluginSettingTab 
         await this.plugin.updateSettings({ toggleSearchHotkey: value });
       });
     });
-    new import_obsidian3.Setting(containerEl).setName("\u9009\u4E2D\u7B14\u8BB0\u4E0A\u79FB\u5FEB\u6377\u952E").setDesc("\u70B9\u51FB\u7B14\u8BB0\u5DE6\u4FA7\u7684\u4EFB\u52A1\u5217\u8868\u6309\u94AE\u540E\uFF0C\u4F7F\u7528\u8BE5\u5FEB\u6377\u952E\u5C06\u7B14\u8BB0\u4E0A\u79FB\u4E00\u683C").addText((text) => {
+    new import_obsidian3.Setting(containerEl).setName("\u9009\u4E2D\u9879\u4E0A\u79FB\u5FEB\u6377\u952E").setDesc("\u9009\u4E2D\u7B14\u8BB0\u6216\u5B50\u6807\u7B7E\u7684\u6392\u5E8F\u6309\u94AE\u540E\uFF0C\u4F7F\u7528\u8BE5\u5FEB\u6377\u952E\u5C06\u5F53\u524D\u9879\u4E0A\u79FB\u4E00\u683C").addText((text) => {
       text.setValue(this.plugin.getMoveNoteUpHotkeyDisplay()).setPlaceholder(DEFAULT_MOVE_NOTE_UP_HOTKEY).onChange(async (value) => {
         await this.plugin.updateSettings({ moveNoteUpHotkey: value });
       });
     });
-    new import_obsidian3.Setting(containerEl).setName("\u9009\u4E2D\u7B14\u8BB0\u4E0B\u79FB\u5FEB\u6377\u952E").setDesc("\u70B9\u51FB\u7B14\u8BB0\u5DE6\u4FA7\u7684\u4EFB\u52A1\u5217\u8868\u6309\u94AE\u540E\uFF0C\u4F7F\u7528\u8BE5\u5FEB\u6377\u952E\u5C06\u7B14\u8BB0\u4E0B\u79FB\u4E00\u683C").addText((text) => {
+    new import_obsidian3.Setting(containerEl).setName("\u9009\u4E2D\u9879\u4E0B\u79FB\u5FEB\u6377\u952E").setDesc("\u9009\u4E2D\u7B14\u8BB0\u6216\u5B50\u6807\u7B7E\u7684\u6392\u5E8F\u6309\u94AE\u540E\uFF0C\u4F7F\u7528\u8BE5\u5FEB\u6377\u952E\u5C06\u5F53\u524D\u9879\u4E0B\u79FB\u4E00\u683C").addText((text) => {
       text.setValue(this.plugin.getMoveNoteDownHotkeyDisplay()).setPlaceholder(DEFAULT_MOVE_NOTE_DOWN_HOTKEY).onChange(async (value) => {
         await this.plugin.updateSettings({ moveNoteDownHotkey: value });
       });
@@ -1832,7 +1850,46 @@ var _InteractionsBehavior = class _InteractionsBehavior {
     const noteItemEl = buttonEl.closest(".puffs-tag-note-item");
     if (noteItemEl) noteItemEl.classList.toggle("is-order-selected", isSelected);
   }
-  bindNoteParentControlButton(buttonEl, toggleExpansion, toggleOrder) {
+  isTagOrderTargetSelected(parentTagValue, tagValue) {
+    const parentTag = normalizeTag(parentTagValue);
+    const tag = normalizeTag(tagValue);
+    return !!(this.selectedTagOrderTarget && this.selectedTagOrderTarget.parentTag === parentTag && this.selectedTagOrderTarget.tag === tag);
+  }
+  isTagOrderModeActive(parentTagValue) {
+    const parentTag = normalizeTag(parentTagValue);
+    return !!parentTag && this.activeTagOrderParent === parentTag;
+  }
+  syncTagOrderButtonSelection(buttonEl) {
+    if (!buttonEl) return;
+    const parentTag = normalizeTag(buttonEl.dataset.puffsTagOrderParent);
+    const tag = normalizeTag(buttonEl.dataset.puffsTagOrderTag);
+    const hasChildren = buttonEl.dataset.puffsHasChildren === "true";
+    const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
+    const isSelected = this.isTagOrderTargetSelected(
+      parentTag,
+      tag
+    );
+    const isModeParent = hasChildren && this.isTagOrderModeActive(tag);
+    const isExpanded = buttonEl.dataset.puffsExpanded === "true";
+    buttonEl.classList.toggle("is-sort-mode", isSortMode);
+    buttonEl.classList.toggle("is-selected", isSelected);
+    buttonEl.classList.toggle("is-order-mode-parent", isModeParent);
+    buttonEl.setAttribute("aria-pressed", String(isSelected || isModeParent));
+    if (isSortMode) {
+      (0, import_obsidian5.setIcon)(buttonEl, "grip-vertical");
+      buttonEl.classList.remove("is-collapsed");
+    } else {
+      (0, import_obsidian5.setIcon)(buttonEl, "right-triangle");
+      buttonEl.classList.toggle("is-collapsed", !isExpanded);
+    }
+    buttonEl.setAttribute("aria-expanded", String(isExpanded));
+    const rowEl = buttonEl.closest(".puffs-inheritance-tag-group-row");
+    if (rowEl) {
+      rowEl.classList.toggle("is-order-selected", isSelected);
+      rowEl.classList.toggle("is-order-mode-parent", isModeParent);
+    }
+  }
+  bindOrderControlButton(buttonEl, isSelected, toggleExpansion, toggleOrder) {
     if (!buttonEl) return () => {
     };
     let longPressTimer = null;
@@ -1843,11 +1900,7 @@ var _InteractionsBehavior = class _InteractionsBehavior {
       longPressTimer = null;
     };
     const onPointerDown = (event) => {
-      if (event.button !== 0 || this.isNoteOrderTargetSelected(
-        buttonEl.dataset.puffsTag,
-        buttonEl.dataset.path,
-        buttonEl.dataset.puffsHierarchyParent
-      )) return;
+      if (event.button !== 0 || isSelected()) return;
       clearLongPressTimer();
       suppressNextClick = false;
       longPressTimer = globalThis.setTimeout(() => {
@@ -1868,14 +1921,84 @@ var _InteractionsBehavior = class _InteractionsBehavior {
         suppressNextClick = false;
         return;
       }
-      if (this.isNoteOrderTargetSelected(
-        buttonEl.dataset.puffsTag,
-        buttonEl.dataset.path,
-        buttonEl.dataset.puffsHierarchyParent
-      )) {
+      if (isSelected()) {
         toggleOrder();
         return;
       }
+      toggleExpansion();
+    };
+    buttonEl.addEventListener("pointerdown", onPointerDown);
+    buttonEl.addEventListener("pointerup", onPointerUp);
+    buttonEl.addEventListener("pointerleave", onPointerAbort);
+    buttonEl.addEventListener("pointercancel", onPointerAbort);
+    buttonEl.addEventListener("click", onClick);
+    return () => {
+      clearLongPressTimer();
+      buttonEl.removeEventListener("pointerdown", onPointerDown);
+      buttonEl.removeEventListener("pointerup", onPointerUp);
+      buttonEl.removeEventListener("pointerleave", onPointerAbort);
+      buttonEl.removeEventListener("pointercancel", onPointerAbort);
+      buttonEl.removeEventListener("click", onClick);
+    };
+  }
+  bindNoteParentControlButton(buttonEl, toggleExpansion, toggleOrder) {
+    return this.bindOrderControlButton(
+      buttonEl,
+      () => this.isNoteOrderTargetSelected(
+        buttonEl.dataset.puffsTag,
+        buttonEl.dataset.path,
+        buttonEl.dataset.puffsHierarchyParent
+      ),
+      toggleExpansion,
+      toggleOrder
+    );
+  }
+  bindTagHierarchyControlButton(buttonEl, toggleExpansion) {
+    if (!buttonEl) return () => {
+    };
+    let longPressTimer = null;
+    let suppressNextClick = false;
+    const clearLongPressTimer = () => {
+      if (!longPressTimer) return;
+      globalThis.clearTimeout(longPressTimer);
+      longPressTimer = null;
+    };
+    const onPointerDown = (event) => {
+      const parentTag = buttonEl.dataset.puffsTagOrderParent;
+      const tag = buttonEl.dataset.puffsTagOrderTag;
+      const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
+      if (event.button !== 0 || isSortMode || buttonEl.dataset.puffsHasChildren !== "true") return;
+      clearLongPressTimer();
+      suppressNextClick = false;
+      longPressTimer = globalThis.setTimeout(() => {
+        longPressTimer = null;
+        suppressNextClick = true;
+        const wasActive = this.isTagOrderModeActive(tag);
+        this.toggleTagOrderMode(tag, buttonEl.dataset.puffsSurface || "");
+        if (!wasActive && this.isTagOrderModeActive(tag) && buttonEl.dataset.puffsExpanded !== "true") {
+          toggleExpansion();
+        }
+      }, _InteractionsBehavior.NOTE_ORDER_LONG_PRESS_MS);
+    };
+    const onPointerUp = () => clearLongPressTimer();
+    const onPointerAbort = () => {
+      clearLongPressTimer();
+      suppressNextClick = false;
+    };
+    const onClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
+      const parentTag = buttonEl.dataset.puffsTagOrderParent;
+      const tag = buttonEl.dataset.puffsTagOrderTag;
+      if (parentTag && this.isTagOrderModeActive(parentTag)) {
+        this.toggleTagOrderTarget(parentTag, tag, buttonEl.dataset.puffsSurface || "");
+        return;
+      }
+      if (this.isTagOrderModeActive(tag)) this.exitTagOrderMode(false);
       toggleExpansion();
     };
     buttonEl.addEventListener("pointerdown", onPointerDown);
@@ -1897,17 +2020,37 @@ var _InteractionsBehavior = class _InteractionsBehavior {
       this.syncNoteOrderButtonSelection(buttonEl);
     });
   }
+  refreshTagOrderSelectionState() {
+    document.querySelectorAll(".puffs-tag-order-button, .puffs-tag-order-parent-button").forEach((buttonEl) => {
+      this.syncTagOrderButtonSelection(buttonEl);
+    });
+  }
+  scheduleTagOrderModeVisibilityReconcile() {
+    if (!this.activeTagOrderParent || this.tagOrderModeVisibilityTimer) return;
+    this.tagOrderModeVisibilityTimer = globalThis.setTimeout(() => {
+      this.tagOrderModeVisibilityTimer = null;
+      if (!this.activeTagOrderParent) return;
+      const isVisible = Array.from(document.querySelectorAll(".puffs-tag-order-parent-button")).some(
+        (buttonEl) => normalizeTag(buttonEl.dataset.puffsTagOrderTag) === this.activeTagOrderParent && buttonEl.dataset.puffsExpanded === "true" && buttonEl.offsetParent !== null
+      );
+      if (!isVisible) this.exitTagOrderMode();
+    }, 0);
+  }
+  refreshOrderSelectionState() {
+    this.refreshNoteOrderSelectionState();
+    this.refreshTagOrderSelectionState();
+  }
   activateNoteOrderHotkeyScope() {
-    if (this.noteOrderHotkeyScope || !this.selectedNoteOrderTarget) return;
+    if (this.noteOrderHotkeyScope || !this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
     const scope = new import_obsidian5.Scope();
     const registerMoveHotkey = (settingValue, fallback, direction) => {
       const hotkey = parseHotkeyText(settingValue, fallback);
       scope.register(hotkey.modifiers, hotkey.key, (evt) => {
         evt.preventDefault();
         evt.stopPropagation();
-        this.moveSelectedNote(direction).catch((error) => {
-          console.error("[Puffs Tag Enhance] Failed to move selected note:", error);
-          new import_obsidian5.Notice("\u8C03\u6574\u7B14\u8BB0\u987A\u5E8F\u5931\u8D25");
+        this.moveSelectedOrderTarget(direction).catch((error) => {
+          console.error("[Puffs Tag Enhance] Failed to move selected item:", error);
+          new import_obsidian5.Notice("\u8C03\u6574\u987A\u5E8F\u5931\u8D25");
         });
         return false;
       });
@@ -1931,7 +2074,7 @@ var _InteractionsBehavior = class _InteractionsBehavior {
     this.noteOrderHotkeyScope = null;
   }
   refreshNoteOrderHotkeyScope() {
-    const shouldReactivate = !!this.selectedNoteOrderTarget;
+    const shouldReactivate = !!(this.selectedNoteOrderTarget || this.selectedTagOrderTarget);
     this.deactivateNoteOrderHotkeyScope();
     if (shouldReactivate) this.activateNoteOrderHotkeyScope();
   }
@@ -1942,10 +2085,11 @@ var _InteractionsBehavior = class _InteractionsBehavior {
       this.selectedNoteOrderTarget = null;
       this.deactivateNoteOrderHotkeyScope();
     } else {
+      this.exitTagOrderMode(false);
       this.selectedNoteOrderTarget = { tag, path, surface };
       this.refreshNoteOrderHotkeyScope();
     }
-    this.refreshNoteOrderSelectionState();
+    this.refreshOrderSelectionState();
   }
   toggleHierarchyNoteOrderTarget(parentPath, path, surface = "") {
     if (!parentPath || !path) return;
@@ -1953,16 +2097,73 @@ var _InteractionsBehavior = class _InteractionsBehavior {
       this.selectedNoteOrderTarget = null;
       this.deactivateNoteOrderHotkeyScope();
     } else {
+      this.exitTagOrderMode(false);
       this.selectedNoteOrderTarget = { hierarchyParent: parentPath, path, surface };
       this.refreshNoteOrderHotkeyScope();
     }
-    this.refreshNoteOrderSelectionState();
+    this.refreshOrderSelectionState();
+  }
+  toggleTagOrderTarget(parentTagValue, tagValue, surface = "") {
+    const parentTag = normalizeTag(parentTagValue);
+    const tag = normalizeTag(tagValue);
+    if (!parentTag || !tag || !this.isTagOrderModeActive(parentTag)) return;
+    if (this.isTagOrderTargetSelected(parentTag, tag)) {
+      this.selectedTagOrderTarget = null;
+      this.deactivateNoteOrderHotkeyScope();
+    } else {
+      this.selectedNoteOrderTarget = null;
+      this.selectedTagOrderTarget = { parentTag, tag, surface };
+      this.refreshNoteOrderHotkeyScope();
+    }
+    this.refreshOrderSelectionState();
+  }
+  toggleTagOrderMode(parentTagValue, surface = "") {
+    const parentTag = normalizeTag(parentTagValue);
+    if (!parentTag || !this.hasInheritanceChildren(parentTag)) return;
+    if (this.isTagOrderModeActive(parentTag)) {
+      this.exitTagOrderMode();
+      return;
+    }
+    this.selectedNoteOrderTarget = null;
+    this.selectedTagOrderTarget = null;
+    this.activeTagOrderParent = parentTag;
+    this.activeTagOrderSurface = surface;
+    this.deactivateNoteOrderHotkeyScope();
+    this.refreshOrderSelectionState();
+  }
+  exitTagOrderMode(refresh = true) {
+    if (!this.activeTagOrderParent && !this.selectedTagOrderTarget) return;
+    this.activeTagOrderParent = null;
+    this.activeTagOrderSurface = "";
+    this.selectedTagOrderTarget = null;
+    this.deactivateNoteOrderHotkeyScope();
+    if (refresh) this.refreshOrderSelectionState();
   }
   clearNoteOrderTarget() {
     if (!this.selectedNoteOrderTarget) return;
     this.selectedNoteOrderTarget = null;
     this.deactivateNoteOrderHotkeyScope();
-    this.refreshNoteOrderSelectionState();
+    this.refreshOrderSelectionState();
+  }
+  clearTagOrderTarget() {
+    if (!this.selectedTagOrderTarget) return;
+    this.selectedTagOrderTarget = null;
+    this.deactivateNoteOrderHotkeyScope();
+    this.refreshOrderSelectionState();
+  }
+  clearOrderTarget() {
+    if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
+    if (this.selectedNoteOrderTarget) {
+      this.selectedNoteOrderTarget = null;
+      this.deactivateNoteOrderHotkeyScope();
+      this.refreshOrderSelectionState();
+      return;
+    }
+    this.clearTagOrderTarget();
+  }
+  async moveSelectedOrderTarget(direction) {
+    if (this.selectedTagOrderTarget) return this.moveSelectedTag(direction);
+    return this.moveSelectedNote(direction);
   }
   focusSelectedNoteOrderButton() {
     if (!this.selectedNoteOrderTarget) return;
@@ -1974,6 +2175,75 @@ var _InteractionsBehavior = class _InteractionsBehavior {
       (button) => (hierarchyParent ? button.dataset.puffsHierarchyParent === hierarchyParent : button.dataset.puffsTag === tag) && button.dataset.path === path && button.offsetParent !== null
     );
     if (buttonEl) buttonEl.focus({ preventScroll: true });
+  }
+  focusSelectedTagOrderButton() {
+    if (!this.selectedTagOrderTarget) return;
+    const { parentTag, tag, surface } = this.selectedTagOrderTarget;
+    const buttons = Array.from(document.querySelectorAll(".puffs-tag-order-button"));
+    const buttonEl = buttons.find(
+      (button) => button.dataset.puffsTagOrderParent === parentTag && button.dataset.puffsTagOrderTag === tag && button.dataset.puffsSurface === surface && button.offsetParent !== null
+    ) || buttons.find(
+      (button) => button.dataset.puffsTagOrderParent === parentTag && button.dataset.puffsTagOrderTag === tag && button.offsetParent !== null
+    );
+    if (buttonEl) buttonEl.focus({ preventScroll: true });
+  }
+  async moveSelectedTag(direction) {
+    const target = this.selectedTagOrderTarget;
+    if (!target || direction !== -1 && direction !== 1) return false;
+    const children = this.getInheritanceChildren(target.parentTag);
+    const currentIndex = children.indexOf(target.tag);
+    if (currentIndex < 0) {
+      this.clearTagOrderTarget();
+      return false;
+    }
+    const nextIndex = currentIndex + direction;
+    if (nextIndex < 0 || nextIndex >= children.length) return false;
+    await this.reorderChildTag(
+      target.parentTag,
+      target.tag,
+      children[nextIndex],
+      direction < 0 ? "before" : "after"
+    );
+    globalThis.setTimeout(() => {
+      this.refreshTagOrderSelectionState();
+      this.focusSelectedTagOrderButton();
+    }, 0);
+    return true;
+  }
+  async moveSelectedTagAfter(parentTagValue, targetTagValue) {
+    const selected = this.selectedTagOrderTarget;
+    const parentTag = normalizeTag(parentTagValue);
+    const targetTag = normalizeTag(targetTagValue);
+    if (!selected || !parentTag || selected.parentTag !== parentTag || !targetTag || selected.tag === targetTag) {
+      return false;
+    }
+    const children = this.getInheritanceChildren(parentTag);
+    const movingIndex = children.indexOf(selected.tag);
+    const targetIndex = children.indexOf(targetTag);
+    if (movingIndex < 0) {
+      this.clearTagOrderTarget();
+      return false;
+    }
+    if (targetIndex < 0 || movingIndex === targetIndex + 1) return false;
+    await this.reorderChildTag(parentTag, selected.tag, targetTag, "after");
+    globalThis.setTimeout(() => this.refreshTagOrderSelectionState(), 0);
+    return true;
+  }
+  async reorderChildTag(parentTagValue, movingTagValue, targetTagValue, placement) {
+    const parentTag = normalizeTag(parentTagValue);
+    const movingTag = normalizeTag(movingTagValue);
+    const targetTag = normalizeTag(targetTagValue);
+    if (!parentTag || !movingTag || !targetTag || movingTag === targetTag) return false;
+    const children = this.getInheritanceChildren(parentTag);
+    const movingIndex = children.indexOf(movingTag);
+    const targetIndex = children.indexOf(targetTag);
+    if (movingIndex < 0 || targetIndex < 0) return false;
+    children.splice(movingIndex, 1);
+    const nextTargetIndex = children.indexOf(targetTag);
+    const insertIndex = placement === "after" ? nextTargetIndex + 1 : nextTargetIndex;
+    children.splice(insertIndex, 0, movingTag);
+    await this.setInheritanceChildren(parentTag, children);
+    return true;
   }
   async moveSelectedNote(direction) {
     const target = this.selectedNoteOrderTarget;
@@ -2202,18 +2472,44 @@ var WorkspaceBehavior = class {
     window.addEventListener("keydown", this.keydownHandler, true);
     document.addEventListener("keydown", this.keydownHandler, true);
     this.pointerdownHandler = (evt) => {
-      if (!this.selectedNoteOrderTarget) return;
+      if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
       if (target && target.closest(".puffs-tag-note-order-button")) return;
+      if (target && target.closest(".puffs-tag-order-button")) return;
       if (target && target.closest(".puffs-tag-scroll-top-button")) return;
       if (target && target.closest(".puffs-tag-scroll-bottom-button")) return;
       if (this.isNoteOrderSearchControl(target)) return;
       if (this.isTagSidebarScrollbarPointer(evt, target)) return;
-      if (evt.button === 2 && target && target.closest(".puffs-tag-note-card")) return;
-      this.clearNoteOrderTarget();
+      if (evt.button === 2 && target) {
+        if (this.selectedNoteOrderTarget && target.closest(".puffs-tag-note-card")) return;
+        if (this.selectedTagOrderTarget && target.closest(".puffs-inheritance-tag-group-row")) return;
+      }
+      this.clearOrderTarget();
     };
     document.addEventListener("pointerdown", this.pointerdownHandler, true);
     this.noteOrderContextMenuHandler = (evt) => {
+      const selectedTag = this.selectedTagOrderTarget;
+      if (selectedTag) {
+        const target2 = evt.target instanceof Element ? evt.target : null;
+        if (!target2 || target2.closest(".puffs-tag-order-button")) return;
+        const rowEl = target2.closest(".puffs-inheritance-tag-group-row");
+        if (!rowEl) return;
+        const parentTag = normalizeTag(rowEl.dataset.puffsTagOrderParent);
+        const tag = normalizeTag(rowEl.dataset.puffsTagOrderTag);
+        if (parentTag === selectedTag.parentTag && tag === selectedTag.tag) return;
+        if (!parentTag || parentTag !== selectedTag.parentTag || !tag) {
+          this.clearTagOrderTarget();
+          return;
+        }
+        evt.preventDefault();
+        evt.stopPropagation();
+        evt.stopImmediatePropagation();
+        this.moveSelectedTagAfter(parentTag, tag).catch((error) => {
+          console.error("[Puffs Tag Enhance] Failed to move selected tag after target:", error);
+          new import_obsidian6.Notice("\u8C03\u6574\u5B50\u6807\u7B7E\u987A\u5E8F\u5931\u8D25");
+        });
+        return;
+      }
       const selected = this.selectedNoteOrderTarget;
       if (!selected) return;
       const target = evt.target instanceof Element ? evt.target : null;
@@ -2825,13 +3121,14 @@ var TagIndexBehavior = class {
     } else if (this.noteOrderTrackingReady && !this.activeTagRename) {
       noteOrderChanged = this.reconcileNoteOrders(nextIndex, changedPath);
     }
-    if (!this.tagBindingTrackingReady && metadataCacheReady) this.tagBindingTrackingReady = true;
     this.tagFileIndex = nextIndex;
+    const tagInheritanceOrderChanged = metadataCacheReady ? this.initializeTagInheritanceOrder() : false;
+    if (!this.tagBindingTrackingReady && metadataCacheReady) this.tagBindingTrackingReady = true;
     this.reconcileExpandedTags();
     const pinnedTagChanged = this.reconcilePinnedTag();
     const noteDisplayNamesChanged = !this.activeTagRename ? this.reconcileNoteDisplayNames(nextIndex) : false;
     const tagBoundNotesChanged = this.tagBindingTrackingReady && !this.activeTagRename ? this.reconcileTagBoundNotes(nextIndex) : false;
-    return noteOrderChanged || pinnedTagChanged || noteDisplayNamesChanged || tagBoundNotesChanged;
+    return noteOrderChanged || tagInheritanceOrderChanged || pinnedTagChanged || noteDisplayNamesChanged || tagBoundNotesChanged;
   }
   reconcileNoteDisplayNames(nextIndex) {
     const nextDisplayNames = {};
@@ -3488,6 +3785,7 @@ var TagPaneBehavior = class {
         }
         return;
       }
+      if (target.closest(".puffs-tag-order-parent-button")) return;
       const noteCardEl = target.closest(".puffs-tag-note-card");
       if (noteCardEl) {
         evt.preventDefault();
@@ -3501,6 +3799,7 @@ var TagPaneBehavior = class {
       evt.preventDefault();
       evt.stopPropagation();
       evt.stopImmediatePropagation();
+      if (this.isTagOrderModeActive(tagEl.dataset.puffsTag)) this.exitTagOrderMode(false);
       this.toggleTagExpansion(tagEl.dataset.puffsTag, view);
     };
     view.containerEl.addEventListener("click", onTagPaneClick, true);
@@ -3884,6 +4183,7 @@ var TagPaneBehavior = class {
         if (scrollEl && scrollEl.isConnected) scrollEl.scrollTop = 0;
       });
     }
+    this.scheduleTagOrderModeVisibilityReconcile();
   }
   syncAutoSingleSearchResult(view, patch, items, queryValue = this.resolvePinnedSearchQuery(
     this.getTagSearchValue(view)
@@ -4055,6 +4355,22 @@ var TagPaneBehavior = class {
     toggleEl.classList.toggle("is-collapsed", !isExpanded);
     toggleEl.setAttribute("aria-hidden", "true");
     (0, import_obsidian9.setIcon)(toggleEl, "right-triangle");
+    const canOrderChildren = !isVirtual && item.hasInheritance && item.inheritanceEnabled;
+    if (canOrderChildren) {
+      toggleEl.classList.add("puffs-tag-order-parent-button");
+      toggleEl.dataset.puffsTagOrderTag = tag;
+      toggleEl.dataset.puffsSurface = "sidebar";
+      toggleEl.dataset.puffsExpanded = String(isExpanded);
+      toggleEl.dataset.puffsHasChildren = "true";
+      toggleEl.removeAttribute("aria-hidden");
+      toggleEl.tabIndex = 0;
+      toggleEl.setAttribute("role", "button");
+      this.bindTagHierarchyControlButton(
+        toggleEl,
+        () => this.toggleTagExpansion(tag, view)
+      );
+      this.syncTagOrderButtonSelection(toggleEl);
+    }
     const innerEl = document.createElement("div");
     innerEl.className = "tree-item-inner";
     const textEl = document.createElement("div");
@@ -4489,7 +4805,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     this.relationMode = relationMode;
     this.parentTag = normalizeTag(subjectTag);
     const related = relationMode === "parents" ? plugin.getInheritanceParents(subjectTag) : plugin.getInheritanceChildren(subjectTag);
-    this.children = plugin.sortTagsByVisibleCount(related);
+    this.children = relationMode === "parents" ? plugin.sortTagsByVisibleCount(related) : [...related];
     this.query = "";
     this.isComposing = false;
     this.isSubmitting = false;
@@ -4551,7 +4867,9 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
   renderChildren() {
     var _a;
     if (!this.childrenListEl) return;
-    this.children = this.plugin.sortTagsByVisibleCount(this.children);
+    if (this.relationMode === "parents") {
+      this.children = this.plugin.sortTagsByVisibleCount(this.children);
+    }
     const existingRows = new Map(
       Array.from(this.childrenListEl.querySelectorAll(".puffs-relation-child-row")).map((row) => [row.dataset.puffsTag, row])
     );
@@ -4599,7 +4917,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
   }
   updateChildren(nextChildren) {
     var _a;
-    this.children = this.plugin.sortTagsByVisibleCount(nextChildren);
+    this.children = this.relationMode === "parents" ? this.plugin.sortTagsByVisibleCount(nextChildren) : [...nextChildren];
     this.renderChildren();
     (_a = this.picker) == null ? void 0 : _a.render();
   }
@@ -4608,13 +4926,13 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     this.isSubmitting = true;
     this.syncMutationState();
     try {
-      const sortedChildren = this.plugin.sortTagsByVisibleCount(nextChildren);
+      const orderedChildren = this.relationMode === "parents" ? this.plugin.sortTagsByVisibleCount(nextChildren) : [...nextChildren];
       if (this.relationMode === "parents") {
-        await this.plugin.setInheritanceParents(this.parentTag, sortedChildren);
+        await this.plugin.setInheritanceParents(this.parentTag, orderedChildren);
       } else {
-        await this.plugin.setInheritanceChildren(this.parentTag, sortedChildren);
+        await this.plugin.setInheritanceChildren(this.parentTag, orderedChildren);
       }
-      this.updateChildren(sortedChildren);
+      this.updateChildren(orderedChildren);
       this.renderExclusionGroups();
       return true;
     } catch (error) {
@@ -5108,7 +5426,7 @@ var NoteRelationModal = class extends import_obsidian10.Modal {
 
 // src/relations.ts
 var createEmptyRelations = () => ({
-  version: 1,
+  version: 2,
   tagInheritance: {
     childrenByParent: {},
     enabledParents: [],
@@ -5123,6 +5441,7 @@ var RelationsBehavior = class {
   normalizeRelationSettings(value = this.settings.relations) {
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const result = createEmptyRelations();
+    result.version = Number(source.version) >= 2 ? 2 : 1;
     const inheritance = source.tagInheritance && typeof source.tagInheritance === "object" ? source.tagInheritance : {};
     const rawChildren = inheritance.childrenByParent;
     if (rawChildren && typeof rawChildren === "object" && !Array.isArray(rawChildren)) {
@@ -5521,7 +5840,7 @@ var RelationsBehavior = class {
         allowInheritedReorder: true
       });
     };
-    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent, tagValue = null) => {
+    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent, tagValue = null, parentTagValue = null, hasTagChildren = false) => {
       if (!count) return;
       const expanded = !!targetPath && containsTarget || !collapsed.has(key);
       const itemEl = containerEl.createDiv({ cls: "tree-item puffs-tag-list-item puffs-inheritance-tag-group" });
@@ -5530,15 +5849,41 @@ var RelationsBehavior = class {
       });
       rowEl.dataset.puffsInheritanceGroup = key;
       if (tagValue) rowEl.dataset.puffsInheritanceTag = tagValue;
+      if (tagValue && parentTagValue) {
+        rowEl.dataset.puffsTagOrderParent = parentTagValue;
+        rowEl.dataset.puffsTagOrderTag = tagValue;
+      }
       rowEl.setAttribute("aria-expanded", String(expanded));
       const toggleEl = rowEl.createDiv({ cls: "tree-item-icon collapse-icon puffs-tag-list-toggle" });
       toggleEl.classList.toggle("is-collapsed", !expanded);
       (0, import_obsidian11.setIcon)(toggleEl, "right-triangle");
+      if (tagValue && parentTagValue) {
+        toggleEl.classList.add("puffs-tag-order-button");
+        toggleEl.dataset.puffsTagOrderParent = parentTagValue;
+        toggleEl.dataset.puffsTagOrderTag = tagValue;
+        toggleEl.dataset.puffsSurface = options.surface || "";
+        toggleEl.dataset.puffsExpanded = String(expanded);
+        toggleEl.dataset.puffsHasChildren = String(hasTagChildren);
+        if (hasTagChildren) toggleEl.classList.add("puffs-tag-order-parent-button");
+        toggleEl.tabIndex = 0;
+        toggleEl.setAttribute("role", "button");
+        this.bindTagHierarchyControlButton(
+          toggleEl,
+          () => {
+            var _a;
+            this.toggleInlineHierarchyBranch(key);
+            (_a = options.rerender) == null ? void 0 : _a.call(options);
+            if (options.surface === "shelf") this.refreshTagViews();
+          }
+        );
+        this.syncTagOrderButtonSelection(toggleEl);
+      }
       rowEl.createDiv({ text: label, cls: "tree-item-inner" });
       const flairOuterEl = rowEl.createDiv({ cls: "tree-item-flair-outer" });
       flairOuterEl.createSpan({ text: String(count), cls: "tree-item-flair tag-pane-tag-count" });
       rowEl.addEventListener("click", () => {
         var _a;
+        if (tagValue && this.isTagOrderModeActive(tagValue)) this.exitTagOrderMode(false);
         this.toggleInlineHierarchyBranch(key);
         (_a = options.rerender) == null ? void 0 : _a.call(options);
         if (options.surface === "shelf") this.refreshTagViews();
@@ -5555,32 +5900,37 @@ var RelationsBehavior = class {
         renderContent(contentEl);
       }
     };
-    const renderNode = (containerEl, node, lineage) => {
+    const renderNode = (containerEl, node, lineage, directParentTag) => {
       const key = `${rootTag}\0tag-group\0${lineage.join("")}`;
+      const renderNodeContent = (contentEl) => {
+        if (!node.children.length) {
+          renderNotes(contentEl, node, true);
+          return;
+        }
+        if (node.paths.length) {
+          renderGroup(
+            contentEl,
+            "\u539F\u751F",
+            node.paths.length,
+            `${key}\0original`,
+            node.paths.includes(targetPath),
+            (originalEl) => renderNotes(originalEl, node, true)
+          );
+        }
+        for (const child of node.children) {
+          renderNode(contentEl, child, [...lineage, child.tag], node.tag);
+        }
+      };
       renderGroup(
         containerEl,
         getTagDisplayName(node.tag),
         node.subtreePaths.length,
         key,
         node.subtreePaths.includes(targetPath),
-        (contentEl) => {
-          if (!node.children.length) {
-            renderNotes(contentEl, node, true);
-            return;
-          }
-          if (node.paths.length) {
-            renderGroup(
-              contentEl,
-              "\u539F\u751F",
-              node.paths.length,
-              `${key}\0original`,
-              node.paths.includes(targetPath),
-              (originalEl) => renderNotes(originalEl, node, true)
-            );
-          }
-          for (const child of node.children) renderNode(contentEl, child, [...lineage, child.tag]);
-        },
-        node.tag
+        renderNodeContent,
+        node.tag,
+        directParentTag,
+        node.children.length > 0
       );
     };
     if (!tree.children.length) {
@@ -5597,7 +5947,8 @@ var RelationsBehavior = class {
         (contentEl) => renderNotes(contentEl, tree, false)
       );
     }
-    for (const child of tree.children) renderNode(hostEl, child, [child.tag]);
+    for (const child of tree.children) renderNode(hostEl, child, [child.tag], tree.tag);
+    this.scheduleTagOrderModeVisibilityReconcile();
   }
   renderInlineTagNoteTree(hostEl, files, tagValue, isVirtual = false, options = {}) {
     hostEl.empty();
@@ -6132,7 +6483,20 @@ var RelationsBehavior = class {
   getInheritanceChildren(tagValue) {
     const tag = normalizeTag(tagValue);
     if (!tag) return [];
-    return [...this.getTagInheritanceSettings().childrenByParent[tag] || []].sort((left, right) => this.compareTagsByVisibleCount(left, right));
+    return [...this.getTagInheritanceSettings().childrenByParent[tag] || []];
+  }
+  initializeTagInheritanceOrder() {
+    const relations = this.settings.relations;
+    if (!relations || Number(relations.version) >= 2) return false;
+    const inheritance = this.getTagInheritanceSettings();
+    const nextChildrenByParent = {};
+    for (const [parent, children] of Object.entries(inheritance.childrenByParent)) {
+      const orderedChildren = this.sortTagsByVisibleCount(children);
+      if (orderedChildren.length > 0) nextChildrenByParent[parent] = orderedChildren;
+    }
+    inheritance.childrenByParent = nextChildrenByParent;
+    relations.version = 2;
+    return true;
   }
   getTagVisibleNoteCount(tagValue) {
     const tag = normalizeTag(tagValue);
@@ -6666,6 +7030,10 @@ var PuffsTagEnhancePlugin = class extends import_obsidian12.Plugin {
     this.inlineHierarchyExpansionVersion = 0;
     this.relationStructureVersion = 0;
     this.selectedNoteOrderTarget = null;
+    this.activeTagOrderParent = null;
+    this.activeTagOrderSurface = "";
+    this.selectedTagOrderTarget = null;
+    this.tagOrderModeVisibilityTimer = null;
     this.noteOrderHotkeyScope = null;
     this.viewPatches = /* @__PURE__ */ new WeakMap();
     this.lastMainLeaf = null;
@@ -6719,6 +7087,10 @@ var PuffsTagEnhancePlugin = class extends import_obsidian12.Plugin {
   onunload() {
     this.isUnloaded = true;
     this.deactivateNoteOrderHotkeyScope();
+    if (this.tagOrderModeVisibilityTimer) {
+      globalThis.clearTimeout(this.tagOrderModeVisibilityTimer);
+      this.tagOrderModeVisibilityTimer = null;
+    }
     this.clearBackupTimer();
     this.clearInitialTagIndexRefreshTimers();
     this.clearTagRenameProtectionTimer();

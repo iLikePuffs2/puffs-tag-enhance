@@ -130,8 +130,8 @@ describe('管理子标签立即保存', () => {
     modal.close = vi.fn();
 
     await modal.addChild('#新');
-    expect(modal.plugin.setInheritanceChildren).toHaveBeenCalledWith('#父', ['#新', '#旧']);
-    expect(modal.children).toEqual(['#新', '#旧']);
+    expect(modal.plugin.setInheritanceChildren).toHaveBeenCalledWith('#父', ['#旧', '#新']);
+    expect(modal.children).toEqual(['#旧', '#新']);
     expect(modal.renderChildren).toHaveBeenCalled();
     expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
     expect(modal.close).not.toHaveBeenCalled();
@@ -158,11 +158,11 @@ describe('管理子标签立即保存', () => {
     await modal.removeChild('#旧');
 
     expect(modal.plugin.setInheritanceChildren.mock.calls).toEqual([
-      ['#父', ['#新', '#旧']],
-      ['#父', ['#另一个', '#新', '#旧']],
-      ['#父', ['#另一个', '#新']],
+      ['#父', ['#旧', '#新']],
+      ['#父', ['#旧', '#新', '#另一个']],
+      ['#父', ['#新', '#另一个']],
     ]);
-    expect(modal.children).toEqual(['#另一个', '#新']);
+    expect(modal.children).toEqual(['#新', '#另一个']);
   });
 
   it('保存失败时保留原列表、恢复控件状态并提示错误', async () => {
