@@ -304,20 +304,38 @@ function replaceFrontmatterTagString(value, oldTag, newTag) {
   return changed ? nextParts.join('') : value;
 }
 
+function dedupeFrontmatterTagValue(value) {
+  const tags = flattenFrontmatterTags(value);
+  const uniqueTags = [];
+  const seenTags = new Set();
+  let hasDuplicate = false;
+
+  for (const tag of tags) {
+    const normalizedTag = normalizeTag(tag);
+    if (!normalizedTag || seenTags.has(normalizedTag)) {
+      if (normalizedTag) hasDuplicate = true;
+      continue;
+    }
+
+    seenTags.add(normalizedTag);
+    uniqueTags.push(tag);
+  }
+
+  return hasDuplicate ? uniqueTags : value;
+}
+
 function replaceFrontmatterTagValue(value, oldTag, newTag) {
+  let nextValue = value;
+
   if (Array.isArray(value)) {
-    return value.map((item) => replaceFrontmatterTagValue(item, oldTag, newTag));
+    nextValue = value.map((item) => replaceFrontmatterTagValue(item, oldTag, newTag));
+  } else if (typeof value === 'string') {
+    nextValue = replaceFrontmatterTagString(value, oldTag, newTag);
+  } else if (value != null && normalizeTag(value) === oldTag) {
+    nextValue = getTagDisplayName(newTag);
   }
 
-  if (typeof value === 'string') {
-    return replaceFrontmatterTagString(value, oldTag, newTag);
-  }
-
-  if (value != null && normalizeTag(value) === oldTag) {
-    return getTagDisplayName(newTag);
-  }
-
-  return value;
+  return dedupeFrontmatterTagValue(nextValue);
 }
 
 function getLeafFilePath(leaf) {
