@@ -779,6 +779,15 @@ export class TagPaneBehavior {
         }
       }
     }
+    const inheritanceControl = this.getUniqueSearchInheritanceControl(
+      items,
+      rawQuery,
+      this.expandedTags,
+      matchingItems
+    );
+    if (inheritanceControl) {
+      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
+    }
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
 
     const signature = JSON.stringify([
@@ -1108,10 +1117,13 @@ export class TagPaneBehavior {
     if (!buttonEl) return;
 
     const items = this.getListModeItems(view);
+    const rawQuery = this.getTagSearchValue(view);
+    const matchingItems = this.getListModeItems(view, this.resolvePinnedSearchQuery(rawQuery), false);
     const inheritanceControl = this.getUniqueSearchInheritanceControl(
       items,
-      this.getTagSearchValue(view),
-      this.expandedTags
+      rawQuery,
+      this.expandedTags,
+      matchingItems
     );
     const shouldExpand = inheritanceControl
       ? inheritanceControl.shouldExpand
@@ -1264,12 +1276,16 @@ export class TagPaneBehavior {
     const items = this.getListModeItems(view);
     if (items.length === 0) return;
 
+    const rawQuery = this.getTagSearchValue(view);
+    const matchingItems = this.getListModeItems(view, this.resolvePinnedSearchQuery(rawQuery), false);
     const inheritanceControl = this.getUniqueSearchInheritanceControl(
       items,
-      this.getTagSearchValue(view),
-      this.expandedTags
+      rawQuery,
+      this.expandedTags,
+      matchingItems
     );
     if (inheritanceControl) {
+      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
       this.setAllTagInheritanceGroupsExpanded(
         inheritanceControl.keys,
         inheritanceControl.shouldExpand

@@ -464,7 +464,7 @@ export class RelationsBehavior {
         allowInheritedReorder: true,
       });
     };
-    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent) => {
+    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent, tagValue = null) => {
       if (!count) return;
       const expanded = (!!targetPath && containsTarget) || !collapsed.has(key);
       const itemEl = containerEl.createDiv({ cls: 'tree-item puffs-tag-list-item puffs-inheritance-tag-group' });
@@ -472,6 +472,7 @@ export class RelationsBehavior {
         cls: 'tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row puffs-inheritance-tag-group-row',
       });
       rowEl.dataset.puffsInheritanceGroup = key;
+      if (tagValue) rowEl.dataset.puffsTag = tagValue;
       rowEl.setAttribute('aria-expanded', String(expanded));
       const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-tag-list-toggle' });
       toggleEl.classList.toggle('is-collapsed', !expanded);
@@ -484,6 +485,13 @@ export class RelationsBehavior {
         options.rerender?.();
         if (options.surface === 'shelf') this.refreshTagViews();
       });
+      if (tagValue) {
+        rowEl.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.showTagContextMenu(event, tagValue);
+        });
+      }
       if (expanded) {
         const contentEl = itemEl.createDiv({ cls: 'tree-item-children puffs-inheritance-tag-group-content' });
         renderContent(contentEl);
@@ -502,7 +510,7 @@ export class RelationsBehavior {
               node.paths.includes(targetPath), (originalEl) => renderNotes(originalEl, node, true));
           }
           for (const child of node.children) renderNode(contentEl, child, [...lineage, child.tag]);
-        });
+        }, node.tag);
     };
 
     if (!tree.children.length) {
@@ -1153,14 +1161,27 @@ export class RelationsBehavior {
     return keys;
   }
 
-  getUniqueSearchInheritanceControl(items, queryValue, expandedTags = this.expandedTags) {
-    if (!String(queryValue || '').trim() || items.length !== 1) return null;
-    const tag = items[0].tag;
-    if (!expandedTags?.has(tag)) return null;
-    const keys = this.getTagInheritanceGroupKeys(tag);
-    if (!keys.length) return null;
+  getUniqueSearchInheritanceControl(
+    items,
+    queryValue,
+    expandedTags = this.expandedTags,
+    matchingItems = items
+  ) {
+    const query = String(queryValue || '').trim();
+    if (query ? matchingItems.length !== 1 : !this.isPinnedOnlyTagResult(queryValue, items)) return null;
+    const tags = Array.from(new Set(items.map((item) => item.tag)));
+    const keys = [];
+    for (const tag of tags) {
+      const tagKeys = this.getTagInheritanceGroupKeys(tag);
+      if (!tagKeys.length) return null;
+      keys.push(...tagKeys);
+    }
     const collapsed = this.collapsedInlineHierarchyBranches || new Set();
-    return { tag, keys, shouldExpand: keys.some((key) => collapsed.has(key)) };
+    return {
+      tags,
+      keys,
+      shouldExpand: tags.some((tag) => !expandedTags?.has(tag)) || keys.some((key) => collapsed.has(key)),
+    };
   }
 
   setAllTagInheritanceGroupsExpanded(keys, expanded) {
@@ -1241,13 +1262,32 @@ export class RelationsBehavior {
       children.push(child);
     }
     const inheritance = this.getTagInheritanceSettings();
-    if (children.length > 0) inheritance.childrenByParent[parent] = children;
-    else {
-      delete inheritance.childrenByParent[parent];
-      inheritance.enabledParents = inheritance.enabledParents.filter((tag) => tag !== parent);
-      delete inheritance.excludedPathsByParent[parent];
+    const previousChildren = inheritance.childrenByParent;
+    const previousEnabled = inheritance.enabledParents;
+    const previousExclusions = inheritance.excludedPathsByParent;
+    const wasParent = Array.isArray(previousChildren[parent]) && previousChildren[parent].length > 0;
+    const stagedChildren = { ...previousChildren };
+    const stagedExclusions = { ...previousExclusions };
+    let stagedEnabled = [...previousEnabled];
+    if (children.length > 0) {
+      stagedChildren[parent] = children;
+      if (!wasParent && !stagedEnabled.includes(parent)) stagedEnabled.push(parent);
+    } else {
+      delete stagedChildren[parent];
+      stagedEnabled = stagedEnabled.filter((tag) => tag !== parent);
+      delete stagedExclusions[parent];
     }
-    await this.saveSettings();
+    inheritance.childrenByParent = stagedChildren;
+    inheritance.enabledParents = stagedEnabled;
+    inheritance.excludedPathsByParent = stagedExclusions;
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      inheritance.childrenByParent = previousChildren;
+      inheritance.enabledParents = previousEnabled;
+      inheritance.excludedPathsByParent = previousExclusions;
+      throw error;
+    }
     this.refreshHierarchyViews();
   }
 
@@ -1275,7 +1315,11 @@ export class RelationsBehavior {
 
     const validParents = new Set(Object.keys(stagedChildren));
     inheritance.childrenByParent = stagedChildren;
-    inheritance.enabledParents = previousEnabled.filter((tag) => validParents.has(tag));
+    const newlyPromotedParents = parents.filter((parent) => !previousChildren[parent]?.length);
+    inheritance.enabledParents = Array.from(new Set([
+      ...previousEnabled.filter((tag) => validParents.has(tag)),
+      ...newlyPromotedParents,
+    ]));
     inheritance.excludedPathsByParent = Object.fromEntries(
       Object.entries(previousExclusions).filter(([parent]) => validParents.has(parent))
     );

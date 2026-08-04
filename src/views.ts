@@ -138,12 +138,18 @@ class PuffsTagShelfView extends ItemView {
           this.plugin.getTagShelfItems(this.plugin.resolvePinnedSearchQuery(this.searchQuery), false),
           this.searchQuery
         );
+        const matchingItems = this.plugin.getTagShelfItems(
+          this.plugin.resolvePinnedSearchQuery(this.searchQuery),
+          false
+        );
         const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
           items,
           this.searchQuery,
-          this.expandedTags
+          this.expandedTags,
+          matchingItems
         );
         if (inheritanceControl) {
+          for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
           this.plugin.setAllTagInheritanceGroupsExpanded(
             inheritanceControl.keys,
             inheritanceControl.shouldExpand
@@ -270,10 +276,15 @@ class PuffsTagShelfView extends ItemView {
       this.plugin.getTagShelfItems(this.plugin.resolvePinnedSearchQuery(this.searchQuery), false),
       this.searchQuery
     );
+    const matchingItems = this.plugin.getTagShelfItems(
+      this.plugin.resolvePinnedSearchQuery(this.searchQuery),
+      false
+    );
     const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
       items,
       this.searchQuery,
-      this.expandedTags
+      this.expandedTags,
+      matchingItems
     );
     const shouldExpand = inheritanceControl
       ? inheritanceControl.shouldExpand
@@ -381,6 +392,15 @@ class PuffsTagShelfView extends ItemView {
       } else {
         this.clearAutoExpandedTag();
       }
+    }
+    const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
+      items,
+      query,
+      this.expandedTags,
+      matchingItems
+    );
+    if (inheritanceControl) {
+      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
     }
     this.updateSummary(items);
     this.listEl.empty();

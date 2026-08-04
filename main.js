@@ -713,12 +713,18 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
           this.plugin.getTagShelfItems(this.plugin.resolvePinnedSearchQuery(this.searchQuery), false),
           this.searchQuery
         );
+        const matchingItems = this.plugin.getTagShelfItems(
+          this.plugin.resolvePinnedSearchQuery(this.searchQuery),
+          false
+        );
         const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
           items,
           this.searchQuery,
-          this.expandedTags
+          this.expandedTags,
+          matchingItems
         );
         if (inheritanceControl) {
+          for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
           this.plugin.setAllTagInheritanceGroupsExpanded(
             inheritanceControl.keys,
             inheritanceControl.shouldExpand
@@ -837,10 +843,15 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
       this.plugin.getTagShelfItems(this.plugin.resolvePinnedSearchQuery(this.searchQuery), false),
       this.searchQuery
     );
+    const matchingItems = this.plugin.getTagShelfItems(
+      this.plugin.resolvePinnedSearchQuery(this.searchQuery),
+      false
+    );
     const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
       items,
       this.searchQuery,
-      this.expandedTags
+      this.expandedTags,
+      matchingItems
     );
     const shouldExpand = inheritanceControl ? inheritanceControl.shouldExpand : items.some((item) => !this.expandedTags.has(item.tag));
     (0, import_obsidian2.setIcon)(this.expandAllButtonEl, shouldExpand ? "chevrons-up-down" : "chevrons-down-up");
@@ -933,6 +944,15 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
       } else {
         this.clearAutoExpandedTag();
       }
+    }
+    const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
+      items,
+      query,
+      this.expandedTags,
+      matchingItems
+    );
+    if (inheritanceControl) {
+      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
     }
     this.updateSummary(items);
     this.listEl.empty();
@@ -3819,6 +3839,15 @@ var TagPaneBehavior = class {
         }
       }
     }
+    const inheritanceControl = this.getUniqueSearchInheritanceControl(
+      items,
+      rawQuery,
+      this.expandedTags,
+      matchingItems
+    );
+    if (inheritanceControl) {
+      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
+    }
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
     const signature = JSON.stringify([
       this.inlineHierarchyExpansionVersion || 0,
@@ -4088,10 +4117,13 @@ var TagPaneBehavior = class {
     const buttonEl = view.collapseOrExpandAllEl;
     if (!buttonEl) return;
     const items = this.getListModeItems(view);
+    const rawQuery = this.getTagSearchValue(view);
+    const matchingItems = this.getListModeItems(view, this.resolvePinnedSearchQuery(rawQuery), false);
     const inheritanceControl = this.getUniqueSearchInheritanceControl(
       items,
-      this.getTagSearchValue(view),
-      this.expandedTags
+      rawQuery,
+      this.expandedTags,
+      matchingItems
     );
     const shouldExpand = inheritanceControl ? inheritanceControl.shouldExpand : this.shouldExpandAllListModeTags(view, items);
     (0, import_obsidian9.setIcon)(buttonEl, shouldExpand ? "chevrons-up-down" : "chevrons-down-up");
@@ -4218,12 +4250,16 @@ var TagPaneBehavior = class {
   toggleAllListModeTags(view) {
     const items = this.getListModeItems(view);
     if (items.length === 0) return;
+    const rawQuery = this.getTagSearchValue(view);
+    const matchingItems = this.getListModeItems(view, this.resolvePinnedSearchQuery(rawQuery), false);
     const inheritanceControl = this.getUniqueSearchInheritanceControl(
       items,
-      this.getTagSearchValue(view),
-      this.expandedTags
+      rawQuery,
+      this.expandedTags,
+      matchingItems
     );
     if (inheritanceControl) {
+      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
       this.setAllTagInheritanceGroupsExpanded(
         inheritanceControl.keys,
         inheritanceControl.shouldExpand
@@ -5457,7 +5493,7 @@ var RelationsBehavior = class {
         allowInheritedReorder: true
       });
     };
-    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent) => {
+    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent, tagValue = null) => {
       if (!count) return;
       const expanded = !!targetPath && containsTarget || !collapsed.has(key);
       const itemEl = containerEl.createDiv({ cls: "tree-item puffs-tag-list-item puffs-inheritance-tag-group" });
@@ -5465,6 +5501,7 @@ var RelationsBehavior = class {
         cls: "tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row puffs-inheritance-tag-group-row"
       });
       rowEl.dataset.puffsInheritanceGroup = key;
+      if (tagValue) rowEl.dataset.puffsTag = tagValue;
       rowEl.setAttribute("aria-expanded", String(expanded));
       const toggleEl = rowEl.createDiv({ cls: "tree-item-icon collapse-icon puffs-tag-list-toggle" });
       toggleEl.classList.toggle("is-collapsed", !expanded);
@@ -5478,6 +5515,13 @@ var RelationsBehavior = class {
         (_a = options.rerender) == null ? void 0 : _a.call(options);
         if (options.surface === "shelf") this.refreshTagViews();
       });
+      if (tagValue) {
+        rowEl.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.showTagContextMenu(event, tagValue);
+        });
+      }
       if (expanded) {
         const contentEl = itemEl.createDiv({ cls: "tree-item-children puffs-inheritance-tag-group-content" });
         renderContent(contentEl);
@@ -5507,7 +5551,8 @@ var RelationsBehavior = class {
             );
           }
           for (const child of node.children) renderNode(contentEl, child, [...lineage, child.tag]);
-        }
+        },
+        node.tag
       );
     };
     if (!tree.children.length) {
@@ -6116,14 +6161,22 @@ var RelationsBehavior = class {
     for (const child of tree.children) visit(child, [child.tag]);
     return keys;
   }
-  getUniqueSearchInheritanceControl(items, queryValue, expandedTags = this.expandedTags) {
-    if (!String(queryValue || "").trim() || items.length !== 1) return null;
-    const tag = items[0].tag;
-    if (!(expandedTags == null ? void 0 : expandedTags.has(tag))) return null;
-    const keys = this.getTagInheritanceGroupKeys(tag);
-    if (!keys.length) return null;
+  getUniqueSearchInheritanceControl(items, queryValue, expandedTags = this.expandedTags, matchingItems = items) {
+    const query = String(queryValue || "").trim();
+    if (query ? matchingItems.length !== 1 : !this.isPinnedOnlyTagResult(queryValue, items)) return null;
+    const tags = Array.from(new Set(items.map((item) => item.tag)));
+    const keys = [];
+    for (const tag of tags) {
+      const tagKeys = this.getTagInheritanceGroupKeys(tag);
+      if (!tagKeys.length) return null;
+      keys.push(...tagKeys);
+    }
     const collapsed = this.collapsedInlineHierarchyBranches || /* @__PURE__ */ new Set();
-    return { tag, keys, shouldExpand: keys.some((key) => collapsed.has(key)) };
+    return {
+      tags,
+      keys,
+      shouldExpand: tags.some((tag) => !(expandedTags == null ? void 0 : expandedTags.has(tag))) || keys.some((key) => collapsed.has(key))
+    };
   }
   setAllTagInheritanceGroupsExpanded(keys, expanded) {
     const collapsed = this.collapsedInlineHierarchyBranches || /* @__PURE__ */ new Set();
@@ -6196,13 +6249,32 @@ var RelationsBehavior = class {
       children.push(child);
     }
     const inheritance = this.getTagInheritanceSettings();
-    if (children.length > 0) inheritance.childrenByParent[parent] = children;
-    else {
-      delete inheritance.childrenByParent[parent];
-      inheritance.enabledParents = inheritance.enabledParents.filter((tag) => tag !== parent);
-      delete inheritance.excludedPathsByParent[parent];
+    const previousChildren = inheritance.childrenByParent;
+    const previousEnabled = inheritance.enabledParents;
+    const previousExclusions = inheritance.excludedPathsByParent;
+    const wasParent = Array.isArray(previousChildren[parent]) && previousChildren[parent].length > 0;
+    const stagedChildren = { ...previousChildren };
+    const stagedExclusions = { ...previousExclusions };
+    let stagedEnabled = [...previousEnabled];
+    if (children.length > 0) {
+      stagedChildren[parent] = children;
+      if (!wasParent && !stagedEnabled.includes(parent)) stagedEnabled.push(parent);
+    } else {
+      delete stagedChildren[parent];
+      stagedEnabled = stagedEnabled.filter((tag) => tag !== parent);
+      delete stagedExclusions[parent];
     }
-    await this.saveSettings();
+    inheritance.childrenByParent = stagedChildren;
+    inheritance.enabledParents = stagedEnabled;
+    inheritance.excludedPathsByParent = stagedExclusions;
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      inheritance.childrenByParent = previousChildren;
+      inheritance.enabledParents = previousEnabled;
+      inheritance.excludedPathsByParent = previousExclusions;
+      throw error;
+    }
     this.refreshHierarchyViews();
   }
   async setInheritanceParents(childValue, parentValues) {
@@ -6226,7 +6298,14 @@ var RelationsBehavior = class {
     }
     const validParents = new Set(Object.keys(stagedChildren));
     inheritance.childrenByParent = stagedChildren;
-    inheritance.enabledParents = previousEnabled.filter((tag) => validParents.has(tag));
+    const newlyPromotedParents = parents.filter((parent) => {
+      var _a;
+      return !((_a = previousChildren[parent]) == null ? void 0 : _a.length);
+    });
+    inheritance.enabledParents = Array.from(/* @__PURE__ */ new Set([
+      ...previousEnabled.filter((tag) => validParents.has(tag)),
+      ...newlyPromotedParents
+    ]));
     inheritance.excludedPathsByParent = Object.fromEntries(
       Object.entries(previousExclusions).filter(([parent]) => validParents.has(parent))
     );
