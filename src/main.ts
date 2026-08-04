@@ -19,6 +19,7 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.expandedTags = new Set();
     this.collapsedInlineHierarchyBranches = new Set();
     this.inlineHierarchyExpansionVersion = 0;
+    this.relationStructureVersion = 0;
     this.selectedNoteOrderTarget = null;
     this.noteOrderHotkeyScope = null;
     this.viewPatches = new WeakMap();

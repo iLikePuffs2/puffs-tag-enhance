@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Notice, TFile } from "obsidian";
 import {
+  ManageParentTagModal,
   TagInheritanceModal,
   getDirectionalInputSide,
   getNoteBindingCandidates,
@@ -175,6 +176,52 @@ describe('管理子标签立即保存', () => {
     expect(modal.renderChildren).not.toHaveBeenCalled();
     expect(modal.renderExclusionGroups).not.toHaveBeenCalled();
     expect(modal.isSubmitting).toBe(false);
+    expect((Notice as any).messages).toEqual(['保存失败']);
+  });
+});
+
+describe('管理父标签立即保存', () => {
+  function createModal(parents = ['#旧父']) {
+    const modal = Object.create(ManageParentTagModal.prototype) as any;
+    modal.parentTag = '#子';
+    modal.relationMode = 'parents';
+    modal.children = parents;
+    modal.isSubmitting = false;
+    modal.inputEl = null;
+    modal.childrenListEl = null;
+    modal.renderChildren = vi.fn();
+    modal.renderExclusionGroups = vi.fn();
+    modal.picker = { render: vi.fn() };
+    modal.plugin = {
+      sortTagsByVisibleCount: (tags: string[]) => [...tags].sort(),
+      setInheritanceParents: vi.fn(async () => undefined),
+    };
+    return modal;
+  }
+
+  it('新增和移除父标签时原子保存并保持弹窗开启', async () => {
+    const modal = createModal();
+    modal.close = vi.fn();
+
+    await modal.addChild('#新父');
+    await modal.removeChild('#旧父');
+
+    expect(modal.plugin.setInheritanceParents.mock.calls).toEqual([
+      ['#子', ['#新父', '#旧父']],
+      ['#子', ['#新父']],
+    ]);
+    expect(modal.children).toEqual(['#新父']);
+    expect(modal.close).not.toHaveBeenCalled();
+  });
+
+  it('保存失败时保留原父标签列表', async () => {
+    const modal = createModal();
+    modal.plugin.setInheritanceParents.mockRejectedValueOnce(new Error('保存失败'));
+    (Notice as any).messages = [];
+
+    await modal.addChild('#新父');
+
+    expect(modal.children).toEqual(['#旧父']);
     expect((Notice as any).messages).toEqual(['保存失败']);
   });
 });

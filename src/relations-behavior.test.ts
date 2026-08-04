@@ -220,6 +220,74 @@ describe('批量父子关系', () => {
     expect(behavior.inlineHierarchyExpansionVersion).toBe(4);
   });
 
+  it('唯一标签搜索的全部收起保留外层标签并递归控制继承分组', () => {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    behavior.collapsedInlineHierarchyBranches = new Set();
+    behavior.inlineHierarchyExpansionVersion = 0;
+    behavior.getTagBrowseData = () => ({
+      inheritanceEnabled: true,
+      inheritanceTree: {
+        tag: '#爱情',
+        paths: ['原生.md'],
+        children: [{
+          tag: '#升温',
+          paths: ['升温.md'],
+          children: [{ tag: '#初识', paths: ['初识.md'], children: [] }],
+        }],
+      },
+    });
+    const expandedTags = new Set(['#爱情']);
+    const items = [{ tag: '#爱情' }];
+
+    const collapseControl = behavior.getUniqueSearchInheritanceControl(items, '爱情', expandedTags);
+    expect(collapseControl.shouldExpand).toBe(false);
+    expect(collapseControl.keys).toHaveLength(4);
+    behavior.setAllTagInheritanceGroupsExpanded(collapseControl.keys, false);
+    expect(expandedTags.has('#爱情')).toBe(true);
+    expect(behavior.collapsedInlineHierarchyBranches.size).toBe(4);
+
+    const expandControl = behavior.getUniqueSearchInheritanceControl(items, '爱情', expandedTags);
+    expect(expandControl.shouldExpand).toBe(true);
+    behavior.setAllTagInheritanceGroupsExpanded(expandControl.keys, true);
+    expect(behavior.collapsedInlineHierarchyBranches.size).toBe(0);
+  });
+
+  it('多个结果、空搜索或外层标签收起时不启用内部批量控制', () => {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    behavior.getTagInheritanceGroupKeys = vi.fn(() => ['分组']);
+    expect(behavior.getUniqueSearchInheritanceControl([{ tag: '#爱情' }], '', new Set(['#爱情']))).toBeNull();
+    expect(behavior.getUniqueSearchInheritanceControl(
+      [{ tag: '#爱情' }, { tag: '#友情' }],
+      '情',
+      new Set(['#爱情', '#友情'])
+    )).toBeNull();
+    expect(behavior.getUniqueSearchInheritanceControl([{ tag: '#爱情' }], '爱情', new Set())).toBeNull();
+  });
+
+  it('原子更新父标签并在保存失败时完整回滚', async () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
+    behavior.settings.relations.tagInheritance = {
+      childrenByParent: { '#旧父': ['#子'], '#保留父': ['#其他'] },
+      enabledParents: ['#旧父', '#保留父'],
+      excludedPathsByParent: { '#旧父': ['旧.md'], '#保留父': ['保留.md'] },
+    };
+    behavior.sortTagsByVisibleCount = (tags: string[]) => [...tags].sort();
+    behavior.refreshHierarchyViews = vi.fn();
+
+    await behavior.setInheritanceParents('#子', ['#新父']);
+    expect(behavior.settings.relations.tagInheritance).toEqual({
+      childrenByParent: { '#保留父': ['#其他'], '#新父': ['#子'] },
+      enabledParents: ['#保留父'],
+      excludedPathsByParent: { '#保留父': ['保留.md'] },
+    });
+    expect(behavior.refreshHierarchyViews).toHaveBeenCalledOnce();
+
+    const snapshot = structuredClone(behavior.settings.relations.tagInheritance);
+    behavior.saveSettings.mockRejectedValueOnce(new Error('失败'));
+    await expect(behavior.setInheritanceParents('#子', ['#旧父'])).rejects.toThrow('失败');
+    expect(behavior.settings.relations.tagInheritance).toEqual(snapshot);
+  });
+
   it('标签内嵌套卡片优先使用标签 alias，再回退到关系 alias 和文件名', () => {
     const behavior = attachFiles(createBehavior({
       childrenByParentPath: { '父.md': ['子.md'] },

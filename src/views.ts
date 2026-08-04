@@ -138,12 +138,25 @@ class PuffsTagShelfView extends ItemView {
           this.plugin.getTagShelfItems(this.plugin.resolvePinnedSearchQuery(this.searchQuery), false),
           this.searchQuery
         );
-        const shouldExpand = items.some((item) => !this.expandedTags.has(item.tag));
-        for (const item of items) {
-          if (shouldExpand) this.expandedTags.add(item.tag);
-          else {
-            this.expandedTags.delete(item.tag);
-            this.plugin.clearInlineHierarchyBranchState(item.tag);
+        const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
+          items,
+          this.searchQuery,
+          this.expandedTags
+        );
+        if (inheritanceControl) {
+          this.plugin.setAllTagInheritanceGroupsExpanded(
+            inheritanceControl.keys,
+            inheritanceControl.shouldExpand
+          );
+          this.plugin.refreshTagViews();
+        } else {
+          const shouldExpand = items.some((item) => !this.expandedTags.has(item.tag));
+          for (const item of items) {
+            if (shouldExpand) this.expandedTags.add(item.tag);
+            else {
+              this.expandedTags.delete(item.tag);
+              this.plugin.clearInlineHierarchyBranchState(item.tag);
+            }
           }
         }
         this.renderTagList();
@@ -257,7 +270,14 @@ class PuffsTagShelfView extends ItemView {
       this.plugin.getTagShelfItems(this.plugin.resolvePinnedSearchQuery(this.searchQuery), false),
       this.searchQuery
     );
-    const shouldExpand = items.some((item) => !this.expandedTags.has(item.tag));
+    const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
+      items,
+      this.searchQuery,
+      this.expandedTags
+    );
+    const shouldExpand = inheritanceControl
+      ? inheritanceControl.shouldExpand
+      : items.some((item) => !this.expandedTags.has(item.tag));
     setIcon(this.expandAllButtonEl, shouldExpand ? 'chevrons-up-down' : 'chevrons-down-up');
     this.expandAllButtonEl.setAttribute('aria-label', shouldExpand ? '全部展开' : '全部收起');
   }

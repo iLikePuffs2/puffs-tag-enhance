@@ -8,7 +8,7 @@ import {
   normalizeTag,
 } from "./models";
 import {
-  AddParentTagModal,
+  ManageParentTagModal,
   NoteRelationModal,
   TagInheritanceModal,
   TagNoteBindingModal,
@@ -931,6 +931,7 @@ export class RelationsBehavior {
   }
 
   refreshHierarchyViews() {
+    this.relationStructureVersion = (this.relationStructureVersion || 0) + 1;
     this.refreshTagViews();
     this.refreshTagShelfViews();
   }
@@ -1134,6 +1135,49 @@ export class RelationsBehavior {
       .map(([parent]) => parent);
   }
 
+  getTagInheritanceGroupKeys(tagValue) {
+    const tag = normalizeTag(tagValue);
+    const browseData = tag && this.getTagBrowseData(tag);
+    const tree = browseData?.inheritanceEnabled ? browseData.inheritanceTree : null;
+    if (!tree || !tree.children.length) return [];
+    const keys = [];
+    const prefix = `${tag}\u0000tag-group\u0000`;
+    if (tree.paths.length) keys.push(`${prefix}original`);
+    const visit = (node, lineage) => {
+      const key = `${prefix}${lineage.join('\u0001')}`;
+      keys.push(key);
+      if (node.children.length && node.paths.length) keys.push(`${key}\u0000original`);
+      for (const child of node.children) visit(child, [...lineage, child.tag]);
+    };
+    for (const child of tree.children) visit(child, [child.tag]);
+    return keys;
+  }
+
+  getUniqueSearchInheritanceControl(items, queryValue, expandedTags = this.expandedTags) {
+    if (!String(queryValue || '').trim() || items.length !== 1) return null;
+    const tag = items[0].tag;
+    if (!expandedTags?.has(tag)) return null;
+    const keys = this.getTagInheritanceGroupKeys(tag);
+    if (!keys.length) return null;
+    const collapsed = this.collapsedInlineHierarchyBranches || new Set();
+    return { tag, keys, shouldExpand: keys.some((key) => collapsed.has(key)) };
+  }
+
+  setAllTagInheritanceGroupsExpanded(keys, expanded) {
+    const collapsed = this.collapsedInlineHierarchyBranches || new Set();
+    this.collapsedInlineHierarchyBranches = collapsed;
+    let changed = false;
+    for (const key of keys || []) {
+      if (expanded) changed = collapsed.delete(key) || changed;
+      else if (!collapsed.has(key)) {
+        collapsed.add(key);
+        changed = true;
+      }
+    }
+    if (changed) this.inlineHierarchyExpansionVersion = (this.inlineHierarchyExpansionVersion || 0) + 1;
+    return changed;
+  }
+
   getLogicalTagSet() {
     const result = new Set(this.tagFileIndex.keys());
     for (const [parent, children] of Object.entries(this.getTagInheritanceSettings().childrenByParent)) {
@@ -1204,8 +1248,46 @@ export class RelationsBehavior {
       delete inheritance.excludedPathsByParent[parent];
     }
     await this.saveSettings();
-    this.refreshTagViews();
-    this.refreshTagShelfViews();
+    this.refreshHierarchyViews();
+  }
+
+  async setInheritanceParents(childValue, parentValues) {
+    const child = normalizeTag(childValue);
+    if (!child || isNestedTag(child)) throw new Error('子标签无效');
+    const parents = Array.from(new Set((parentValues || []).map(normalizeTag).filter(Boolean)));
+    if (parents.some((parent) => isNestedTag(parent) || parent === child)) throw new Error('父标签无效');
+
+    const inheritance = this.getTagInheritanceSettings();
+    const previousChildren = inheritance.childrenByParent;
+    const previousEnabled = inheritance.enabledParents;
+    const previousExclusions = inheritance.excludedPathsByParent;
+    const stagedChildren = Object.fromEntries(Object.entries(previousChildren).map(([parent, children]) => [
+      parent,
+      children.filter((tag) => tag !== child),
+    ]).filter(([, children]) => children.length));
+
+    for (const parent of parents) {
+      if (wouldCreateDirectedCycle(stagedChildren, parent, child)) {
+        throw new Error(`不能建立循环继承：${getTagDisplayName(parent)} → ${getTagDisplayName(child)}`);
+      }
+      stagedChildren[parent] = this.sortTagsByVisibleCount([...(stagedChildren[parent] || []), child]);
+    }
+
+    const validParents = new Set(Object.keys(stagedChildren));
+    inheritance.childrenByParent = stagedChildren;
+    inheritance.enabledParents = previousEnabled.filter((tag) => validParents.has(tag));
+    inheritance.excludedPathsByParent = Object.fromEntries(
+      Object.entries(previousExclusions).filter(([parent]) => validParents.has(parent))
+    );
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      inheritance.childrenByParent = previousChildren;
+      inheritance.enabledParents = previousEnabled;
+      inheritance.excludedPathsByParent = previousExclusions;
+      throw error;
+    }
+    this.refreshHierarchyViews();
   }
 
   async addInheritanceParent(childValue, parentValue) {
@@ -1500,8 +1582,8 @@ export class RelationsBehavior {
     if (!tag) return false;
     const menu = new Menu();
     menu.addItem((item) => item.setTitle('修改标签').setIcon('pencil').onClick(() => this.openRenameTagModal(tag)));
-    menu.addItem((item) => item.setTitle('添加父标签').setIcon('corner-left-up').onClick(() => {
-      new AddParentTagModal(this.app, this, tag).open();
+    menu.addItem((item) => item.setTitle('管理父标签').setIcon('corner-left-up').onClick(() => {
+      new ManageParentTagModal(this.app, this, tag).open();
     }));
     menu.addItem((item) => item.setTitle('管理子标签').setIcon('git-fork').onClick(() => {
       new TagInheritanceModal(this.app, this, tag).open();

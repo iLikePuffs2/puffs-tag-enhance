@@ -783,6 +783,7 @@ export class TagPaneBehavior {
 
     const signature = JSON.stringify([
       this.inlineHierarchyExpansionVersion || 0,
+      this.relationStructureVersion || 0,
       patch?.noteCardSearchState?.target?.key || '',
       items.map((item) => [
         item.tag,
@@ -1107,7 +1108,14 @@ export class TagPaneBehavior {
     if (!buttonEl) return;
 
     const items = this.getListModeItems(view);
-    const shouldExpand = this.shouldExpandAllListModeTags(view, items);
+    const inheritanceControl = this.getUniqueSearchInheritanceControl(
+      items,
+      this.getTagSearchValue(view),
+      this.expandedTags
+    );
+    const shouldExpand = inheritanceControl
+      ? inheritanceControl.shouldExpand
+      : this.shouldExpandAllListModeTags(view, items);
 
     setIcon(buttonEl, shouldExpand ? 'chevrons-up-down' : 'chevrons-down-up');
     buttonEl.setAttribute('aria-label', shouldExpand ? '全部展开' : '全部收起');
@@ -1255,6 +1263,21 @@ export class TagPaneBehavior {
   toggleAllListModeTags(view) {
     const items = this.getListModeItems(view);
     if (items.length === 0) return;
+
+    const inheritanceControl = this.getUniqueSearchInheritanceControl(
+      items,
+      this.getTagSearchValue(view),
+      this.expandedTags
+    );
+    if (inheritanceControl) {
+      this.setAllTagInheritanceGroupsExpanded(
+        inheritanceControl.keys,
+        inheritanceControl.shouldExpand
+      );
+      this.refreshTagViews();
+      this.refreshTagShelfViews();
+      return;
+    }
 
     const shouldExpand = this.shouldExpandAllListModeTags(view, items);
     for (const item of items) {

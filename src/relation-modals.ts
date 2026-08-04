@@ -158,78 +158,24 @@ function createTagCandidatePicker(options) {
   return { render, resultsEl };
 }
 
-class AddParentTagModal extends Modal {
-  constructor(app, plugin, childTag) {
+class RemoveTagRelationConfirmModal extends Modal {
+  constructor(app, subjectTag, relatedTag, relationMode, onConfirm) {
     super(app);
-    this.plugin = plugin;
-    this.childTag = normalizeTag(childTag);
-    this.selectedParent = null;
-    this.isComposing = false;
-    this.isSubmitting = false;
-  }
-
-  onOpen() {
-    this.modalEl.classList.add('puffs-relation-modal', 'puffs-tag-relation-modal');
-    this.contentEl.empty();
-    this.contentEl.createDiv({
-      text: `为 ${getTagDisplayName(this.childTag)} 添加父标签`,
-      cls: 'puffs-relation-modal-title puffs-tag-rename-title',
-    });
-    const inputEl = this.contentEl.createEl('input', { type: 'search' });
-    inputEl.className = 'puffs-relation-input';
-    const submit = async () => {
-      if (!this.selectedParent || this.isSubmitting) return;
-      this.isSubmitting = true;
-      try {
-        await this.plugin.addInheritanceParent(this.childTag, this.selectedParent);
-        this.close();
-      } catch (error) {
-        new Notice(error && error.message ? error.message : '添加父标签失败');
-      } finally {
-        this.isSubmitting = false;
-      }
-    };
-    const existingParents = new Set(this.plugin.getInheritanceParents(this.childTag));
-    createTagCandidatePicker({
-      hostEl: this.contentEl,
-      inputEl,
-      getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
-        tag !== this.childTag &&
-        !existingParents.has(tag) &&
-        !this.plugin.wouldCreateTagInheritanceCycle(tag, this.childTag) &&
-        tag !== this.selectedParent
-      )),
-      onInput: () => { this.selectedParent = null; },
-      onSelect: (tag) => {
-        this.selectedParent = tag;
-        inputEl.value = getTagDisplayName(tag);
-      },
-      setComposing: (value) => { this.isComposing = value; },
-    });
-    this.modalEl.addEventListener('keydown', (event) => {
-      if (getNoteRelationEnterAction(event, this.isComposing) !== 'submit') return;
-      event.preventDefault();
-      event.stopPropagation();
-      void submit();
-    });
-    window.setTimeout(() => inputEl.focus(), 0);
-  }
-}
-
-class RemoveChildTagConfirmModal extends Modal {
-  constructor(app, parentTag, childTag, onConfirm) {
-    super(app);
-    this.parentTag = parentTag;
-    this.childTag = childTag;
+    this.subjectTag = subjectTag;
+    this.relatedTag = relatedTag;
+    this.relationMode = relationMode;
     this.onConfirm = onConfirm;
   }
 
   onOpen() {
     this.modalEl.classList.add('puffs-relation-confirm-modal');
     this.contentEl.empty();
-    this.contentEl.createDiv({ text: '移除子标签', cls: 'puffs-relation-modal-title' });
+    const relationName = this.relationMode === 'parents' ? '父标签' : '子标签';
+    this.contentEl.createDiv({ text: `移除${relationName}`, cls: 'puffs-relation-modal-title' });
     this.contentEl.createDiv({
-      text: `确定要从「${getTagDisplayName(this.parentTag)}」的子标签中移除「${getTagDisplayName(this.childTag)}」吗？此操作只解除继承关系，不会删除标签或笔记。`,
+      text: this.relationMode === 'parents'
+        ? `确定要从「${getTagDisplayName(this.subjectTag)}」的父标签中移除「${getTagDisplayName(this.relatedTag)}」吗？此操作只解除继承关系，不会删除标签或笔记。`
+        : `确定要从「${getTagDisplayName(this.subjectTag)}」的子标签中移除「${getTagDisplayName(this.relatedTag)}」吗？此操作只解除继承关系，不会删除标签或笔记。`,
       cls: 'puffs-relation-confirm-message',
     });
     const footerEl = this.contentEl.createDiv({ cls: 'puffs-relation-modal-footer' });
@@ -247,11 +193,15 @@ class RemoveChildTagConfirmModal extends Modal {
 }
 
 class TagInheritanceModal extends Modal {
-  constructor(app, plugin, parentTag) {
+  constructor(app, plugin, subjectTag, relationMode = 'children') {
     super(app);
     this.plugin = plugin;
-    this.parentTag = normalizeTag(parentTag);
-    this.children = plugin.sortTagsByVisibleCount(plugin.getInheritanceChildren(parentTag));
+    this.relationMode = relationMode;
+    this.parentTag = normalizeTag(subjectTag);
+    const related = relationMode === 'parents'
+      ? plugin.getInheritanceParents(subjectTag)
+      : plugin.getInheritanceChildren(subjectTag);
+    this.children = plugin.sortTagsByVisibleCount(related);
     this.query = '';
     this.isComposing = false;
     this.isSubmitting = false;
@@ -270,8 +220,9 @@ class TagInheritanceModal extends Modal {
 
   buildLayout() {
     this.contentEl.empty();
+    const relationName = this.relationMode === 'parents' ? '父标签' : '子标签';
     this.contentEl.createDiv({
-      text: `管理 ${getTagDisplayName(this.parentTag)} 的子标签`,
+      text: `管理 ${getTagDisplayName(this.parentTag)} 的${relationName}`,
       cls: 'puffs-relation-modal-title puffs-tag-rename-title',
     });
     this.searchHostEl = this.contentEl.createDiv({ cls: 'puffs-relation-tag-search' });
@@ -283,7 +234,10 @@ class TagInheritanceModal extends Modal {
       getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
         tag !== this.parentTag &&
         !this.children.includes(tag) &&
-        !this.plugin.wouldCreateTagInheritanceCycle(this.parentTag, tag)
+        !this.plugin.wouldCreateTagInheritanceCycle(
+          this.relationMode === 'parents' ? tag : this.parentTag,
+          this.relationMode === 'parents' ? this.parentTag : tag
+        )
       )),
       onInput: (value) => { this.query = value; },
       onSelect: (tag) => {
@@ -293,9 +247,11 @@ class TagInheritanceModal extends Modal {
     });
 
     this.childrenListEl = this.contentEl.createDiv({ cls: 'puffs-relation-child-list' });
-    this.exclusionsSectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-exclusions' });
-    this.exclusionsSectionEl.createEl('h4', { text: '已排除笔记' });
-    this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: 'puffs-relation-exclusion-groups' });
+    if (this.relationMode === 'children') {
+      this.exclusionsSectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-exclusions' });
+      this.exclusionsSectionEl.createEl('h4', { text: '已排除笔记' });
+      this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: 'puffs-relation-exclusion-groups' });
+    }
     this.renderChildren();
     this.renderExclusionGroups();
 
@@ -332,7 +288,7 @@ class TagInheritanceModal extends Modal {
         });
         setIcon(removeButton, 'x');
         removeButton.addEventListener('click', () => {
-          new RemoveChildTagConfirmModal(this.app, this.parentTag, child, () => {
+          new RemoveTagRelationConfirmModal(this.app, this.parentTag, child, this.relationMode, () => {
             void this.removeChild(child);
           }).open();
         });
@@ -344,7 +300,10 @@ class TagInheritanceModal extends Modal {
     }
     for (const rowEl of existingRows.values()) rowEl.remove();
     if (!this.children.length) {
-      this.childrenListEl.createDiv({ text: '暂无子标签', cls: 'puffs-relation-empty' });
+      this.childrenListEl.createDiv({
+        text: this.relationMode === 'parents' ? '暂无父标签' : '暂无子标签',
+        cls: 'puffs-relation-empty',
+      });
     }
     this.syncMutationState();
   }
@@ -368,7 +327,11 @@ class TagInheritanceModal extends Modal {
     this.syncMutationState();
     try {
       const sortedChildren = this.plugin.sortTagsByVisibleCount(nextChildren);
-      await this.plugin.setInheritanceChildren(this.parentTag, sortedChildren);
+      if (this.relationMode === 'parents') {
+        await this.plugin.setInheritanceParents(this.parentTag, sortedChildren);
+      } else {
+        await this.plugin.setInheritanceChildren(this.parentTag, sortedChildren);
+      }
       this.updateChildren(sortedChildren);
       this.renderExclusionGroups();
       return true;
@@ -455,6 +418,12 @@ class TagInheritanceModal extends Modal {
       'is-hidden',
       !this.exclusionGroupsEl.querySelector('.puffs-relation-manage-row')
     );
+  }
+}
+
+class ManageParentTagModal extends TagInheritanceModal {
+  constructor(app, plugin, childTag) {
+    super(app, plugin, childTag, 'parents');
   }
 }
 
@@ -872,7 +841,7 @@ class NoteRelationModal extends Modal {
 }
 
 export {
-  AddParentTagModal,
+  ManageParentTagModal,
   NoteRelationModal,
   TagNoteBindingModal,
   TagInheritanceModal,
