@@ -782,15 +782,6 @@ export class TagPaneBehavior {
         }
       }
     }
-    const inheritanceControl = this.getUniqueSearchInheritanceControl(
-      items,
-      rawQuery,
-      this.expandedTags,
-      matchingItems
-    );
-    if (inheritanceControl) {
-      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
-    }
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
 
     const signature = JSON.stringify([

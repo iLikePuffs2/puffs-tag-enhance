@@ -945,15 +945,6 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
         this.clearAutoExpandedTag();
       }
     }
-    const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
-      items,
-      query,
-      this.expandedTags,
-      matchingItems
-    );
-    if (inheritanceControl) {
-      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
-    }
     this.updateSummary(items);
     this.listEl.empty();
     if (items.length === 0) {
@@ -4135,15 +4126,6 @@ var TagPaneBehavior = class {
           this.clearAutoExpandedTag(patch);
         }
       }
-    }
-    const inheritanceControl = this.getUniqueSearchInheritanceControl(
-      items,
-      rawQuery,
-      this.expandedTags,
-      matchingItems
-    );
-    if (inheritanceControl) {
-      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
     }
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
     const signature = JSON.stringify([

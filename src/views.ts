@@ -393,15 +393,6 @@ class PuffsTagShelfView extends ItemView {
         this.clearAutoExpandedTag();
       }
     }
-    const inheritanceControl = this.plugin.getUniqueSearchInheritanceControl(
-      items,
-      query,
-      this.expandedTags,
-      matchingItems
-    );
-    if (inheritanceControl) {
-      for (const tag of inheritanceControl.tags) this.expandedTags.add(tag);
-    }
     this.updateSummary(items);
     this.listEl.empty();
 

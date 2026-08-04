@@ -345,6 +345,31 @@ describe('批量父子关系', () => {
     expect(control.shouldExpand).toBe(false);
   });
 
+  it('唯一搜索或固定标签首次自动展开后允许手动收起顶层标签', () => {
+    const behavior = Object.create(TagPaneBehavior.prototype) as any;
+    behavior.expandedTags = new Set<string>();
+    behavior.isPinnedOnlyTagResult = vi.fn(() => true);
+    behavior.clearInlineHierarchyBranchState = vi.fn();
+    const patch = {
+      autoExpandedTag: null,
+      autoExpandedWasAlreadyExpanded: false,
+    };
+
+    behavior.syncAutoSingleSearchResult({}, patch, [{ tag: '#唯一' }], '唯一');
+    expect(behavior.expandedTags.has('#唯一')).toBe(true);
+
+    behavior.expandedTags.delete('#唯一');
+    behavior.syncAutoSingleSearchResult({}, patch, [{ tag: '#唯一' }], '唯一');
+    expect(behavior.expandedTags.has('#唯一')).toBe(false);
+
+    patch.autoExpandedTag = null;
+    behavior.syncAutoSingleSearchResult({}, patch, [{ tag: '#固定' }], '');
+    expect(behavior.expandedTags.has('#固定')).toBe(true);
+    behavior.expandedTags.delete('#固定');
+    behavior.syncAutoSingleSearchResult({}, patch, [{ tag: '#固定' }], '');
+    expect(behavior.expandedTags.has('#固定')).toBe(false);
+  });
+
   it('原子更新父标签并在保存失败时完整回滚', async () => {
     const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
     behavior.settings.relations.tagInheritance = {
