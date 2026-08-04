@@ -226,6 +226,31 @@ describe('管理父标签立即保存', () => {
   });
 });
 
+describe('固定子标签按钮', () => {
+  it('点击锁按钮立即切换固定状态并刷新弹窗内容', async () => {
+    const modal = Object.create(TagInheritanceModal.prototype) as any;
+    modal.isSubmitting = false;
+    modal.childrenListEl = null;
+    modal.renderChildren = vi.fn();
+    modal.renderExclusionGroups = vi.fn();
+    modal.picker = { render: vi.fn() };
+    modal.syncMutationState = vi.fn();
+    modal.plugin = {
+      isFixedTagEdge: vi.fn(() => false),
+      setFixedTagRelation: vi.fn(async () => undefined),
+    };
+    const button = { dataset: { puffsParentTag: '#秘境', puffsChildTag: '#秘境-开始' } };
+
+    await modal.toggleFixedRelation(button);
+
+    expect(modal.plugin.setFixedTagRelation).toHaveBeenCalledWith('#秘境', '#秘境-开始', true);
+    expect(modal.renderChildren).toHaveBeenCalledOnce();
+    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
+    expect(modal.picker.render).toHaveBeenCalledOnce();
+    expect(modal.isSubmitting).toBe(false);
+  });
+});
+
 describe('新增父子笔记弹窗 Enter 保存校验', () => {
   it('候选存在时优先选择候选，否则执行保存', () => {
     expect(getNoteRelationEnterAction({ key: 'Enter' }, false, true)).toBe('select-candidate');

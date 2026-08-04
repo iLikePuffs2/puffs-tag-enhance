@@ -30,11 +30,12 @@ import {
 } from "./relation-utils";
 
 const createEmptyRelations = () => ({
-  version: 2,
+  version: 3,
   tagInheritance: {
     childrenByParent: {},
     enabledParents: [],
     excludedPathsByParent: {},
+    fixedParentByChild: {},
   },
   noteHierarchy: {
     childrenByParentPath: {},
@@ -48,7 +49,7 @@ export class RelationsBehavior {
   normalizeRelationSettings(value = this.settings.relations) {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const result = createEmptyRelations();
-    result.version = Number(source.version) >= 2 ? 2 : 1;
+    result.version = Number(source.version) >= 3 ? 3 : Number(source.version) >= 2 ? 2 : 1;
     const inheritance = source.tagInheritance && typeof source.tagInheritance === 'object'
       ? source.tagInheritance
       : {};
@@ -86,6 +87,17 @@ export class RelationsBehavior {
       }
     }
 
+    const rawFixedParents = inheritance.fixedParentByChild;
+    if (rawFixedParents && typeof rawFixedParents === 'object' && !Array.isArray(rawFixedParents)) {
+      for (const [rawChild, rawParent] of Object.entries(rawFixedParents)) {
+        const child = normalizeTag(rawChild);
+        const parent = normalizeTag(rawParent);
+        if (child && parent && !isNestedTag(child) && !isNestedTag(parent)) {
+          result.tagInheritance.fixedParentByChild[child] = parent;
+        }
+      }
+    }
+
     const hierarchy = source.noteHierarchy && typeof source.noteHierarchy === 'object'
       ? source.noteHierarchy
       : {};
@@ -116,12 +128,119 @@ export class RelationsBehavior {
 
     this.settings.relations = result;
     this.reconcileRelationCycles();
+    this.reconcileFixedTagRelations();
     return result;
   }
 
   getTagInheritanceSettings() {
     if (!this.settings.relations) this.normalizeRelationSettings();
-    return this.settings.relations.tagInheritance;
+    const inheritance = this.settings.relations.tagInheritance;
+    if (!inheritance.fixedParentByChild || typeof inheritance.fixedParentByChild !== 'object') {
+      inheritance.fixedParentByChild = {};
+    }
+    return inheritance;
+  }
+
+  parseFixedChildTag(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag || isNestedTag(tag)) return null;
+    const name = getTagDisplayName(tag);
+    const parts = name.split('-');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+    return { parent: normalizeTag(parts[0]), displayName: parts[1] };
+  }
+
+  isFixedTagRelationEligible(parentValue, childValue) {
+    const parent = normalizeTag(parentValue);
+    const child = normalizeTag(childValue);
+    const parsed = this.parseFixedChildTag(child);
+    if (!parent || !child || !parsed || parsed.parent !== parent) return false;
+    const parents = this.getInheritanceParents(child);
+    return parents.length === 1 && parents[0] === parent;
+  }
+
+  getFixedParent(childValue) {
+    const child = normalizeTag(childValue);
+    if (!child) return null;
+    return normalizeTag(this.getTagInheritanceSettings().fixedParentByChild[child]);
+  }
+
+  isFixedChild(tagValue) {
+    return !!this.getFixedParent(tagValue);
+  }
+
+  isFixedTagEdge(parentValue, childValue) {
+    const parent = normalizeTag(parentValue);
+    const child = normalizeTag(childValue);
+    return !!parent && !!child && this.getFixedParent(child) === parent;
+  }
+
+  getFixedChildDisplayName(tagValue) {
+    return this.parseFixedChildTag(tagValue)?.displayName || getTagDisplayName(tagValue);
+  }
+
+  getTopLevelFixedParent(tagValue) {
+    let tag = normalizeTag(tagValue);
+    if (!tag) return null;
+    const visited = new Set();
+    let parent = this.getFixedParent(tag);
+    while (parent && !visited.has(tag)) {
+      visited.add(tag);
+      tag = parent;
+      parent = this.getFixedParent(tag);
+    }
+    return tag;
+  }
+
+  filterInheritanceTreeByTags(tree, includedTags) {
+    if (!tree) return null;
+    const allowed = new Set(Array.from(includedTags || []).map(normalizeTag).filter(Boolean));
+    const visit = (node, isRoot = false) => {
+      const children = (node.children || []).map((child) => visit(child)).filter(Boolean);
+      if (!isRoot && !allowed.has(node.tag) && children.length === 0) return null;
+      const paths = isRoot || !allowed.has(node.tag) ? [] : [...node.paths];
+      const subtreePaths = Array.from(new Set([
+        ...paths,
+        ...children.flatMap((child) => child.subtreePaths),
+      ]));
+      return { ...node, paths, children, subtreePaths };
+    };
+    return visit(tree, true);
+  }
+
+  createFixedSearchBrowseData(tagValue, includedTags) {
+    const browseData = this.getTagBrowseData(tagValue);
+    const inheritanceTree = this.filterInheritanceTreeByTags(browseData.inheritanceTree, includedTags);
+    const paths = inheritanceTree?.subtreePaths || [];
+    const files = paths
+      .map((path) => this.app.vault.getAbstractFileByPath(path))
+      .filter((file) => file instanceof TFile && file.extension === 'md');
+    return {
+      ...browseData,
+      exactFiles: [],
+      inheritedFiles: files,
+      files,
+      inheritanceTree,
+      exactCount: 0,
+      inheritedCount: files.length,
+      hasActiveInheritance: !!inheritanceTree?.children.length,
+    };
+  }
+
+  reconcileFixedTagRelations() {
+    const inheritance = this.settings.relations?.tagInheritance;
+    if (!inheritance) return false;
+    const previous = inheritance.fixedParentByChild || {};
+    const next = {};
+    for (const [rawChild, rawParent] of Object.entries(previous)) {
+      const child = normalizeTag(rawChild);
+      const parent = normalizeTag(rawParent);
+      if (!child || !parent || !this.isFixedTagRelationEligible(parent, child)) continue;
+      next[child] = parent;
+    }
+    const changed = JSON.stringify(previous) !== JSON.stringify(next);
+    inheritance.fixedParentByChild = next;
+    return changed;
   }
 
   getNoteHierarchySettings() {
@@ -577,7 +696,10 @@ export class RelationsBehavior {
             renderNode(contentEl, child, [...lineage, child.tag], node.tag);
           }
         };
-      renderGroup(containerEl, getTagDisplayName(node.tag), node.subtreePaths.length, key,
+      const label = this.isFixedTagEdge(directParentTag, node.tag)
+        ? this.getFixedChildDisplayName(node.tag)
+        : getTagDisplayName(node.tag);
+      renderGroup(containerEl, label, node.subtreePaths.length, key,
         node.subtreePaths.includes(targetPath), renderNodeContent, node.tag, directParentTag, node.children.length > 0);
     };
 
@@ -1127,7 +1249,8 @@ export class RelationsBehavior {
     const inheritanceRootTag = normalizeTag(cardEl.dataset.puffsInheritanceRootTag || tag);
     const menu = new Menu();
     const inherited = cardEl.dataset.puffsInherited === 'true' || (tag && this.isInheritedFileForTag(tag, path));
-    if (inherited) {
+    const fixedInherited = inheritanceRootTag && this.isFixedInheritedFileForTag(inheritanceRootTag, path);
+    if (inherited && !fixedInherited) {
       menu.addItem((item) => item
         .setTitle(`不在 ${getTagDisplayName(inheritanceRootTag)} 中继承显示`)
         .setIcon('eye-off')
@@ -1143,7 +1266,7 @@ export class RelationsBehavior {
         window.setTimeout(() => this.showNoteDisplayNameOptions(position, tag, file, aliases), 0);
       }));
     }
-    if (inherited || aliases.length > 0) menu.addSeparator();
+    if ((inherited && !fixedInherited) || aliases.length > 0) menu.addSeparator();
     menu.addItem((item) => item.setTitle('添加父笔记').setIcon('corner-left-up').onClick(() => {
       new NoteRelationModal(this.app, this, path, 'parent').open();
     }));
@@ -1167,32 +1290,29 @@ export class RelationsBehavior {
 
   initializeTagInheritanceOrder() {
     const relations = this.settings.relations;
-    if (!relations || Number(relations.version) >= 2) return false;
+    if (!relations || Number(relations.version) >= 3) return false;
 
     const inheritance = this.getTagInheritanceSettings();
-    const nextChildrenByParent = {};
-    for (const [parent, children] of Object.entries(inheritance.childrenByParent)) {
-      const orderedChildren = this.sortTagsByVisibleCount(children);
-      if (orderedChildren.length > 0) nextChildrenByParent[parent] = orderedChildren;
+    if (Number(relations.version) < 2) {
+      const nextChildrenByParent = {};
+      for (const [parent, children] of Object.entries(inheritance.childrenByParent)) {
+        const orderedChildren = this.sortTagsByVisibleCount(children);
+        if (orderedChildren.length > 0) nextChildrenByParent[parent] = orderedChildren;
+      }
+      inheritance.childrenByParent = nextChildrenByParent;
     }
-    inheritance.childrenByParent = nextChildrenByParent;
-    relations.version = 2;
+    if (!inheritance.fixedParentByChild || typeof inheritance.fixedParentByChild !== 'object') {
+      inheritance.fixedParentByChild = {};
+    }
+    this.reconcileFixedTagRelations();
+    relations.version = 3;
     return true;
   }
 
   getTagVisibleNoteCount(tagValue) {
     const tag = normalizeTag(tagValue);
     if (!tag) return 0;
-    const paths = new Set((this.tagFileIndex.get(tag) || []).map((file) => file.path));
-    if (!this.isTagInheritanceEnabled(tag)) return paths.size;
-    const excluded = new Set(this.getTagInheritanceSettings().excludedPathsByParent[tag] || []);
-    const adjacency = this.getTagInheritanceSettings().childrenByParent;
-    for (const descendant of collectDirectedDescendants(adjacency, tag)) {
-      for (const file of this.tagFileIndex.get(descendant) || []) {
-        if (!excluded.has(file.path)) paths.add(file.path);
-      }
-    }
-    return paths.size;
+    return this.getTagBrowseData(tag).files.length;
   }
 
   compareTagsByVisibleCount(leftValue, rightValue) {
@@ -1218,6 +1338,38 @@ export class RelationsBehavior {
     return result;
   }
 
+  getFixedTagInheritanceAdjacency() {
+    const result = {};
+    for (const [parent, children] of Object.entries(this.getTagInheritanceSettings().childrenByParent)) {
+      const fixedChildren = children.filter((child) => this.isFixedTagEdge(parent, child));
+      if (fixedChildren.length) result[parent] = fixedChildren;
+    }
+    return result;
+  }
+
+  getActiveTagInheritanceAdjacency(tagValue) {
+    return this.isTagInheritanceEnabled(tagValue)
+      ? this.getSortedTagInheritanceAdjacency()
+      : this.getFixedTagInheritanceAdjacency();
+  }
+
+  hasFreeInheritanceBranch(tagValue) {
+    const root = normalizeTag(tagValue);
+    if (!root) return false;
+    const adjacency = this.getSortedTagInheritanceAdjacency();
+    const visit = (parent, branch) => {
+      if (branch.has(parent)) return false;
+      const nextBranch = new Set(branch);
+      nextBranch.add(parent);
+      for (const child of adjacency[parent] || []) {
+        if (!this.isFixedTagEdge(parent, child)) return true;
+        if (visit(child, nextBranch)) return true;
+      }
+      return false;
+    };
+    return visit(root, new Set());
+  }
+
   getInheritanceParents(tagValue) {
     const tag = normalizeTag(tagValue);
     if (!tag) return [];
@@ -1229,7 +1381,9 @@ export class RelationsBehavior {
   getTagInheritanceGroupKeys(tagValue) {
     const tag = normalizeTag(tagValue);
     const browseData = tag && this.getTagBrowseData(tag);
-    const tree = browseData?.inheritanceEnabled ? browseData.inheritanceTree : null;
+    const tree = (browseData?.hasActiveInheritance ?? browseData?.inheritanceEnabled)
+      ? browseData.inheritanceTree
+      : null;
     if (!tree || !tree.children.length) return [];
     const keys = [];
     const prefix = `${tag}\u0000tag-group\u0000`;
@@ -1328,6 +1482,7 @@ export class RelationsBehavior {
         delete hierarchy.displayNamesByParentPath[parentPath];
       }
     }
+    this.reconcileFixedTagRelations();
   }
 
   async setInheritanceChildren(parentValue, childValues) {
@@ -1338,6 +1493,10 @@ export class RelationsBehavior {
     for (const rawChild of childValues || []) {
       const child = normalizeTag(rawChild);
       if (!child || isNestedTag(child) || seen.has(child)) continue;
+      const fixedParent = this.getFixedParent(child);
+      if (fixedParent && fixedParent !== parent) {
+        throw new Error(`${getTagDisplayName(child)} 是固定子标签，请先解除固定`);
+      }
       if (this.wouldCreateTagInheritanceCycle(parent, child)) {
         throw new Error(`不能建立循环继承：${getTagDisplayName(parent)} → ${getTagDisplayName(child)}`);
       }
@@ -1348,6 +1507,7 @@ export class RelationsBehavior {
     const previousChildren = inheritance.childrenByParent;
     const previousEnabled = inheritance.enabledParents;
     const previousExclusions = inheritance.excludedPathsByParent;
+    const previousFixedParents = inheritance.fixedParentByChild;
     const wasParent = Array.isArray(previousChildren[parent]) && previousChildren[parent].length > 0;
     const stagedChildren = { ...previousChildren };
     const stagedExclusions = { ...previousExclusions };
@@ -1363,12 +1523,18 @@ export class RelationsBehavior {
     inheritance.childrenByParent = stagedChildren;
     inheritance.enabledParents = stagedEnabled;
     inheritance.excludedPathsByParent = stagedExclusions;
+    inheritance.fixedParentByChild = Object.fromEntries(
+      Object.entries(previousFixedParents).filter(([child, fixedParent]) => (
+        fixedParent !== parent || children.includes(child)
+      ))
+    );
     try {
       await this.saveSettings();
     } catch (error) {
       inheritance.childrenByParent = previousChildren;
       inheritance.enabledParents = previousEnabled;
       inheritance.excludedPathsByParent = previousExclusions;
+      inheritance.fixedParentByChild = previousFixedParents;
       throw error;
     }
     this.refreshHierarchyViews();
@@ -1379,11 +1545,16 @@ export class RelationsBehavior {
     if (!child || isNestedTag(child)) throw new Error('子标签无效');
     const parents = Array.from(new Set((parentValues || []).map(normalizeTag).filter(Boolean)));
     if (parents.some((parent) => isNestedTag(parent) || parent === child)) throw new Error('父标签无效');
+    const fixedParent = this.getFixedParent(child);
+    if (fixedParent && parents.length > 0 && (parents.length !== 1 || parents[0] !== fixedParent)) {
+      throw new Error(`${getTagDisplayName(child)} 是固定子标签，请先解除固定`);
+    }
 
     const inheritance = this.getTagInheritanceSettings();
     const previousChildren = inheritance.childrenByParent;
     const previousEnabled = inheritance.enabledParents;
     const previousExclusions = inheritance.excludedPathsByParent;
+    const previousFixedParents = inheritance.fixedParentByChild;
     const stagedChildren = Object.fromEntries(Object.entries(previousChildren).map(([parent, children]) => [
       parent,
       children.filter((tag) => tag !== child),
@@ -1406,12 +1577,40 @@ export class RelationsBehavior {
     inheritance.excludedPathsByParent = Object.fromEntries(
       Object.entries(previousExclusions).filter(([parent]) => validParents.has(parent))
     );
+    inheritance.fixedParentByChild = { ...previousFixedParents };
+    if (parents.length === 0) delete inheritance.fixedParentByChild[child];
     try {
       await this.saveSettings();
     } catch (error) {
       inheritance.childrenByParent = previousChildren;
       inheritance.enabledParents = previousEnabled;
       inheritance.excludedPathsByParent = previousExclusions;
+      inheritance.fixedParentByChild = previousFixedParents;
+      throw error;
+    }
+    this.refreshHierarchyViews();
+  }
+
+  async setFixedTagRelation(parentValue, childValue, fixed) {
+    const parent = normalizeTag(parentValue);
+    const child = normalizeTag(childValue);
+    if (!parent || !child) throw new Error('标签无效');
+    if (fixed && !this.isFixedTagRelationEligible(parent, child)) {
+      throw new Error('固定子标签必须符合“父标签-子名称”格式，并且只能有一个父标签');
+    }
+    const inheritance = this.getTagInheritanceSettings();
+    const previousFixedParents = inheritance.fixedParentByChild;
+    const previousPinnedTag = this.settings.pinnedTag;
+    const nextFixedParents = { ...previousFixedParents };
+    if (fixed) nextFixedParents[child] = parent;
+    else delete nextFixedParents[child];
+    inheritance.fixedParentByChild = nextFixedParents;
+    if (fixed && this.settings.pinnedTag === child) this.settings.pinnedTag = null;
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      inheritance.fixedParentByChild = previousFixedParents;
+      this.settings.pinnedTag = previousPinnedTag;
       throw error;
     }
     this.refreshHierarchyViews();
@@ -1441,38 +1640,54 @@ export class RelationsBehavior {
   getTagBrowseData(tagValue) {
     const tag = normalizeTag(tagValue);
     if (!tag) return { tag: null, files: [], exactFiles: [], inheritedFiles: [], sourcesByPath: new Map(), inheritanceTree: null };
-    const exactFiles = this.getOrderedFilesForTag(tag, this.tagFileIndex.get(tag) || []);
+    const directFiles = this.tagFileIndex.get(tag) || [];
+    const exactFiles = typeof this.getOrderedFilesForTag === 'function'
+      ? this.getOrderedFilesForTag(tag, directFiles)
+      : directFiles;
     const exactPaths = exactFiles.map((file) => file.path);
     const orderedBranches = [];
     const orderedPathsByTag = { [tag]: exactPaths };
-    const visit = (sourceTag, branch = new Set([tag])) => {
+    const fixedTags = new Set();
+    const adjacency = this.getActiveTagInheritanceAdjacency(tag);
+    const visit = (sourceTag, branch = new Set([tag]), fixedPath = false) => {
       if (branch.has(sourceTag)) return;
       const nextBranch = new Set(branch);
       nextBranch.add(sourceTag);
       orderedBranches.push({
         source: sourceTag,
-        paths: this.getOrderedFilesForTag(sourceTag, this.tagFileIndex.get(sourceTag) || []).map((file) => file.path),
+        paths: (typeof this.getOrderedFilesForTag === 'function'
+          ? this.getOrderedFilesForTag(sourceTag, this.tagFileIndex.get(sourceTag) || [])
+          : this.tagFileIndex.get(sourceTag) || []).map((file) => file.path),
+        fixed: fixedPath,
       });
+      if (fixedPath) fixedTags.add(sourceTag);
       orderedPathsByTag[sourceTag] = orderedBranches[orderedBranches.length - 1].paths;
-      for (const child of this.getInheritanceChildren(sourceTag)) visit(child, nextBranch);
+      for (const child of adjacency[sourceTag] || []) {
+        visit(child, nextBranch, fixedPath && this.isFixedTagEdge(sourceTag, child));
+      }
     };
-    if (this.isTagInheritanceEnabled(tag)) {
-      for (const child of this.getInheritanceChildren(tag)) visit(child);
+    for (const child of adjacency[tag] || []) {
+      visit(child, new Set([tag]), this.isFixedTagEdge(tag, child));
     }
     const { inheritedPaths, sourcesByPath } = mergeInheritedPaths(
       exactPaths,
       orderedBranches,
       this.getTagInheritanceSettings().excludedPathsByParent[tag] || []
     );
+    const indexedFilesByPath = this.app?.vault ? null : new Map(
+      Array.from(this.tagFileIndex.values()).flat().map((file) => [file.path, file])
+    );
     const inheritedFiles = inheritedPaths
-      .map((path) => this.app.vault.getAbstractFileByPath(path))
+      .map((path) => this.app?.vault?.getAbstractFileByPath(path) || indexedFilesByPath?.get(path))
       .filter((file) => file instanceof TFile && file.extension === 'md');
-    const inheritanceTree = this.isTagInheritanceEnabled(tag)
+    const hasActiveInheritance = !!(adjacency[tag] || []).length;
+    const inheritanceTree = hasActiveInheritance
       ? buildTagInheritanceGroupTree(
         tag,
-        this.getSortedTagInheritanceAdjacency(),
+        adjacency,
         orderedPathsByTag,
-        this.getTagInheritanceSettings().excludedPathsByParent[tag] || []
+        this.getTagInheritanceSettings().excludedPathsByParent[tag] || [],
+        fixedTags
       )
       : null;
     return {
@@ -1486,6 +1701,9 @@ export class RelationsBehavior {
       inheritedCount: inheritedFiles.length,
       inheritanceEnabled: this.isTagInheritanceEnabled(tag),
       hasInheritance: this.hasInheritanceChildren(tag),
+      hasFreeInheritance: this.hasFreeInheritanceBranch(tag),
+      hasActiveInheritance,
+      fixedTags,
     };
   }
 
@@ -1497,9 +1715,15 @@ export class RelationsBehavior {
     return this.getTagBrowseData(tagValue).sourcesByPath.get(path) || [];
   }
 
+  isFixedInheritedFileForTag(tagValue, path) {
+    const browseData = this.getTagBrowseData(tagValue);
+    return (browseData.sourcesByPath.get(path) || []).some((source) => browseData.fixedTags.has(source));
+  }
+
   async excludeInheritedFile(parentValue, path, allowGroupedInheritance = false) {
     const parent = normalizeTag(parentValue);
     if (!parent || !path || (!allowGroupedInheritance && !this.isInheritedFileForTag(parent, path))) return;
+    if (this.isFixedInheritedFileForTag(parent, path)) return;
     const inheritance = this.getTagInheritanceSettings();
     const paths = new Set(inheritance.excludedPathsByParent[parent] || []);
     paths.add(path);
@@ -1532,7 +1756,9 @@ export class RelationsBehavior {
       oldChildren.length ||
       Object.values(inheritance.childrenByParent).some((children) => children.includes(oldTag)) ||
       inheritance.enabledParents.includes(oldTag) ||
-      inheritance.excludedPathsByParent[oldTag]
+      inheritance.excludedPathsByParent[oldTag] ||
+      inheritance.fixedParentByChild[oldTag] ||
+      Object.values(inheritance.fixedParentByChild).includes(oldTag)
     );
     if (oldChildren.length || newChildren.length) {
       inheritance.childrenByParent[newTag] = Array.from(new Set([...oldChildren, ...newChildren]))
@@ -1551,6 +1777,13 @@ export class RelationsBehavior {
     ]));
     if (exclusions.length > 0) inheritance.excludedPathsByParent[newTag] = exclusions;
     delete inheritance.excludedPathsByParent[oldTag];
+    const migratedFixedParents = {};
+    for (const [child, parent] of Object.entries(inheritance.fixedParentByChild || {})) {
+      const migratedChild = child === oldTag ? newTag : child;
+      const migratedParent = parent === oldTag ? newTag : parent;
+      migratedFixedParents[migratedChild] = migratedParent;
+    }
+    inheritance.fixedParentByChild = migratedFixedParents;
     this.reconcileRelationCycles();
     this.migrateInlineTagBranchState(oldTag, newTag);
     if (participatesInInheritance) {
@@ -1746,7 +1979,7 @@ export class RelationsBehavior {
 
   showInheritedNoteMenu(event, tagValue, path) {
     const tag = normalizeTag(tagValue);
-    if (!tag || !path || !this.isInheritedFileForTag(tag, path)) return false;
+    if (!tag || !path || !this.isInheritedFileForTag(tag, path) || this.isFixedInheritedFileForTag(tag, path)) return false;
     const menu = new Menu();
     menu.addItem((item) => item
       .setTitle(`不在 ${getTagDisplayName(tag)} 中继承显示`)

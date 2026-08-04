@@ -796,6 +796,7 @@ export class TagPaneBehavior {
         item.exactCount,
         item.inheritedCount,
         item.inheritanceEnabled,
+        item.fixedSearchTags?.join('\n') || '',
         this.settings.pinnedTag === item.tag,
         this.expandedTags.has(item.tag),
         this.expandedTags.has(item.tag) ? item.files.map((file) => file.path).join('\n') : '',
@@ -895,22 +896,44 @@ export class TagPaneBehavior {
 
     const unionTerms = splitUnionSearchTerms(query);
     const items = [];
-    const seen = new Set();
+    const processedTags = new Set();
+    const browseDataByTag = new Map();
+
+    const tagMatchesQuery = (tag) => unionTerms
+      ? tagMatchesAnySearchTerm(tag, unionTerms)
+      : tagMatchesSearchText(tag, query);
+    const fixedMatchesByRoot = new Map();
+    if (query.trim()) {
+      for (const child of Object.keys(this.getTagInheritanceSettings().fixedParentByChild || {})) {
+        if (!tagMatchesQuery(child)) continue;
+        const root = this.getTopLevelFixedParent(child);
+        if (!root) continue;
+        const matches = fixedMatchesByRoot.get(root) || [];
+        matches.push(child);
+        fixedMatchesByRoot.set(root, matches);
+      }
+    }
 
     const shouldShowTag = (tag) => {
-      const browseData = this.getTagBrowseData(tag);
+      if (this.isFixedChild(tag)) return false;
+      if (!tagMatchesQuery(tag) && !fixedMatchesByRoot.has(tag)) return false;
+      const browseData = browseDataByTag.get(tag) || this.getTagBrowseData(tag);
+      browseDataByTag.set(tag, browseData);
       if (isNestedTag(tag) || (browseData.files.length === 0 && !browseData.hasInheritance)) return false;
-      return unionTerms
-        ? tagMatchesAnySearchTerm(tag, unionTerms)
-        : tagMatchesSearchText(tag, query);
+      return true;
     };
 
     const pushTag = (tag) => {
       const normalizedTag = normalizeTag(tag);
-      if (!normalizedTag || seen.has(normalizedTag) || !shouldShowTag(normalizedTag)) return;
+      if (!normalizedTag || processedTags.has(normalizedTag)) return;
+      processedTags.add(normalizedTag);
+      if (!shouldShowTag(normalizedTag)) return;
 
-      seen.add(normalizedTag);
-      const browseData = this.getTagBrowseData(normalizedTag);
+      const parentMatches = tagMatchesQuery(normalizedTag);
+      const fixedSearchTags = !parentMatches ? fixedMatchesByRoot.get(normalizedTag) || [] : [];
+      const browseData = fixedSearchTags.length
+        ? this.createFixedSearchBrowseData(normalizedTag, fixedSearchTags)
+        : browseDataByTag.get(normalizedTag);
       items.push({
         tag: normalizedTag,
         displayName: getTagDisplayName(normalizedTag),
@@ -920,7 +943,12 @@ export class TagPaneBehavior {
         inheritedCount: browseData.inheritedCount,
         inheritanceEnabled: browseData.inheritanceEnabled,
         hasInheritance: browseData.hasInheritance,
+        hasFreeInheritance: browseData.hasFreeInheritance,
+        hasActiveInheritance: browseData.hasActiveInheritance,
         sourcesByPath: browseData.sourcesByPath,
+        inheritanceTree: browseData.inheritanceTree,
+        fixedSearchTags,
+        browseData,
       });
     };
 
@@ -929,11 +957,7 @@ export class TagPaneBehavior {
     }
 
     const fallbackTags = Array.from(this.getLogicalTagSet())
-      .filter((tag) => !seen.has(tag))
-      .sort((a, b) => compareTagItemsByCount(
-        { count: this.getTagBrowseData(a).files.length, name: getTagDisplayName(a) },
-        { count: this.getTagBrowseData(b).files.length, name: getTagDisplayName(b) }
-      ));
+      .filter((tag) => !processedTags.has(tag));
 
     for (const tag of fallbackTags) {
       pushTag(tag);
@@ -1068,14 +1092,14 @@ export class TagPaneBehavior {
 
     const countEl = document.createElement('span');
     countEl.className = 'tag-pane-tag-count tree-item-flair';
-    countEl.textContent = item.inheritanceEnabled && item.inheritedCount > 0
+    countEl.textContent = item.inheritedCount > 0
       ? `${item.exactCount}+${item.inheritedCount}`
       : String(files.length);
 
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
     let inheritanceButtonEl = null;
-    if (!isVirtual && item.hasInheritance) {
+    if (!isVirtual && item.hasFreeInheritance) {
       inheritanceButtonEl = document.createElement('button');
       inheritanceButtonEl.type = 'button';
       inheritanceButtonEl.className = 'clickable-icon puffs-tag-inheritance-button';
@@ -1117,6 +1141,7 @@ export class TagPaneBehavior {
         patch,
         surface: 'sidebar',
         scrollContainer: listEl,
+        browseData: item.browseData,
       });
     }
 
@@ -1226,8 +1251,8 @@ export class TagPaneBehavior {
       scrollContainer: options.scrollContainer || listEl,
       rerender: () => options.view ? this.scheduleSyncView(options.view, 0) : this.refreshTagViews(),
     };
-    const browseData = !isVirtual && this.getTagBrowseData(tagValue);
-    if (browseData?.inheritanceEnabled && browseData.inheritanceTree) {
+    const browseData = !isVirtual && (options.browseData || this.getTagBrowseData(tagValue));
+    if ((browseData?.hasActiveInheritance ?? browseData?.inheritanceEnabled) && browseData.inheritanceTree) {
       this.renderTagInheritanceBrowseTree(listEl, browseData.inheritanceTree, renderOptions);
     } else {
       this.renderInlineTagNoteTree(listEl, files, tagValue, isVirtual, renderOptions);

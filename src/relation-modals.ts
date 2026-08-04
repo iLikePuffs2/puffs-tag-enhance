@@ -236,6 +236,8 @@ class TagInheritanceModal extends Modal {
       getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
         tag !== this.parentTag &&
         !this.children.includes(tag) &&
+        !(this.relationMode === 'parents' && this.plugin.isFixedChild(this.parentTag)) &&
+        !(this.relationMode === 'children' && this.plugin.isFixedChild(tag)) &&
         !this.plugin.wouldCreateTagInheritanceCycle(
           this.relationMode === 'parents' ? tag : this.parentTag,
           this.relationMode === 'parents' ? this.parentTag : tag
@@ -299,6 +301,7 @@ class TagInheritanceModal extends Modal {
       }
       rowEl.querySelector('.puffs-relation-manage-name').textContent = getTagDisplayName(child);
       rowEl.querySelector('.puffs-relation-child-count').textContent = String(this.plugin.getTagVisibleNoteCount(child));
+      this.syncFixedRelationButton(rowEl, child);
       this.childrenListEl.appendChild(rowEl);
       existingRows.delete(child);
     }
@@ -314,8 +317,54 @@ class TagInheritanceModal extends Modal {
 
   syncMutationState() {
     if (this.inputEl) this.inputEl.disabled = this.isSubmitting;
-    for (const button of this.childrenListEl?.querySelectorAll('.puffs-relation-child-remove') || []) {
+    for (const button of this.childrenListEl?.querySelectorAll(
+      '.puffs-relation-child-remove, .puffs-relation-fixed-toggle'
+    ) || []) {
       button.disabled = this.isSubmitting;
+    }
+  }
+
+  syncFixedRelationButton(rowEl, relatedTag) {
+    const parent = this.relationMode === 'parents' ? relatedTag : this.parentTag;
+    const child = this.relationMode === 'parents' ? this.parentTag : relatedTag;
+    const eligible = this.plugin.isFixedTagRelationEligible(parent, child);
+    let button = rowEl.querySelector('.puffs-relation-fixed-toggle');
+    if (!eligible) {
+      button?.remove();
+      return;
+    }
+    if (!button) {
+      button = rowEl.createEl('button', { cls: 'clickable-icon puffs-relation-fixed-toggle' });
+      const removeButton = rowEl.querySelector('.puffs-relation-child-remove');
+      if (removeButton) rowEl.insertBefore(button, removeButton);
+      setIcon(button, 'lock');
+      button.addEventListener('click', () => { void this.toggleFixedRelation(button); });
+    }
+    button.dataset.puffsParentTag = parent;
+    button.dataset.puffsChildTag = child;
+    const fixed = this.plugin.isFixedTagEdge(parent, child);
+    button.classList.toggle('is-active', fixed);
+    button.setAttribute('aria-label', fixed ? '改为自由子标签' : '设为固定子标签');
+    button.disabled = this.isSubmitting;
+  }
+
+  async toggleFixedRelation(button) {
+    if (this.isSubmitting) return;
+    const parent = button.dataset.puffsParentTag;
+    const child = button.dataset.puffsChildTag;
+    const nextFixed = !this.plugin.isFixedTagEdge(parent, child);
+    this.isSubmitting = true;
+    this.syncMutationState();
+    try {
+      await this.plugin.setFixedTagRelation(parent, child, nextFixed);
+      this.renderChildren();
+      this.renderExclusionGroups();
+      this.picker?.render();
+    } catch (error) {
+      new Notice(error && error.message ? error.message : '保存固定子标签失败');
+    } finally {
+      this.isSubmitting = false;
+      this.syncMutationState();
     }
   }
 
@@ -369,7 +418,8 @@ class TagInheritanceModal extends Modal {
 
   renderExclusionGroups() {
     if (!this.exclusionsSectionEl || !this.exclusionGroupsEl) return;
-    const exclusions = this.plugin.getTagInheritanceSettings().excludedPathsByParent[this.parentTag] || [];
+    const exclusions = (this.plugin.getTagInheritanceSettings().excludedPathsByParent[this.parentTag] || [])
+      .filter((path) => !this.plugin.isFixedInheritedFileForTag(this.parentTag, path));
     this.exclusionsSectionEl.classList.toggle('is-hidden', exclusions.length === 0);
     this.exclusionGroupsEl.empty();
     if (!exclusions.length) return;

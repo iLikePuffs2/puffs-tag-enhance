@@ -321,6 +321,16 @@
   margin-left: auto;
 }
 
+.puffs-relation-fixed-toggle {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.puffs-relation-fixed-toggle.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
 .puffs-relation-child-remove:hover,
 .puffs-relation-child-remove:focus-visible {
   background: color-mix(in srgb, var(--text-error) 14%, transparent);

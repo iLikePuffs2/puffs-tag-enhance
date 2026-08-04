@@ -12,6 +12,7 @@ function createBehavior(noteHierarchy: any, exclusions: Record<string, string[]>
         childrenByParent: {},
         enabledParents: [],
         excludedPathsByParent: exclusions,
+        fixedParentByChild: {},
       },
       noteHierarchy,
     },
@@ -179,7 +180,7 @@ describe('子标签手动排序', () => {
     ]);
 
     expect(behavior.initializeTagInheritanceOrder()).toBe(true);
-    expect(behavior.settings.relations.version).toBe(2);
+    expect(behavior.settings.relations.version).toBe(3);
     expect(behavior.settings.relations.tagInheritance.childrenByParent).toEqual({
       '#父': ['#多', '#少'],
       '#另一父': ['#多', '#少'],
@@ -385,6 +386,7 @@ describe('批量父子关系', () => {
       childrenByParent: { '#保留父': ['#其他'], '#新父': ['#子'] },
       enabledParents: ['#保留父', '#新父'],
       excludedPathsByParent: { '#保留父': ['保留.md'] },
+      fixedParentByChild: {},
     });
     expect(behavior.refreshHierarchyViews).toHaveBeenCalledOnce();
 
@@ -420,6 +422,7 @@ describe('批量父子关系', () => {
       },
       enabledParents: ['#父', '#新子'],
       excludedPathsByParent: { '#新子': ['排除.md'] },
+      fixedParentByChild: {},
     });
     expect(behavior.collapsedInlineHierarchyBranches).toEqual(new Set([
       '#父\u0000tag-group\u0000#新子',
@@ -642,5 +645,184 @@ describe('批量父子关系', () => {
     expect(behavior.getHierarchyChildren('父.md')).toEqual(['乙.md', '甲.md', '丙.md']);
     expect(behavior.getHierarchyChildren('另一父.md')).toEqual(['甲.md', '丁.md']);
     expect(behavior.saveSettings).toHaveBeenCalledOnce();
+  });
+});
+
+describe('固定子标签', () => {
+  it('只接受单连字符、唯一且同名前缀的父子关系', () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
+    behavior.settings.relations.tagInheritance.childrenByParent = {
+      '#秘境': ['#秘境-开始', '#秘境-阶段-开始', '#其他-结束'],
+    };
+
+    expect(behavior.parseFixedChildTag('#秘境-开始')).toEqual({ parent: '#秘境', displayName: '开始' });
+    expect(behavior.parseFixedChildTag('#秘境-阶段-开始')).toBeNull();
+    expect(behavior.isFixedTagRelationEligible('#秘境', '#秘境-开始')).toBe(true);
+    expect(behavior.isFixedTagRelationEligible('#秘境', '#其他-结束')).toBe(false);
+
+    behavior.settings.relations.tagInheritance.childrenByParent['#另一父'] = ['#秘境-开始'];
+    expect(behavior.isFixedTagRelationEligible('#秘境', '#秘境-开始')).toBe(false);
+  });
+
+  it('固定时取消子标签置顶，解除固定时保留普通父子关系', async () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
+    behavior.settings.relations.tagInheritance.childrenByParent = { '#秘境': ['#秘境-开始'] };
+    behavior.settings.pinnedTag = '#秘境-开始';
+    behavior.refreshHierarchyViews = vi.fn();
+
+    await behavior.setFixedTagRelation('#秘境', '#秘境-开始', true);
+    expect(behavior.getFixedParent('#秘境-开始')).toBe('#秘境');
+    expect(behavior.settings.pinnedTag).toBeNull();
+
+    await behavior.setFixedTagRelation('#秘境', '#秘境-开始', false);
+    expect(behavior.getFixedParent('#秘境-开始')).toBeNull();
+    expect(behavior.getInheritanceChildren('#秘境')).toEqual(['#秘境-开始']);
+  });
+
+  it('保存固定状态失败时回滚固定映射和置顶状态', async () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
+    behavior.settings.relations.tagInheritance.childrenByParent = { '#秘境': ['#秘境-开始'] };
+    behavior.settings.pinnedTag = '#秘境-开始';
+    behavior.refreshHierarchyViews = vi.fn();
+    behavior.saveSettings.mockRejectedValueOnce(new Error('写入失败'));
+
+    await expect(behavior.setFixedTagRelation('#秘境', '#秘境-开始', true)).rejects.toThrow('写入失败');
+    expect(behavior.settings.relations.tagInheritance.fixedParentByChild).toEqual({});
+    expect(behavior.settings.pinnedTag).toBe('#秘境-开始');
+    expect(behavior.refreshHierarchyViews).not.toHaveBeenCalled();
+  });
+
+  it('固定期间拒绝第二父级，删除唯一关系时同步清除固定状态', async () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
+    behavior.settings.relations.tagInheritance.childrenByParent = { '#秘境': ['#秘境-开始'] };
+    behavior.settings.relations.tagInheritance.fixedParentByChild = { '#秘境-开始': '#秘境' };
+    behavior.refreshHierarchyViews = vi.fn();
+
+    await expect(behavior.setInheritanceParents('#秘境-开始', ['#秘境', '#其他']))
+      .rejects.toThrow('请先解除固定');
+    await behavior.setInheritanceParents('#秘境-开始', []);
+
+    expect(behavior.getInheritanceParents('#秘境-开始')).toEqual([]);
+    expect(behavior.getFixedParent('#秘境-开始')).toBeNull();
+  });
+
+  it('改名后仅在仍符合命名规则时保留固定状态', () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
+    behavior.settings.relations.tagInheritance.childrenByParent = { '#秘境': ['#秘境-开始'] };
+    behavior.settings.relations.tagInheritance.fixedParentByChild = { '#秘境-开始': '#秘境' };
+    behavior.collapsedInlineHierarchyBranches = new Set();
+
+    behavior.migrateTagRelations('#秘境-开始', '#秘境-结束');
+    expect(behavior.getFixedParent('#秘境-结束')).toBe('#秘境');
+
+    behavior.migrateTagRelations('#秘境-结束', '#冒险-结束');
+    expect(behavior.getFixedParent('#冒险-结束')).toBeNull();
+    expect(behavior.getInheritanceParents('#冒险-结束')).toEqual(['#秘境']);
+  });
+
+  it('加载 v2 数据时清理不满足规则的固定映射并升级到 v3', () => {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    behavior.settings = {
+      relations: {
+        version: 2,
+        tagInheritance: {
+          childrenByParent: { '#秘境': ['#秘境-开始', '#其他-结束'] },
+          enabledParents: [],
+          excludedPathsByParent: {},
+          fixedParentByChild: {
+            '#秘境-开始': '#秘境',
+            '#其他-结束': '#秘境',
+            '#不存在-开始': '#不存在',
+          },
+        },
+        noteHierarchy: { childrenByParentPath: {}, displayNamesByParentPath: {} },
+      },
+    };
+
+    behavior.normalizeRelationSettings(behavior.settings.relations);
+    expect(behavior.settings.relations.tagInheritance.fixedParentByChild).toEqual({
+      '#秘境-开始': '#秘境',
+    });
+    expect(behavior.initializeTagInheritanceOrder()).toBe(true);
+    expect(behavior.settings.relations.version).toBe(3);
+  });
+
+  it('关闭普通继承时只归入固定分支且固定笔记覆盖排除', () => {
+    const behavior = attachFiles(
+      createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }, {
+        '#秘境': ['子.md', '自由.md'],
+      }),
+      ['父.md', '子.md', '自由.md']
+    ) as any;
+    behavior.tagFileIndex = new Map([
+      ['#秘境', [behavior.app.vault.getAbstractFileByPath('父.md')]],
+      ['#秘境-开始', [behavior.app.vault.getAbstractFileByPath('子.md')]],
+      ['#自由', [behavior.app.vault.getAbstractFileByPath('自由.md')]],
+    ]);
+    behavior.settings.relations.tagInheritance.childrenByParent = {
+      '#秘境': ['#秘境-开始', '#自由'],
+    };
+    behavior.settings.relations.tagInheritance.fixedParentByChild = { '#秘境-开始': '#秘境' };
+
+    let browseData = behavior.getTagBrowseData('#秘境');
+    expect(browseData.files.map((file: any) => file.path)).toEqual(['父.md', '子.md']);
+    expect(browseData.hasFreeInheritance).toBe(true);
+    expect(behavior.isFixedInheritedFileForTag('#秘境', '子.md')).toBe(true);
+
+    behavior.settings.relations.tagInheritance.enabledParents = ['#秘境'];
+    browseData = behavior.getTagBrowseData('#秘境');
+    expect(browseData.files.map((file: any) => file.path)).toEqual(['父.md', '子.md']);
+    expect(browseData.sourcesByPath.get('自由.md')).toEqual(['#自由']);
+  });
+
+  it('搜索固定子标签时只返回父级及匹配分支', () => {
+    const behavior = Object.create(TagPaneBehavior.prototype) as any;
+    const parentBrowse = {
+      files: [{ path: '父.md' }, { path: '子.md' }], exactCount: 1, inheritedCount: 1,
+      inheritanceEnabled: false, hasInheritance: true, hasFreeInheritance: false,
+      hasActiveInheritance: true, sourcesByPath: new Map(), inheritanceTree: {},
+    };
+    const filteredBrowse = {
+      ...parentBrowse, files: [{ path: '子.md' }], exactCount: 0, fixedSearchTags: ['#秘境-开始'],
+    };
+    behavior.getTagInheritanceSettings = () => ({ fixedParentByChild: { '#秘境-开始': '#秘境' } });
+    behavior.getTopLevelFixedParent = () => '#秘境';
+    behavior.isFixedChild = (tag: string) => tag === '#秘境-开始';
+    behavior.getTagBrowseData = () => parentBrowse;
+    behavior.createFixedSearchBrowseData = () => filteredBrowse;
+    behavior.getTagDomEntries = () => new Map([['#秘境', { tag: '#秘境' }], ['#秘境-开始', { tag: '#秘境-开始' }]]);
+    behavior.getLogicalTagSet = () => new Set(['#秘境', '#秘境-开始']);
+
+    const items = behavior.getListModeItems({}, '开始', false);
+    expect(items).toHaveLength(1);
+    expect(items[0].tag).toBe('#秘境');
+    expect(items[0].fixedSearchTags).toEqual(['#秘境-开始']);
+    expect(items[0].files).toEqual([{ path: '子.md' }]);
+  });
+});
+
+describe('搜索态标签列表性能', () => {
+  it('先按名称过滤且每个命中标签只计算一次浏览数据', () => {
+    const behavior = Object.create(TagPaneBehavior.prototype) as any;
+    const tags = Array.from({ length: 100 }, (_, index) => `#无关${index}`);
+    tags.push('#目标');
+    let browseCalls = 0;
+    behavior.getTagInheritanceSettings = () => ({ fixedParentByChild: {} });
+    behavior.isFixedChild = () => false;
+    behavior.getTagBrowseData = (tag: string) => {
+      browseCalls += 1;
+      return {
+        files: [{ path: `${tag}.md` }], exactCount: 1, inheritedCount: 0,
+        inheritanceEnabled: false, hasInheritance: false, hasFreeInheritance: false,
+        hasActiveInheritance: false, sourcesByPath: new Map(), inheritanceTree: null,
+      };
+    };
+    behavior.getTagDomEntries = () => new Map(tags.map((tag) => [tag, { tag }]));
+    behavior.getLogicalTagSet = () => new Set([...tags, '#关系占位']);
+
+    const items = behavior.getListModeItems({}, '目标', false);
+
+    expect(items.map((item: any) => item.tag)).toEqual(['#目标']);
+    expect(browseCalls).toBe(1);
   });
 });

@@ -350,7 +350,7 @@ export class TagIndexBehavior {
   reconcilePinnedTag() {
     const pinnedTag = normalizeTag(this.settings.pinnedTag);
     if (!pinnedTag || this.activeTagRename || !this.noteOrderTrackingReady) return false;
-    if (!isNestedTag(pinnedTag) && (this.tagFileIndex.get(pinnedTag) || []).length > 0) return false;
+    if (!this.isFixedChild(pinnedTag) && !isNestedTag(pinnedTag) && (this.tagFileIndex.get(pinnedTag) || []).length > 0) return false;
 
     this.settings.pinnedTag = null;
     return true;

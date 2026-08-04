@@ -513,14 +513,14 @@ class PuffsTagShelfView extends ItemView {
 
     const countEl = document.createElement('span');
     countEl.className = 'tag-pane-tag-count tree-item-flair';
-    countEl.textContent = item.inheritanceEnabled && item.inheritedCount > 0
+    countEl.textContent = item.inheritedCount > 0
       ? `${item.exactCount}+${item.inheritedCount}`
       : String(files.length);
 
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
     let inheritanceButtonEl = null;
-    if (!isVirtual && item.hasInheritance) {
+    if (!isVirtual && item.hasFreeInheritance) {
       inheritanceButtonEl = document.createElement('button');
       inheritanceButtonEl.type = 'button';
       inheritanceButtonEl.className = 'clickable-icon puffs-tag-inheritance-button';
@@ -596,8 +596,8 @@ class PuffsTagShelfView extends ItemView {
         scrollContainer: this.listEl,
         rerender: () => this.renderTagList(),
       };
-      const browseData = !isVirtual && this.plugin.getTagBrowseData(tag);
-      if (browseData?.inheritanceEnabled && browseData.inheritanceTree) {
+      const browseData = !isVirtual && (item.browseData || this.plugin.getTagBrowseData(tag));
+      if ((browseData?.hasActiveInheritance ?? browseData?.inheritanceEnabled) && browseData.inheritanceTree) {
         this.plugin.renderTagInheritanceBrowseTree(notesEl, browseData.inheritanceTree, renderOptions);
       } else {
         this.plugin.renderInlineTagNoteTree(notesEl, files, tag, isVirtual, renderOptions);
