@@ -2964,8 +2964,6 @@ var TagIndexBehavior = class {
         await this.renameTagInFile(file, oldTag, newTag);
       }
       if (this.expandedTags.delete(oldTag)) {
-        this.clearInlineHierarchyBranchState(oldTag);
-        this.clearInlineHierarchyBranchState(newTag);
         this.expandedTags.add(newTag);
       }
       if (this.settings.pinnedTag === oldTag) {
@@ -4288,6 +4286,8 @@ var TagPaneBehavior = class {
     return items.some((item) => !this.expandedTags.has(item.tag));
   }
   findTagForElement(view, tagEl) {
+    const inheritanceTag = normalizeTag(tagEl.dataset && tagEl.dataset.puffsInheritanceTag);
+    if (inheritanceTag) return inheritanceTag;
     const datasetTag = normalizeTag(tagEl.dataset && tagEl.dataset.puffsTag);
     if (datasetTag) return datasetTag;
     for (const [tag, tagDom] of this.getTagDomEntries(view)) {
@@ -5459,6 +5459,34 @@ var RelationsBehavior = class {
     }
     return changed;
   }
+  migrateInlineTagBranchState(oldTagValue, newTagValue) {
+    const oldTag = normalizeTag(oldTagValue);
+    const newTag = normalizeTag(newTagValue);
+    const collapsed = this.collapsedInlineHierarchyBranches;
+    if (!oldTag || !newTag || oldTag === newTag || !(collapsed == null ? void 0 : collapsed.size)) return false;
+    let changed = false;
+    const migrated = /* @__PURE__ */ new Set();
+    for (const rawKey of collapsed) {
+      const parts = String(rawKey).split("\0");
+      if (parts[0] === oldTag) {
+        parts[0] = newTag;
+        changed = true;
+      }
+      if (parts[1] === "tag-group" && parts[2]) {
+        const lineage = parts[2].split("");
+        const nextLineage = lineage.map((tag) => tag === oldTag ? newTag : tag);
+        if (nextLineage.some((tag, index) => tag !== lineage[index])) {
+          parts[2] = nextLineage.join("");
+          changed = true;
+        }
+      }
+      migrated.add(parts.join("\0"));
+    }
+    if (!changed) return false;
+    this.collapsedInlineHierarchyBranches = migrated;
+    this.inlineHierarchyExpansionVersion = (this.inlineHierarchyExpansionVersion || 0) + 1;
+    return true;
+  }
   getInlineHierarchyDisplayName(tag, parentPath, file, isVirtual = false) {
     var _a, _b;
     if (tag && !isVirtual && !isNestedTag(tag)) {
@@ -5501,7 +5529,7 @@ var RelationsBehavior = class {
         cls: "tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row puffs-inheritance-tag-group-row"
       });
       rowEl.dataset.puffsInheritanceGroup = key;
-      if (tagValue) rowEl.dataset.puffsTag = tagValue;
+      if (tagValue) rowEl.dataset.puffsInheritanceTag = tagValue;
       rowEl.setAttribute("aria-expanded", String(expanded));
       const toggleEl = rowEl.createDiv({ cls: "tree-item-icon collapse-icon puffs-tag-list-toggle" });
       toggleEl.classList.toggle("is-collapsed", !expanded);
@@ -6417,6 +6445,7 @@ var RelationsBehavior = class {
     const inheritance = this.getTagInheritanceSettings();
     const oldChildren = inheritance.childrenByParent[oldTag] || [];
     const newChildren = inheritance.childrenByParent[newTag] || [];
+    const participatesInInheritance = !!(oldChildren.length || Object.values(inheritance.childrenByParent).some((children) => children.includes(oldTag)) || inheritance.enabledParents.includes(oldTag) || inheritance.excludedPathsByParent[oldTag]);
     if (oldChildren.length || newChildren.length) {
       inheritance.childrenByParent[newTag] = Array.from(/* @__PURE__ */ new Set([...oldChildren, ...newChildren])).filter((child) => child !== newTag);
     }
@@ -6433,6 +6462,11 @@ var RelationsBehavior = class {
     if (exclusions.length > 0) inheritance.excludedPathsByParent[newTag] = exclusions;
     delete inheritance.excludedPathsByParent[oldTag];
     this.reconcileRelationCycles();
+    this.migrateInlineTagBranchState(oldTag, newTag);
+    if (participatesInInheritance) {
+      this.relationStructureVersion = (this.relationStructureVersion || 0) + 1;
+    }
+    return participatesInInheritance;
   }
   handleRelationFileRename(file, oldPath) {
     if (!(file instanceof import_obsidian11.TFile) || file.extension !== "md" || !oldPath || !file.path) return;

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { TFile } from "obsidian";
 import { RelationsBehavior } from "./relations";
+import { TagPaneBehavior } from "./tag-pane";
 
 function createBehavior(noteHierarchy: any, exclusions: Record<string, string[]> = {}) {
   const behavior = Object.create(RelationsBehavior.prototype);
@@ -246,6 +247,12 @@ describe('批量父子关系', () => {
     expect(expandedTags.has('#爱情')).toBe(true);
     expect(behavior.collapsedInlineHierarchyBranches.size).toBe(4);
 
+    const [firstKey, secondKey] = collapseControl.keys;
+    expect(behavior.toggleInlineHierarchyBranch(firstKey)).toBe(true);
+    expect(behavior.collapsedInlineHierarchyBranches.has(firstKey)).toBe(false);
+    expect(behavior.collapsedInlineHierarchyBranches.has(secondKey)).toBe(true);
+    expect(behavior.toggleInlineHierarchyBranch(firstKey)).toBe(false);
+
     const expandControl = behavior.getUniqueSearchInheritanceControl(items, '爱情', expandedTags);
     expect(expandControl.shouldExpand).toBe(true);
     behavior.setAllTagInheritanceGroupsExpanded(expandControl.keys, true);
@@ -336,6 +343,65 @@ describe('批量父子关系', () => {
     behavior.saveSettings.mockRejectedValueOnce(new Error('失败'));
     await expect(behavior.setInheritanceParents('#子', ['#旧父'])).rejects.toThrow('失败');
     expect(behavior.settings.relations.tagInheritance).toEqual(snapshot);
+  });
+
+  it('标签改名迁移继承关系、折叠 key 并触发结构失效', () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
+    behavior.settings.relations.tagInheritance = {
+      childrenByParent: {
+        '#父': ['#旧子'],
+        '#旧子': ['#孙'],
+      },
+      enabledParents: ['#父', '#旧子'],
+      excludedPathsByParent: { '#旧子': ['排除.md'] },
+    };
+    behavior.collapsedInlineHierarchyBranches = new Set([
+      '#父\u0000tag-group\u0000#旧子',
+      '#父\u0000tag-group\u0000#旧子\u0001#孙\u0000original',
+      '#旧子\u0000父笔记.md',
+    ]);
+    behavior.inlineHierarchyExpansionVersion = 0;
+    behavior.relationStructureVersion = 3;
+
+    expect(behavior.migrateTagRelations('#旧子', '#新子')).toBe(true);
+    expect(behavior.settings.relations.tagInheritance).toEqual({
+      childrenByParent: {
+        '#父': ['#新子'],
+        '#新子': ['#孙'],
+      },
+      enabledParents: ['#父', '#新子'],
+      excludedPathsByParent: { '#新子': ['排除.md'] },
+    });
+    expect(behavior.collapsedInlineHierarchyBranches).toEqual(new Set([
+      '#父\u0000tag-group\u0000#新子',
+      '#父\u0000tag-group\u0000#新子\u0001#孙\u0000original',
+      '#新子\u0000父笔记.md',
+    ]));
+    expect(behavior.inlineHierarchyExpansionVersion).toBe(1);
+    expect(behavior.relationStructureVersion).toBe(4);
+  });
+
+  it('无标签继承关系时仍迁移真实标签内的父子笔记折叠状态', () => {
+    const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
+    behavior.collapsedInlineHierarchyBranches = new Set(['#旧标签\u0000父笔记.md']);
+    behavior.inlineHierarchyExpansionVersion = 2;
+    behavior.relationStructureVersion = 5;
+
+    expect(behavior.migrateTagRelations('#旧标签', '#新标签')).toBe(false);
+    expect(behavior.collapsedInlineHierarchyBranches).toEqual(new Set(['#新标签\u0000父笔记.md']));
+    expect(behavior.inlineHierarchyExpansionVersion).toBe(3);
+    expect(behavior.relationStructureVersion).toBe(5);
+  });
+
+  it('继承子标签使用独立菜单标识，不冒充顶层标签', () => {
+    const behavior = Object.create(TagPaneBehavior.prototype) as any;
+    const tagEl = {
+      dataset: {
+        puffsInheritanceTag: '#子标签',
+      },
+    };
+    expect(behavior.findTagForElement({}, tagEl)).toBe('#子标签');
+    expect(tagEl.dataset).not.toHaveProperty('puffsTag');
   });
 
   it('新父标签默认启用，已有父标签保留手动关闭状态', async () => {

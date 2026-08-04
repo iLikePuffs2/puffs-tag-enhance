@@ -392,8 +392,6 @@ export class TagIndexBehavior {
       }
 
       if (this.expandedTags.delete(oldTag)) {
-        this.clearInlineHierarchyBranchState(oldTag);
-        this.clearInlineHierarchyBranchState(newTag);
         this.expandedTags.add(newTag);
       }
       if (this.settings.pinnedTag === oldTag) {

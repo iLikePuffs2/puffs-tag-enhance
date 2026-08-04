@@ -1320,6 +1320,8 @@ export class TagPaneBehavior {
   }
 
   findTagForElement(view, tagEl) {
+    const inheritanceTag = normalizeTag(tagEl.dataset && tagEl.dataset.puffsInheritanceTag);
+    if (inheritanceTag) return inheritanceTag;
     const datasetTag = normalizeTag(tagEl.dataset && tagEl.dataset.puffsTag);
     if (datasetTag) return datasetTag;
 
