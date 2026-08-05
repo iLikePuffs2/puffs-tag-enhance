@@ -231,7 +231,7 @@ class TagInheritanceModal extends Modal {
     this.children = relationMode === 'parents'
       ? plugin.sortTagsByVisibleCount(related)
       : [...related];
-    this.activeChild = relationMode === 'children' ? this.children[0] || null : null;
+    this.activeChild = this.children[0] || null;
     this.query = '';
     this.isComposing = false;
     this.isSubmitting = false;
@@ -242,6 +242,7 @@ class TagInheritanceModal extends Modal {
     this.exclusionsSectionEl = null;
     this.exclusionGroupsEl = null;
     this.selectionSectionEl = null;
+    this.selectionTitleEl = null;
     this.selectionSummaryEl = null;
     this.selectionInputEl = null;
     this.selectionGroupsEl = null;
@@ -284,21 +285,19 @@ class TagInheritanceModal extends Modal {
     });
 
     this.childrenListEl = this.contentEl.createDiv({ cls: 'puffs-relation-child-list' });
-    if (this.relationMode === 'children') {
-      this.exclusionsSectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-exclusions' });
-      this.exclusionsSectionEl.createEl('h4', { text: '已排除笔记' });
-      this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: 'puffs-relation-exclusion-groups' });
-      this.buildInheritanceSelectionSection();
-    }
+    this.exclusionsSectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-exclusions' });
+    this.exclusionsSectionEl.createEl('h4', { text: '已排除笔记' });
+    this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: 'puffs-relation-exclusion-groups' });
+    this.buildInheritanceSelectionSection();
     this.renderChildren();
     this.renderExclusionGroups();
     this.renderInheritanceSelection();
 
     this.modalEl.addEventListener('keydown', (event) => {
+      const { parent, child } = this.getActiveEdge();
       if (
-        this.relationMode !== 'children' ||
         !this.activeChild ||
-        this.plugin.getTagInheritanceMode(this.parentTag, this.activeChild) !== 'selected' ||
+        this.plugin.getTagInheritanceMode(parent, child) !== 'selected' ||
         !(event.ctrlKey || event.metaKey) ||
         event.key.toLowerCase() !== 'f'
       ) return;
@@ -322,14 +321,25 @@ class TagInheritanceModal extends Modal {
     }, 0);
   }
 
-  async changeInheritanceMode(child, mode) {
-    if (!child || this.isSubmitting || this.plugin.isFixedTagEdge(this.parentTag, child) ||
-      this.plugin.getTagInheritanceMode(this.parentTag, child) === mode) return;
-    this.activeChild = child;
+  getEdge(relatedTag) {
+    return this.relationMode === 'parents'
+      ? { parent: relatedTag, child: this.parentTag }
+      : { parent: this.parentTag, child: relatedTag };
+  }
+
+  getActiveEdge() {
+    return this.getEdge(this.activeChild);
+  }
+
+  async changeInheritanceMode(relatedTag, mode) {
+    const { parent, child } = this.getEdge(relatedTag);
+    if (!relatedTag || this.isSubmitting || this.plugin.isFixedTagEdge(parent, child) ||
+      this.plugin.getTagInheritanceMode(parent, child) === mode) return;
+    this.activeChild = relatedTag;
     this.isSubmitting = true;
     this.syncMutationState();
     try {
-      await this.plugin.setTagInheritanceMode(this.parentTag, child, mode);
+      await this.plugin.setTagInheritanceMode(parent, child, mode);
       this.renderChildren();
       this.renderExclusionGroups();
       this.renderInheritanceSelection();
@@ -342,7 +352,7 @@ class TagInheritanceModal extends Modal {
   }
 
   selectActiveChild(child) {
-    if (this.relationMode !== 'children' || !child || !this.children.includes(child)) return;
+    if (!child || !this.children.includes(child)) return;
     this.activeChild = child;
     this.renderChildren();
     this.renderExclusionGroups();
@@ -352,7 +362,7 @@ class TagInheritanceModal extends Modal {
   buildInheritanceSelectionSection() {
     this.selectionSectionEl = this.contentEl.createDiv({ cls: 'puffs-inheritance-selection' });
     const headingEl = this.selectionSectionEl.createDiv({ cls: 'puffs-inheritance-selection-heading' });
-    headingEl.createEl('h4', { text: '继承笔记' });
+    this.selectionTitleEl = headingEl.createEl('h4', { text: '继承笔记' });
     this.selectionSummaryEl = headingEl.createSpan({ cls: 'puffs-inheritance-selection-summary' });
     const toolbarEl = this.selectionSectionEl.createDiv({ cls: 'puffs-inheritance-selection-toolbar' });
     this.selectionInputEl = toolbarEl.createEl('input', { type: 'search', cls: 'puffs-relation-input' });
@@ -388,28 +398,27 @@ class TagInheritanceModal extends Modal {
         setIcon(iconEl, 'tag');
         rowEl.createSpan({ cls: 'puffs-relation-manage-name' });
         rowEl.createSpan({ cls: 'puffs-relation-child-count' });
-        if (this.relationMode === 'children') {
-          const modeButton = rowEl.createEl('button', {
-            cls: 'clickable-icon puffs-inheritance-edge-mode',
-          });
-          modeButton.addEventListener('click', (event) => {
-            event.stopPropagation();
-            const currentChild = modeButton.dataset.puffsChildTag;
-            this.activeChild = currentChild;
-            if (this.plugin.isFixedTagEdge(this.parentTag, currentChild)) {
-              this.renderChildren();
-              this.renderExclusionGroups();
-              this.renderInheritanceSelection();
-              return;
-            }
-            const nextMode = this.plugin.getTagInheritanceMode(this.parentTag, currentChild) === 'selected' ? 'all' : 'selected';
-            void this.changeInheritanceMode(currentChild, nextMode);
-          });
-          rowEl.addEventListener('click', (event) => {
-            if (event.target.closest('button')) return;
-            this.selectActiveChild(rowEl.dataset.puffsTag);
-          });
-        }
+        const modeButton = rowEl.createEl('button', {
+          cls: 'clickable-icon puffs-inheritance-edge-mode',
+        });
+        modeButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const relatedTag = modeButton.dataset.puffsRelatedTag;
+          this.activeChild = relatedTag;
+          const edge = this.getEdge(relatedTag);
+          if (this.plugin.isFixedTagEdge(edge.parent, edge.child)) {
+            this.renderChildren();
+            this.renderExclusionGroups();
+            this.renderInheritanceSelection();
+            return;
+          }
+          const nextMode = this.plugin.getTagInheritanceMode(edge.parent, edge.child) === 'selected' ? 'all' : 'selected';
+          void this.changeInheritanceMode(relatedTag, nextMode);
+        });
+        rowEl.addEventListener('click', (event) => {
+          if (event.target.closest('button')) return;
+          this.selectActiveChild(rowEl.dataset.puffsTag);
+        });
         const removeButton = rowEl.createEl('button', {
           cls: 'clickable-icon puffs-relation-child-remove',
           attr: { 'aria-label': `移除 ${getTagDisplayName(child)}` },
@@ -424,12 +433,10 @@ class TagInheritanceModal extends Modal {
       }
       rowEl.querySelector('.puffs-relation-manage-name').textContent = getTagDisplayName(child);
       rowEl.querySelector('.puffs-relation-child-count').textContent = String(this.plugin.getTagVisibleNoteCount(child));
-      rowEl.classList.toggle('is-active', this.relationMode === 'children' && child === this.activeChild);
-      if (this.relationMode === 'children') {
-        rowEl.setAttribute('role', 'button');
-        rowEl.setAttribute('aria-pressed', String(child === this.activeChild));
-        this.syncInheritanceModeButton(rowEl, child);
-      }
+      rowEl.classList.toggle('is-active', child === this.activeChild);
+      rowEl.setAttribute('role', 'button');
+      rowEl.setAttribute('aria-pressed', String(child === this.activeChild));
+      this.syncInheritanceModeButton(rowEl, child);
       this.syncFixedRelationButton(rowEl, child);
       this.childrenListEl.appendChild(rowEl);
       existingRows.delete(child);
@@ -444,22 +451,24 @@ class TagInheritanceModal extends Modal {
     this.syncMutationState();
   }
 
-  syncInheritanceModeButton(rowEl, child) {
+  syncInheritanceModeButton(rowEl, relatedTag) {
     const button = rowEl.querySelector('.puffs-inheritance-edge-mode');
     if (!button) return;
-    const fixed = this.plugin.isFixedTagEdge(this.parentTag, child);
-    const mode = this.plugin.getTagInheritanceMode(this.parentTag, child);
-    button.dataset.puffsChildTag = child;
-    button.dataset.puffsInheritanceMode = fixed ? 'fixed' : mode;
-    button.classList.toggle('is-active', mode === 'selected' && !fixed);
+    const { parent, child } = this.getEdge(relatedTag);
+    const fixed = this.plugin.isFixedTagEdge(parent, child);
+    // 固定边的锁图标与右侧的解锁按钮重复，且该按钮本就不可点，直接隐藏
+    button.classList.toggle('is-hidden', fixed);
+    button.dataset.puffsRelatedTag = relatedTag;
+    button.dataset.puffsInheritanceMode = fixed ? 'fixed' : this.plugin.getTagInheritanceMode(parent, child);
+    if (fixed) {
+      button.disabled = true;
+      return;
+    }
+    const mode = this.plugin.getTagInheritanceMode(parent, child);
     button.empty();
-    setIcon(button, fixed ? 'lock' : mode === 'selected' ? 'list-checks' : 'layers');
-    const label = fixed
-      ? `${getTagDisplayName(child)}：固定继承`
-      : `${getTagDisplayName(child)}：${mode === 'selected' ? '选择继承' : '全部继承'}，点击切换`;
-    button.setAttribute('aria-label', label);
-    button.setAttribute('title', label);
-    button.disabled = this.isSubmitting || fixed;
+    setIcon(button, mode === 'selected' ? 'list-checks' : 'layers');
+    button.setAttribute('aria-label', `当前为${mode === 'selected' ? '选择' : '全部'}继承`);
+    button.disabled = this.isSubmitting;
   }
 
   syncMutationState() {
@@ -477,8 +486,7 @@ class TagInheritanceModal extends Modal {
   }
 
   syncFixedRelationButton(rowEl, relatedTag) {
-    const parent = this.relationMode === 'parents' ? relatedTag : this.parentTag;
-    const child = this.relationMode === 'parents' ? this.parentTag : relatedTag;
+    const { parent, child } = this.getEdge(relatedTag);
     const eligible = this.plugin.isFixedTagRelationEligible(parent, child);
     let button = rowEl.querySelector('.puffs-relation-fixed-toggle');
     if (!eligible) {
@@ -498,9 +506,8 @@ class TagInheritanceModal extends Modal {
     button.dataset.puffsChildTag = child;
     const fixed = this.plugin.isFixedTagEdge(parent, child);
     button.empty();
-    setIcon(button, fixed ? 'unlock' : 'lock');
-    button.classList.toggle('is-active', fixed);
-    button.setAttribute('aria-label', fixed ? '改为自由子标签' : '设为固定子标签');
+    setIcon(button, fixed ? 'lock' : 'unlock');
+    button.setAttribute('aria-label', `当前为${fixed ? '固定' : '自由'}子标签`);
     button.disabled = this.isSubmitting;
   }
 
@@ -529,7 +536,7 @@ class TagInheritanceModal extends Modal {
     this.children = this.relationMode === 'parents'
       ? this.plugin.sortTagsByVisibleCount(nextChildren)
       : [...nextChildren];
-    if (this.relationMode === 'children' && !this.children.includes(this.activeChild)) {
+    if (!this.children.includes(this.activeChild)) {
       this.activeChild = this.children[0] || null;
     }
     this.renderChildren();
@@ -580,8 +587,9 @@ class TagInheritanceModal extends Modal {
 
   getFilteredInheritanceCandidates() {
     if (!this.activeChild) return [];
+    const { parent, child } = this.getActiveEdge();
     return filterInheritanceCandidates(
-      this.plugin.getInheritanceCandidates(this.parentTag, this.activeChild),
+      this.plugin.getInheritanceCandidates(parent, child),
       this.selectionQuery,
       (file) => this.plugin.getNoteAliases(file)
     );
@@ -592,7 +600,8 @@ class TagInheritanceModal extends Modal {
     this.isSubmitting = true;
     this.syncMutationState();
     try {
-      await this.plugin.setIncludedInheritedPaths(this.parentTag, this.activeChild, nextPaths);
+      const { parent, child } = this.getActiveEdge();
+      await this.plugin.setIncludedInheritedPaths(parent, child, nextPaths);
       this.renderInheritanceSelection();
       return true;
     } catch (error) {
@@ -606,7 +615,8 @@ class TagInheritanceModal extends Modal {
   }
 
   async toggleInheritanceCandidate(path, visible) {
-    const paths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag, this.activeChild));
+    const { parent, child } = this.getActiveEdge();
+    const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
     if (visible) paths.add(path);
     else paths.delete(path);
     await this.persistInheritanceSelection(Array.from(paths));
@@ -614,7 +624,8 @@ class TagInheritanceModal extends Modal {
 
   async applyInheritanceSelectionBatch(visible) {
     if (this.isSubmitting) return;
-    const paths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag, this.activeChild));
+    const { parent, child } = this.getActiveEdge();
+    const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
     for (const candidate of this.getFilteredInheritanceCandidates()) {
       if (candidate.fixed) continue;
       if (visible) paths.add(candidate.path);
@@ -625,12 +636,16 @@ class TagInheritanceModal extends Modal {
 
   renderInheritanceSelection() {
     if (!this.selectionSectionEl || !this.selectionGroupsEl || !this.selectionSummaryEl) return;
-    const selectedMode = !!this.activeChild && this.plugin.getTagInheritanceMode(this.parentTag, this.activeChild) === 'selected';
+    const { parent, child } = this.getActiveEdge();
+    const selectedMode = !!this.activeChild && this.plugin.getTagInheritanceMode(parent, child) === 'selected';
     this.selectionSectionEl.classList.toggle('is-hidden', !selectedMode);
     if (!selectedMode) return;
-    const candidates = this.plugin.getInheritanceCandidates(this.parentTag, this.activeChild);
+    if (this.selectionTitleEl) {
+      this.selectionTitleEl.textContent = `继承笔记（${getTagDisplayName(parent)} ← ${getTagDisplayName(child)}）`;
+    }
+    const candidates = this.plugin.getInheritanceCandidates(parent, child);
     const freeCandidates = candidates.filter((candidate) => !candidate.fixed);
-    const selectedPaths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag, this.activeChild));
+    const selectedPaths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
     const selectedCount = freeCandidates.filter((candidate) => selectedPaths.has(candidate.path)).length;
     this.selectionSummaryEl.textContent = `已选 ${selectedCount} / ${freeCandidates.length}`;
     const filtered = filterInheritanceCandidates(
@@ -729,21 +744,22 @@ class TagInheritanceModal extends Modal {
 
   renderExclusionGroups() {
     if (!this.exclusionsSectionEl || !this.exclusionGroupsEl) return;
-    if (!this.activeChild || this.plugin.getTagInheritanceMode(this.parentTag, this.activeChild) !== 'all') {
+    const { parent, child } = this.getActiveEdge();
+    if (!this.activeChild || this.plugin.getTagInheritanceMode(parent, child) !== 'all') {
       this.exclusionsSectionEl.classList.add('is-hidden');
       return;
     }
-    const exclusions = this.plugin.getExcludedInheritedPaths(this.parentTag, this.activeChild);
+    const exclusions = this.plugin.getExcludedInheritedPaths(parent, child);
     this.exclusionsSectionEl.classList.toggle('is-hidden', exclusions.length === 0);
     this.exclusionGroupsEl.empty();
     if (!exclusions.length) return;
-    const candidatesByPath = new Map(this.plugin.getInheritanceCandidates(this.parentTag, this.activeChild)
+    const candidatesByPath = new Map(this.plugin.getInheritanceCandidates(parent, child)
       .map((candidate) => [candidate.path, candidate]));
     const sourcesByPath = new Map(exclusions.map((path) => [path, candidatesByPath.get(path)?.sources || []]));
     const groups = groupExcludedPathsBySource(
       exclusions,
       sourcesByPath,
-      [this.activeChild, ...this.plugin.getTagDescendants(this.activeChild)]
+      [child, ...this.plugin.getTagDescendants(child)]
     );
     for (const group of groups) {
       const groupEl = this.exclusionGroupsEl.createDiv({ cls: 'puffs-relation-exclusion-group' });
@@ -765,7 +781,7 @@ class TagInheritanceModal extends Modal {
           if (restoreButton.disabled) return;
           restoreButton.disabled = true;
           try {
-            await this.plugin.restoreInheritedFile(this.parentTag, path, this.activeChild);
+            await this.plugin.restoreInheritedFile(parent, path, child);
             this.removeExcludedPath(path);
           } catch (error) {
             console.error('[Puffs Tag Enhance] Failed to restore inherited note:', error);

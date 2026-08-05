@@ -274,6 +274,61 @@ describe('选择继承弹窗操作', () => {
   });
 });
 
+describe('父标签弹窗的选择继承', () => {
+  function createParentsModal() {
+    const modal = Object.create(ManageParentTagModal.prototype) as any;
+    modal.parentTag = '#亲昵';
+    modal.relationMode = 'parents';
+    modal.children = ['#爱情'];
+    modal.activeChild = '#爱情';
+    modal.isSubmitting = false;
+    modal.syncMutationState = vi.fn();
+    modal.renderChildren = vi.fn();
+    modal.renderExclusionGroups = vi.fn();
+    modal.renderInheritanceSelection = vi.fn();
+    return modal;
+  }
+
+  it('边方向取「该父 → 当前标签」，与子标签弹窗共用同一条边', () => {
+    const parentsModal = createParentsModal();
+    expect(parentsModal.getEdge('#爱情')).toEqual({ parent: '#爱情', child: '#亲昵' });
+    expect(parentsModal.getActiveEdge()).toEqual({ parent: '#爱情', child: '#亲昵' });
+
+    const childrenModal = Object.create(TagInheritanceModal.prototype) as any;
+    childrenModal.relationMode = 'children';
+    childrenModal.parentTag = '#爱情';
+    childrenModal.activeChild = '#亲昵';
+    expect(childrenModal.getActiveEdge()).toEqual(parentsModal.getActiveEdge());
+  });
+
+  it('切换模式写入的是父→子方向的边', async () => {
+    const modal = createParentsModal();
+    modal.plugin = {
+      getTagInheritanceMode: vi.fn(() => 'all'),
+      isFixedTagEdge: vi.fn(() => false),
+      setTagInheritanceMode: vi.fn(async () => undefined),
+    };
+
+    await modal.changeInheritanceMode('#爱情', 'selected');
+
+    expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#爱情', '#亲昵', 'selected');
+  });
+
+  it('勾选继承笔记写入 父→子 的白名单', async () => {
+    const modal = createParentsModal();
+    modal.plugin = {
+      getIncludedInheritedPaths: vi.fn(() => ['已选.md']),
+      setIncludedInheritedPaths: vi.fn(async () => undefined),
+    };
+
+    await modal.toggleInheritanceCandidate('新增.md', true);
+
+    expect(modal.plugin.getIncludedInheritedPaths).toHaveBeenCalledWith('#爱情', '#亲昵');
+    expect(modal.plugin.setIncludedInheritedPaths)
+      .toHaveBeenCalledWith('#爱情', '#亲昵', ['已选.md', '新增.md']);
+  });
+});
+
 describe('管理父标签立即保存', () => {
   function createModal(parents = ['#旧父']) {
     const modal = Object.create(ManageParentTagModal.prototype) as any;

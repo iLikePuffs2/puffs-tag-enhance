@@ -4910,7 +4910,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     this.parentTag = normalizeTag(subjectTag);
     const related = relationMode === "parents" ? plugin.getInheritanceParents(subjectTag) : plugin.getInheritanceChildren(subjectTag);
     this.children = relationMode === "parents" ? plugin.sortTagsByVisibleCount(related) : [...related];
-    this.activeChild = relationMode === "children" ? this.children[0] || null : null;
+    this.activeChild = this.children[0] || null;
     this.query = "";
     this.isComposing = false;
     this.isSubmitting = false;
@@ -4921,6 +4921,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     this.exclusionsSectionEl = null;
     this.exclusionGroupsEl = null;
     this.selectionSectionEl = null;
+    this.selectionTitleEl = null;
     this.selectionSummaryEl = null;
     this.selectionInputEl = null;
     this.selectionGroupsEl = null;
@@ -4958,18 +4959,17 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
       }
     });
     this.childrenListEl = this.contentEl.createDiv({ cls: "puffs-relation-child-list" });
-    if (this.relationMode === "children") {
-      this.exclusionsSectionEl = this.contentEl.createDiv({ cls: "puffs-relation-exclusions" });
-      this.exclusionsSectionEl.createEl("h4", { text: "\u5DF2\u6392\u9664\u7B14\u8BB0" });
-      this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: "puffs-relation-exclusion-groups" });
-      this.buildInheritanceSelectionSection();
-    }
+    this.exclusionsSectionEl = this.contentEl.createDiv({ cls: "puffs-relation-exclusions" });
+    this.exclusionsSectionEl.createEl("h4", { text: "\u5DF2\u6392\u9664\u7B14\u8BB0" });
+    this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: "puffs-relation-exclusion-groups" });
+    this.buildInheritanceSelectionSection();
     this.renderChildren();
     this.renderExclusionGroups();
     this.renderInheritanceSelection();
     this.modalEl.addEventListener("keydown", (event) => {
       var _a;
-      if (this.relationMode !== "children" || !this.activeChild || this.plugin.getTagInheritanceMode(this.parentTag, this.activeChild) !== "selected" || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") return;
+      const { parent, child } = this.getActiveEdge();
+      if (!this.activeChild || this.plugin.getTagInheritanceMode(parent, child) !== "selected" || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") return;
       event.preventDefault();
       event.stopPropagation();
       if (document.activeElement === this.selectionInputEl && this.selectionInputEl.value) {
@@ -4988,13 +4988,20 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
       this.modalEl.focus();
     }, 0);
   }
-  async changeInheritanceMode(child, mode) {
-    if (!child || this.isSubmitting || this.plugin.isFixedTagEdge(this.parentTag, child) || this.plugin.getTagInheritanceMode(this.parentTag, child) === mode) return;
-    this.activeChild = child;
+  getEdge(relatedTag) {
+    return this.relationMode === "parents" ? { parent: relatedTag, child: this.parentTag } : { parent: this.parentTag, child: relatedTag };
+  }
+  getActiveEdge() {
+    return this.getEdge(this.activeChild);
+  }
+  async changeInheritanceMode(relatedTag, mode) {
+    const { parent, child } = this.getEdge(relatedTag);
+    if (!relatedTag || this.isSubmitting || this.plugin.isFixedTagEdge(parent, child) || this.plugin.getTagInheritanceMode(parent, child) === mode) return;
+    this.activeChild = relatedTag;
     this.isSubmitting = true;
     this.syncMutationState();
     try {
-      await this.plugin.setTagInheritanceMode(this.parentTag, child, mode);
+      await this.plugin.setTagInheritanceMode(parent, child, mode);
       this.renderChildren();
       this.renderExclusionGroups();
       this.renderInheritanceSelection();
@@ -5006,7 +5013,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     }
   }
   selectActiveChild(child) {
-    if (this.relationMode !== "children" || !child || !this.children.includes(child)) return;
+    if (!child || !this.children.includes(child)) return;
     this.activeChild = child;
     this.renderChildren();
     this.renderExclusionGroups();
@@ -5015,7 +5022,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
   buildInheritanceSelectionSection() {
     this.selectionSectionEl = this.contentEl.createDiv({ cls: "puffs-inheritance-selection" });
     const headingEl = this.selectionSectionEl.createDiv({ cls: "puffs-inheritance-selection-heading" });
-    headingEl.createEl("h4", { text: "\u7EE7\u627F\u7B14\u8BB0" });
+    this.selectionTitleEl = headingEl.createEl("h4", { text: "\u7EE7\u627F\u7B14\u8BB0" });
     this.selectionSummaryEl = headingEl.createSpan({ cls: "puffs-inheritance-selection-summary" });
     const toolbarEl = this.selectionSectionEl.createDiv({ cls: "puffs-inheritance-selection-toolbar" });
     this.selectionInputEl = toolbarEl.createEl("input", { type: "search", cls: "puffs-relation-input" });
@@ -5054,28 +5061,27 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
         (0, import_obsidian10.setIcon)(iconEl, "tag");
         rowEl.createSpan({ cls: "puffs-relation-manage-name" });
         rowEl.createSpan({ cls: "puffs-relation-child-count" });
-        if (this.relationMode === "children") {
-          const modeButton = rowEl.createEl("button", {
-            cls: "clickable-icon puffs-inheritance-edge-mode"
-          });
-          modeButton.addEventListener("click", (event) => {
-            event.stopPropagation();
-            const currentChild = modeButton.dataset.puffsChildTag;
-            this.activeChild = currentChild;
-            if (this.plugin.isFixedTagEdge(this.parentTag, currentChild)) {
-              this.renderChildren();
-              this.renderExclusionGroups();
-              this.renderInheritanceSelection();
-              return;
-            }
-            const nextMode = this.plugin.getTagInheritanceMode(this.parentTag, currentChild) === "selected" ? "all" : "selected";
-            void this.changeInheritanceMode(currentChild, nextMode);
-          });
-          rowEl.addEventListener("click", (event) => {
-            if (event.target.closest("button")) return;
-            this.selectActiveChild(rowEl.dataset.puffsTag);
-          });
-        }
+        const modeButton = rowEl.createEl("button", {
+          cls: "clickable-icon puffs-inheritance-edge-mode"
+        });
+        modeButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const relatedTag = modeButton.dataset.puffsRelatedTag;
+          this.activeChild = relatedTag;
+          const edge = this.getEdge(relatedTag);
+          if (this.plugin.isFixedTagEdge(edge.parent, edge.child)) {
+            this.renderChildren();
+            this.renderExclusionGroups();
+            this.renderInheritanceSelection();
+            return;
+          }
+          const nextMode = this.plugin.getTagInheritanceMode(edge.parent, edge.child) === "selected" ? "all" : "selected";
+          void this.changeInheritanceMode(relatedTag, nextMode);
+        });
+        rowEl.addEventListener("click", (event) => {
+          if (event.target.closest("button")) return;
+          this.selectActiveChild(rowEl.dataset.puffsTag);
+        });
         const removeButton = rowEl.createEl("button", {
           cls: "clickable-icon puffs-relation-child-remove",
           attr: { "aria-label": `\u79FB\u9664 ${getTagDisplayName(child)}` }
@@ -5090,12 +5096,10 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
       }
       rowEl.querySelector(".puffs-relation-manage-name").textContent = getTagDisplayName(child);
       rowEl.querySelector(".puffs-relation-child-count").textContent = String(this.plugin.getTagVisibleNoteCount(child));
-      rowEl.classList.toggle("is-active", this.relationMode === "children" && child === this.activeChild);
-      if (this.relationMode === "children") {
-        rowEl.setAttribute("role", "button");
-        rowEl.setAttribute("aria-pressed", String(child === this.activeChild));
-        this.syncInheritanceModeButton(rowEl, child);
-      }
+      rowEl.classList.toggle("is-active", child === this.activeChild);
+      rowEl.setAttribute("role", "button");
+      rowEl.setAttribute("aria-pressed", String(child === this.activeChild));
+      this.syncInheritanceModeButton(rowEl, child);
       this.syncFixedRelationButton(rowEl, child);
       this.childrenListEl.appendChild(rowEl);
       existingRows.delete(child);
@@ -5109,20 +5113,23 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     }
     this.syncMutationState();
   }
-  syncInheritanceModeButton(rowEl, child) {
+  syncInheritanceModeButton(rowEl, relatedTag) {
     const button = rowEl.querySelector(".puffs-inheritance-edge-mode");
     if (!button) return;
-    const fixed = this.plugin.isFixedTagEdge(this.parentTag, child);
-    const mode = this.plugin.getTagInheritanceMode(this.parentTag, child);
-    button.dataset.puffsChildTag = child;
-    button.dataset.puffsInheritanceMode = fixed ? "fixed" : mode;
-    button.classList.toggle("is-active", mode === "selected" && !fixed);
+    const { parent, child } = this.getEdge(relatedTag);
+    const fixed = this.plugin.isFixedTagEdge(parent, child);
+    button.classList.toggle("is-hidden", fixed);
+    button.dataset.puffsRelatedTag = relatedTag;
+    button.dataset.puffsInheritanceMode = fixed ? "fixed" : this.plugin.getTagInheritanceMode(parent, child);
+    if (fixed) {
+      button.disabled = true;
+      return;
+    }
+    const mode = this.plugin.getTagInheritanceMode(parent, child);
     button.empty();
-    (0, import_obsidian10.setIcon)(button, fixed ? "lock" : mode === "selected" ? "list-checks" : "layers");
-    const label = fixed ? `${getTagDisplayName(child)}\uFF1A\u56FA\u5B9A\u7EE7\u627F` : `${getTagDisplayName(child)}\uFF1A${mode === "selected" ? "\u9009\u62E9\u7EE7\u627F" : "\u5168\u90E8\u7EE7\u627F"}\uFF0C\u70B9\u51FB\u5207\u6362`;
-    button.setAttribute("aria-label", label);
-    button.setAttribute("title", label);
-    button.disabled = this.isSubmitting || fixed;
+    (0, import_obsidian10.setIcon)(button, mode === "selected" ? "list-checks" : "layers");
+    button.setAttribute("aria-label", `\u5F53\u524D\u4E3A${mode === "selected" ? "\u9009\u62E9" : "\u5168\u90E8"}\u7EE7\u627F`);
+    button.disabled = this.isSubmitting;
   }
   syncMutationState() {
     var _a, _b;
@@ -5139,8 +5146,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     }
   }
   syncFixedRelationButton(rowEl, relatedTag) {
-    const parent = this.relationMode === "parents" ? relatedTag : this.parentTag;
-    const child = this.relationMode === "parents" ? this.parentTag : relatedTag;
+    const { parent, child } = this.getEdge(relatedTag);
     const eligible = this.plugin.isFixedTagRelationEligible(parent, child);
     let button = rowEl.querySelector(".puffs-relation-fixed-toggle");
     if (!eligible) {
@@ -5160,9 +5166,8 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     button.dataset.puffsChildTag = child;
     const fixed = this.plugin.isFixedTagEdge(parent, child);
     button.empty();
-    (0, import_obsidian10.setIcon)(button, fixed ? "unlock" : "lock");
-    button.classList.toggle("is-active", fixed);
-    button.setAttribute("aria-label", fixed ? "\u6539\u4E3A\u81EA\u7531\u5B50\u6807\u7B7E" : "\u8BBE\u4E3A\u56FA\u5B9A\u5B50\u6807\u7B7E");
+    (0, import_obsidian10.setIcon)(button, fixed ? "lock" : "unlock");
+    button.setAttribute("aria-label", `\u5F53\u524D\u4E3A${fixed ? "\u56FA\u5B9A" : "\u81EA\u7531"}\u5B50\u6807\u7B7E`);
     button.disabled = this.isSubmitting;
   }
   async toggleFixedRelation(button) {
@@ -5189,7 +5194,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
   updateChildren(nextChildren) {
     var _a;
     this.children = this.relationMode === "parents" ? this.plugin.sortTagsByVisibleCount(nextChildren) : [...nextChildren];
-    if (this.relationMode === "children" && !this.children.includes(this.activeChild)) {
+    if (!this.children.includes(this.activeChild)) {
       this.activeChild = this.children[0] || null;
     }
     this.renderChildren();
@@ -5241,8 +5246,9 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
   }
   getFilteredInheritanceCandidates() {
     if (!this.activeChild) return [];
+    const { parent, child } = this.getActiveEdge();
     return filterInheritanceCandidates(
-      this.plugin.getInheritanceCandidates(this.parentTag, this.activeChild),
+      this.plugin.getInheritanceCandidates(parent, child),
       this.selectionQuery,
       (file) => this.plugin.getNoteAliases(file)
     );
@@ -5252,7 +5258,8 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     this.isSubmitting = true;
     this.syncMutationState();
     try {
-      await this.plugin.setIncludedInheritedPaths(this.parentTag, this.activeChild, nextPaths);
+      const { parent, child } = this.getActiveEdge();
+      await this.plugin.setIncludedInheritedPaths(parent, child, nextPaths);
       this.renderInheritanceSelection();
       return true;
     } catch (error) {
@@ -5265,14 +5272,16 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     }
   }
   async toggleInheritanceCandidate(path, visible) {
-    const paths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag, this.activeChild));
+    const { parent, child } = this.getActiveEdge();
+    const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
     if (visible) paths.add(path);
     else paths.delete(path);
     await this.persistInheritanceSelection(Array.from(paths));
   }
   async applyInheritanceSelectionBatch(visible) {
     if (this.isSubmitting) return;
-    const paths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag, this.activeChild));
+    const { parent, child } = this.getActiveEdge();
+    const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
     for (const candidate of this.getFilteredInheritanceCandidates()) {
       if (candidate.fixed) continue;
       if (visible) paths.add(candidate.path);
@@ -5283,12 +5292,16 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
   renderInheritanceSelection() {
     var _a, _b;
     if (!this.selectionSectionEl || !this.selectionGroupsEl || !this.selectionSummaryEl) return;
-    const selectedMode = !!this.activeChild && this.plugin.getTagInheritanceMode(this.parentTag, this.activeChild) === "selected";
+    const { parent, child } = this.getActiveEdge();
+    const selectedMode = !!this.activeChild && this.plugin.getTagInheritanceMode(parent, child) === "selected";
     this.selectionSectionEl.classList.toggle("is-hidden", !selectedMode);
     if (!selectedMode) return;
-    const candidates = this.plugin.getInheritanceCandidates(this.parentTag, this.activeChild);
+    if (this.selectionTitleEl) {
+      this.selectionTitleEl.textContent = `\u7EE7\u627F\u7B14\u8BB0\uFF08${getTagDisplayName(parent)} \u2190 ${getTagDisplayName(child)}\uFF09`;
+    }
+    const candidates = this.plugin.getInheritanceCandidates(parent, child);
     const freeCandidates = candidates.filter((candidate) => !candidate.fixed);
-    const selectedPaths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag, this.activeChild));
+    const selectedPaths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
     const selectedCount = freeCandidates.filter((candidate) => selectedPaths.has(candidate.path)).length;
     this.selectionSummaryEl.textContent = `\u5DF2\u9009 ${selectedCount} / ${freeCandidates.length}`;
     const filtered = filterInheritanceCandidates(
@@ -5381,15 +5394,16 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
   }
   renderExclusionGroups() {
     if (!this.exclusionsSectionEl || !this.exclusionGroupsEl) return;
-    if (!this.activeChild || this.plugin.getTagInheritanceMode(this.parentTag, this.activeChild) !== "all") {
+    const { parent, child } = this.getActiveEdge();
+    if (!this.activeChild || this.plugin.getTagInheritanceMode(parent, child) !== "all") {
       this.exclusionsSectionEl.classList.add("is-hidden");
       return;
     }
-    const exclusions = this.plugin.getExcludedInheritedPaths(this.parentTag, this.activeChild);
+    const exclusions = this.plugin.getExcludedInheritedPaths(parent, child);
     this.exclusionsSectionEl.classList.toggle("is-hidden", exclusions.length === 0);
     this.exclusionGroupsEl.empty();
     if (!exclusions.length) return;
-    const candidatesByPath = new Map(this.plugin.getInheritanceCandidates(this.parentTag, this.activeChild).map((candidate) => [candidate.path, candidate]));
+    const candidatesByPath = new Map(this.plugin.getInheritanceCandidates(parent, child).map((candidate) => [candidate.path, candidate]));
     const sourcesByPath = new Map(exclusions.map((path) => {
       var _a;
       return [path, ((_a = candidatesByPath.get(path)) == null ? void 0 : _a.sources) || []];
@@ -5397,7 +5411,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
     const groups = groupExcludedPathsBySource(
       exclusions,
       sourcesByPath,
-      [this.activeChild, ...this.plugin.getTagDescendants(this.activeChild)]
+      [child, ...this.plugin.getTagDescendants(child)]
     );
     for (const group of groups) {
       const groupEl = this.exclusionGroupsEl.createDiv({ cls: "puffs-relation-exclusion-group" });
@@ -5419,7 +5433,7 @@ var TagInheritanceModal = class extends import_obsidian10.Modal {
           if (restoreButton.disabled) return;
           restoreButton.disabled = true;
           try {
-            await this.plugin.restoreInheritedFile(this.parentTag, path, this.activeChild);
+            await this.plugin.restoreInheritedFile(parent, path, child);
             this.removeExcludedPath(path);
           } catch (error) {
             console.error("[Puffs Tag Enhance] Failed to restore inherited note:", error);
@@ -7374,6 +7388,48 @@ var RelationsBehavior = class {
     for (const parent of parents) reconcileParent(parent);
     return beforeIncluded !== JSON.stringify(inheritance.includedPathsByParentChild) || beforeExcluded !== JSON.stringify(inheritance.excludedPathsByParentChild);
   }
+  collectVisiblePathsForEdge(parent, child) {
+    const mode = this.getTagInheritanceMode(parent, child);
+    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
+    if (mode === "selected") {
+      const included = new Set(this.getIncludedInheritedPaths(parent, child));
+      return new Set(freeCandidates.filter((candidate) => included.has(candidate.path)).map((candidate) => candidate.path));
+    }
+    const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
+    return new Set(freeCandidates.filter((candidate) => !excluded.has(candidate.path)).map((candidate) => candidate.path));
+  }
+  propagateNewlyAllowedPathsToAncestors(childTagValue, newlyAllowedPaths) {
+    const startTag = normalizeTag(childTagValue);
+    const paths = Array.from(new Set((newlyAllowedPaths || []).map((path) => typeof path === "string" ? path.trim() : "").filter(Boolean)));
+    if (!startTag || !paths.length) return;
+    const inheritance = this.getTagInheritanceSettings();
+    const visited = /* @__PURE__ */ new Set([startTag]);
+    const queue = [startTag];
+    while (queue.length) {
+      const child = queue.shift();
+      for (const parent of this.getInheritanceParents(child)) {
+        if (!this.isFixedTagEdge(parent, child)) {
+          if (this.getTagInheritanceMode(parent, child) === "selected") {
+            const included = new Set(this.getIncludedInheritedPaths(parent, child));
+            for (const path of paths) included.add(path);
+            this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, Array.from(included));
+          } else {
+            const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
+            for (const path of paths) excluded.delete(path);
+            this.setParentChildValue(
+              inheritance.excludedPathsByParentChild,
+              parent,
+              child,
+              excluded.size ? Array.from(excluded) : void 0
+            );
+          }
+        }
+        if (visited.has(parent)) continue;
+        visited.add(parent);
+        queue.push(parent);
+      }
+    }
+  }
   async setTagInheritanceMode(parentValue, childValue, modeValue) {
     const parent = normalizeTag(parentValue);
     const child = normalizeTag(childValue);
@@ -7400,6 +7456,10 @@ var RelationsBehavior = class {
       const paths = freeCandidates.filter((candidate) => !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
       this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.length ? paths : void 0);
     }
+    this.propagateNewlyAllowedPathsToAncestors(
+      parent,
+      Array.from(this.collectVisiblePathsForEdge(parent, child)).filter((path) => !currentVisible.has(path))
+    );
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
@@ -7420,9 +7480,11 @@ var RelationsBehavior = class {
     const previousExcluded = inheritance.excludedPathsByParentChild;
     const allowed = new Set(this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed).map((candidate) => candidate.path));
     const paths = Array.from(new Set((pathValues || []).map((path) => typeof path === "string" ? path.trim() : "").filter((path) => path && allowed.has(path))));
+    const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : void 0);
+    this.propagateNewlyAllowedPathsToAncestors(parent, paths.filter((path) => !previouslyVisible.has(path)));
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
@@ -7456,9 +7518,11 @@ var RelationsBehavior = class {
     const inheritance = this.getTagInheritanceSettings();
     const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
+    const wasVisible = this.collectVisiblePathsForEdge(parent, child).has(path);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
+    if (visible && !wasVisible) this.propagateNewlyAllowedPathsToAncestors(parent, [path]);
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();

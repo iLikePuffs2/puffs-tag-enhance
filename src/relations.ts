@@ -1698,6 +1698,52 @@ export class RelationsBehavior {
       beforeExcluded !== JSON.stringify(inheritance.excludedPathsByParentChild);
   }
 
+  collectVisiblePathsForEdge(parent, child) {
+    const mode = this.getTagInheritanceMode(parent, child);
+    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
+    if (mode === 'selected') {
+      const included = new Set(this.getIncludedInheritedPaths(parent, child));
+      return new Set(freeCandidates.filter((candidate) => included.has(candidate.path)).map((candidate) => candidate.path));
+    }
+    const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
+    return new Set(freeCandidates.filter((candidate) => !excluded.has(candidate.path)).map((candidate) => candidate.path));
+  }
+
+  propagateNewlyAllowedPathsToAncestors(childTagValue, newlyAllowedPaths) {
+    const startTag = normalizeTag(childTagValue);
+    const paths = Array.from(new Set((newlyAllowedPaths || [])
+      .map((path) => typeof path === 'string' ? path.trim() : '')
+      .filter(Boolean)));
+    if (!startTag || !paths.length) return;
+    const inheritance = this.getTagInheritanceSettings();
+    const visited = new Set([startTag]);
+    const queue = [startTag];
+    while (queue.length) {
+      const child = queue.shift();
+      for (const parent of this.getInheritanceParents(child)) {
+        if (!this.isFixedTagEdge(parent, child)) {
+          if (this.getTagInheritanceMode(parent, child) === 'selected') {
+            const included = new Set(this.getIncludedInheritedPaths(parent, child));
+            for (const path of paths) included.add(path);
+            this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, Array.from(included));
+          } else {
+            const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
+            for (const path of paths) excluded.delete(path);
+            this.setParentChildValue(
+              inheritance.excludedPathsByParentChild,
+              parent,
+              child,
+              excluded.size ? Array.from(excluded) : undefined
+            );
+          }
+        }
+        if (visited.has(parent)) continue;
+        visited.add(parent);
+        queue.push(parent);
+      }
+    }
+  }
+
   async setTagInheritanceMode(parentValue, childValue, modeValue) {
     const parent = normalizeTag(parentValue);
     const child = normalizeTag(childValue);
@@ -1728,6 +1774,10 @@ export class RelationsBehavior {
       const paths = freeCandidates.filter((candidate) => !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
       this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.length ? paths : undefined);
     }
+    this.propagateNewlyAllowedPathsToAncestors(
+      parent,
+      Array.from(this.collectVisiblePathsForEdge(parent, child)).filter((path) => !currentVisible.has(path))
+    );
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
@@ -1753,9 +1803,11 @@ export class RelationsBehavior {
     const paths = Array.from(new Set((pathValues || [])
       .map((path) => typeof path === 'string' ? path.trim() : '')
       .filter((path) => path && allowed.has(path))));
+    const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : undefined);
+    this.propagateNewlyAllowedPathsToAncestors(parent, paths.filter((path) => !previouslyVisible.has(path)));
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
@@ -1791,9 +1843,11 @@ export class RelationsBehavior {
     const inheritance = this.getTagInheritanceSettings();
     const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
+    const wasVisible = this.collectVisiblePathsForEdge(parent, child).has(path);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
+    if (visible && !wasVisible) this.propagateNewlyAllowedPathsToAncestors(parent, [path]);
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
