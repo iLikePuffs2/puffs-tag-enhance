@@ -211,23 +211,43 @@ describe('管理子标签立即保存', () => {
 });
 
 describe('选择继承弹窗操作', () => {
+  it('点击子标签行只切换下半部当前关系', () => {
+    const modal = Object.create(TagInheritanceModal.prototype) as any;
+    modal.relationMode = 'children';
+    modal.children = ['#子一', '#子二'];
+    modal.activeChild = '#子一';
+    modal.renderChildren = vi.fn();
+    modal.renderExclusionGroups = vi.fn();
+    modal.renderInheritanceSelection = vi.fn();
+
+    modal.selectActiveChild('#子二');
+
+    expect(modal.activeChild).toBe('#子二');
+    expect(modal.renderChildren).toHaveBeenCalledOnce();
+    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
+    expect(modal.renderInheritanceSelection).toHaveBeenCalledOnce();
+  });
+
   it('模式切换立即保存并刷新两个名单区', async () => {
     const modal = Object.create(TagInheritanceModal.prototype) as any;
     let mode = 'all';
     modal.parentTag = '#父';
+    modal.activeChild = '#子';
     modal.isSubmitting = false;
     modal.syncMutationState = vi.fn();
-    modal.renderInheritanceModeControls = vi.fn();
+    modal.renderChildren = vi.fn();
     modal.renderExclusionGroups = vi.fn();
     modal.renderInheritanceSelection = vi.fn();
     modal.plugin = {
       getTagInheritanceMode: vi.fn(() => mode),
-      setTagInheritanceMode: vi.fn(async (_tag, nextMode) => { mode = nextMode; }),
+      isFixedTagEdge: vi.fn(() => false),
+      setTagInheritanceMode: vi.fn(async (_parent, _child, nextMode) => { mode = nextMode; }),
     };
 
-    await modal.changeInheritanceMode('selected');
+    await modal.changeInheritanceMode('#子', 'selected');
 
-    expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#父', 'selected');
+    expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#父', '#子', 'selected');
+    expect(modal.renderChildren).toHaveBeenCalledOnce();
     expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
     expect(modal.renderInheritanceSelection).toHaveBeenCalledOnce();
     expect(modal.isSubmitting).toBe(false);
@@ -237,6 +257,7 @@ describe('选择继承弹窗操作', () => {
     const modal = Object.create(TagInheritanceModal.prototype) as any;
     modal.isSubmitting = false;
     modal.parentTag = '#父';
+    modal.activeChild = '#子';
     modal.plugin = { getIncludedInheritedPaths: vi.fn(() => ['原有.md']) };
     modal.getFilteredInheritanceCandidates = vi.fn(() => [
       { path: '筛选.md', fixed: false },

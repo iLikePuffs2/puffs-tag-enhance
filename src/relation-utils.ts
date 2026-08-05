@@ -167,23 +167,25 @@ export function buildTagInheritanceGroupTree(
   orderedPathsByTag: Record<string, string[]>,
   excludedPaths: string[] = [],
   fixedTags: Set<string> = new Set(),
-  includedPaths: string[] | null = null
+  includedPaths: string[] | null = null,
+  isPathVisible?: (tag: string, path: string, lineage: string[]) => boolean
 ): TagInheritanceGroupNode | null {
   if (!rootTag) return null;
   const excluded = new Set(excludedPaths || []);
   const included = includedPaths === null ? null : new Set(includedPaths);
-  const visit = (tag: string, branch: Set<string>, isRoot = false): TagInheritanceGroupNode | null => {
+  const visit = (tag: string, branch: Set<string>, lineage: string[], isRoot = false): TagInheritanceGroupNode | null => {
     if (!tag || branch.has(tag)) return null;
     const nextBranch = new Set(branch);
     nextBranch.add(tag);
     const paths = Array.from(new Set(orderedPathsByTag[tag] || []))
       .filter((path) => path && (
         isRoot ||
-        fixedTags.has(tag) ||
-        (included ? included.has(path) : !excluded.has(path))
+        (isPathVisible
+          ? isPathVisible(tag, path, lineage)
+          : (fixedTags.has(tag) || (included ? included.has(path) : !excluded.has(path))))
       ));
     const children = (childrenByParent[tag] || [])
-      .map((child) => visit(child, nextBranch))
+      .map((child) => visit(child, nextBranch, [...lineage, child], false))
       .filter((child): child is TagInheritanceGroupNode => !!child && child.subtreePaths.length > 0);
     const subtreePaths = Array.from(new Set([
       ...paths,
@@ -191,7 +193,7 @@ export function buildTagInheritanceGroupTree(
     ]));
     return { tag, paths, children, subtreePaths };
   };
-  return visit(rootTag, new Set(), true);
+  return visit(rootTag, new Set(), [rootTag], true);
 }
 
 export function compareHierarchyParentItems(
