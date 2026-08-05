@@ -1476,7 +1476,7 @@ export class RelationsBehavior {
     return {
       tags,
       keys,
-      shouldExpand: tags.some((tag) => !expandedTags?.has(tag)) || keys.some((key) => collapsed.has(key)),
+      shouldExpand: tags.some((tag) => !expandedTags?.has(tag)) || keys.every((key) => collapsed.has(key)),
     };
   }
 

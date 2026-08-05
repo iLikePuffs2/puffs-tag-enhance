@@ -284,7 +284,11 @@ describe('批量父子关系', () => {
     expect(behavior.toggleInlineHierarchyBranch(firstKey)).toBe(true);
     expect(behavior.collapsedInlineHierarchyBranches.has(firstKey)).toBe(false);
     expect(behavior.collapsedInlineHierarchyBranches.has(secondKey)).toBe(true);
-    expect(behavior.toggleInlineHierarchyBranch(firstKey)).toBe(false);
+
+    const partialControl = behavior.getUniqueSearchInheritanceControl(items, '爱情', expandedTags);
+    expect(partialControl.shouldExpand).toBe(false);
+    behavior.setAllTagInheritanceGroupsExpanded(partialControl.keys, false);
+    expect(behavior.collapsedInlineHierarchyBranches.size).toBe(4);
 
     const expandControl = behavior.getUniqueSearchInheritanceControl(items, '爱情', expandedTags);
     expect(expandControl.shouldExpand).toBe(true);

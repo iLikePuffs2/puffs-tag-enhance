@@ -7098,7 +7098,7 @@ var RelationsBehavior = class {
     return {
       tags,
       keys,
-      shouldExpand: tags.some((tag) => !(expandedTags == null ? void 0 : expandedTags.has(tag))) || keys.some((key) => collapsed.has(key))
+      shouldExpand: tags.some((tag) => !(expandedTags == null ? void 0 : expandedTags.has(tag))) || keys.every((key) => collapsed.has(key))
     };
   }
   setAllTagInheritanceGroupsExpanded(keys, expanded) {
