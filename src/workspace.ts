@@ -11,6 +11,7 @@ import {
   formatHotkey,
   getLeafFilePath,
   normalizeTag,
+  parseCurrentNoteTagSearch,
   parseHotkeyText
 } from "./models";
 
@@ -30,15 +31,20 @@ export class WorkspaceBehavior {
     }
   }
 
-  refreshCurrentNoteHierarchySearchViews() {
+  followsCurrentNote(searchValue) {
+    return this.getHierarchySearchContext(searchValue).mode === 'current-note'
+      || parseCurrentNoteTagSearch(searchValue).matched;
+  }
+
+  refreshCurrentNoteSearchViews() {
     for (const leaf of this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []) {
       const view = leaf.view;
-      if (!view || this.getHierarchySearchContext(this.getTagSearchValue(view)).mode !== 'current-note') continue;
+      if (!view || !this.followsCurrentNote(this.getTagSearchValue(view))) continue;
       this.scheduleSyncView(view, 0);
     }
     for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE) || []) {
       const view = leaf.view;
-      if (!view || this.getHierarchySearchContext(view.searchQuery).mode !== 'current-note') continue;
+      if (!view || !this.followsCurrentNote(view.searchQuery)) continue;
       if (typeof view.renderTagList === 'function') view.renderTagList();
       else if (typeof view.refresh === 'function') view.refresh();
     }
@@ -48,7 +54,7 @@ export class WorkspaceBehavior {
     const nextPath = filePath || null;
     if (nextPath === this.currentMainFilePath) return false;
     this.currentMainFilePath = nextPath;
-    this.refreshCurrentNoteHierarchySearchViews();
+    this.refreshCurrentNoteSearchViews();
     return true;
   }
 

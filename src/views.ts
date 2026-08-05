@@ -4,6 +4,7 @@ import {
   TAG_SHELF_VIEW_TYPE,
   TAG_SYSTEM_ICON,
   createNoteCardSearchState,
+  parseCurrentNoteTagSearch,
   parseNoteCardSearch
 } from "./models";
 import { createHierarchyNavigationHistory } from "./relation-utils";
@@ -367,11 +368,27 @@ class PuffsTagShelfView extends ItemView {
       return;
     }
     this.hierarchySearchActive = false;
-    const effectiveQuery = this.plugin.resolvePinnedSearchQuery(query);
-    const matchingItems = this.plugin.getTagShelfItems(effectiveQuery, false);
-    const items = this.plugin.prependPinnedTagItem(matchingItems, query);
-    const noteCardSearch = parseNoteCardSearch(effectiveQuery);
-    if (noteCardSearch && noteCardSearch.isValid) {
+    const currentNoteTagSearch = parseCurrentNoteTagSearch(query);
+    const effectiveQuery = currentNoteTagSearch.matched
+      ? query
+      : this.plugin.resolvePinnedSearchQuery(query);
+    const matchingItems = currentNoteTagSearch.matched
+      ? this.plugin.getCurrentNoteTagItems()
+      : this.plugin.getTagShelfItems(effectiveQuery, false);
+    const items = currentNoteTagSearch.matched
+      ? matchingItems
+      : this.plugin.prependPinnedTagItem(matchingItems, query);
+    const noteCardSearch = currentNoteTagSearch.matched
+      ? null
+      : parseNoteCardSearch(effectiveQuery);
+    if (currentNoteTagSearch.matched) {
+      this.clearAutoExpandedTag();
+      this.plugin.syncCurrentNoteTagSearchState(
+        this.noteCardSearchState,
+        matchingItems,
+        this.expandedTags
+      );
+    } else if (noteCardSearch && noteCardSearch.isValid) {
       this.clearAutoExpandedTag();
       this.plugin.syncNoteCardSearchState(
         this.noteCardSearchState,
@@ -399,7 +416,11 @@ class PuffsTagShelfView extends ItemView {
     if (items.length === 0) {
       const emptyEl = document.createElement('div');
       emptyEl.className = 'puffs-tag-shelf-empty';
-      emptyEl.textContent = query ? '没有匹配的标签。' : '暂无可展示的标签。';
+      if (currentNoteTagSearch.matched) {
+        emptyEl.textContent = this.plugin.getCurrentNoteTagEmptyMessage();
+      } else {
+        emptyEl.textContent = query ? '没有匹配的标签。' : '暂无可展示的标签。';
+      }
       this.listEl.appendChild(emptyEl);
       this.plugin.scheduleNoteCardSearchEffect(
         this.listEl,

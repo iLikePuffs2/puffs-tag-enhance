@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { replaceFrontmatterTagValue } from './models';
+import { parseCurrentNoteTagSearch, replaceFrontmatterTagValue } from './models';
+
+describe('当前笔记标签定位语法', () => {
+  it.each(['：：', '::', '  ：：  ', '  ::  '])('命中全角与半角写法：%s', (value) => {
+    expect(parseCurrentNoteTagSearch(value).matched).toBe(true);
+  });
+
+  it.each([
+    '：：读书',
+    '::读书',
+    '：:',
+    ':：',
+    '：',
+    ':',
+    '：：：',
+    ':::',
+    '',
+    '读书',
+  ])('不命中其他写法：%s', (value) => {
+    expect(parseCurrentNoteTagSearch(value).matched).toBe(false);
+  });
+
+  it('容错空值输入', () => {
+    expect(parseCurrentNoteTagSearch(null).matched).toBe(false);
+    expect(parseCurrentNoteTagSearch(undefined).matched).toBe(false);
+  });
+});
 
 describe('frontmatter 标签改名去重', () => {
   it.each([

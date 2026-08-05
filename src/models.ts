@@ -158,6 +158,11 @@ function getTagFilterQuery(value) {
   return noteCardSearch ? noteCardSearch.tagQuery : String(value || '');
 }
 
+function parseCurrentNoteTagSearch(value) {
+  const text = String(value || '').trim();
+  return { matched: text === '：：' || text === '::' };
+}
+
 function fileMatchesNoteSearch(file, value, displayName = '') {
   const term = String(value || '').trim().toLowerCase();
   if (!term) return false;
@@ -464,6 +469,7 @@ export {
   normalizeSearchTerm,
   parseNoteCardSearch,
   getTagFilterQuery,
+  parseCurrentNoteTagSearch,
   fileMatchesNoteSearch,
   splitUnionSearchTerms,
   splitIntersectionSearchTerms,

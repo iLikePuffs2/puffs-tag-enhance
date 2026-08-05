@@ -1037,6 +1037,13 @@
   background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
 }
 
+.puffs-tag-list-empty {
+  padding: 18px 12px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: var(--font-ui-small);
+}
+
 .puffs-tag-shelf-empty {
   padding: 30px 18px;
   border: 1px dashed color-mix(in srgb, var(--text-muted) 20%, transparent);

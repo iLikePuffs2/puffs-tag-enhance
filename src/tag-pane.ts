@@ -12,6 +12,7 @@ import {
   getTagFilterQuery,
   isNestedTag,
   normalizeTag,
+  parseCurrentNoteTagSearch,
   parseNoteCardSearch,
   splitIntersectionSearchTerms,
   splitUnionSearchTerms,
@@ -445,6 +446,12 @@ export class TagPaneBehavior {
         this.scheduleSyncView(view, 0);
         return;
       }
+      if (parseCurrentNoteTagSearch(rawQuery).matched) {
+        view.searchQuery = createMultiTagSearchQuery(rawQuery, []);
+        if (typeof view.updateTags === 'function') view.updateTags();
+        this.scheduleSyncView(view, 0);
+        return;
+      }
       const query = this.resolvePinnedSearchQuery(rawQuery);
       const noteCardSearch = parseNoteCardSearch(query);
       const tagQuery = noteCardSearch ? noteCardSearch.tagQuery : query;
@@ -762,12 +769,24 @@ export class TagPaneBehavior {
       !rawQuery.includes('*')
     );
     if (patch) patch.lastRenderedSearchQuery = rawQuery;
-    const effectiveQuery = this.resolvePinnedSearchQuery(rawQuery);
-    const matchingItems = this.getListModeItems(view, effectiveQuery, false);
-    const items = this.prependPinnedTagItem(matchingItems, rawQuery);
-    const noteCardSearch = parseNoteCardSearch(effectiveQuery);
+    const currentNoteTagSearch = parseCurrentNoteTagSearch(rawQuery);
+    const effectiveQuery = currentNoteTagSearch.matched
+      ? rawQuery
+      : this.resolvePinnedSearchQuery(rawQuery);
+    const matchingItems = currentNoteTagSearch.matched
+      ? this.getCurrentNoteTagItems()
+      : this.getListModeItems(view, effectiveQuery, false);
+    const items = currentNoteTagSearch.matched
+      ? matchingItems
+      : this.prependPinnedTagItem(matchingItems, rawQuery);
+    const noteCardSearch = currentNoteTagSearch.matched
+      ? null
+      : parseNoteCardSearch(effectiveQuery);
     if (patch) {
-      if (noteCardSearch && noteCardSearch.isValid) {
+      if (currentNoteTagSearch.matched) {
+        this.clearAutoExpandedTag(patch);
+        this.syncCurrentNoteTagSearchState(patch.noteCardSearchState, matchingItems);
+      } else if (noteCardSearch && noteCardSearch.isValid) {
         this.clearAutoExpandedTag(patch);
         this.syncNoteCardSearchState(patch.noteCardSearchState, effectiveQuery, matchingItems);
       } else {
@@ -784,10 +803,15 @@ export class TagPaneBehavior {
     }
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
 
+    const emptyMessage = currentNoteTagSearch.matched && items.length === 0
+      ? this.getCurrentNoteTagEmptyMessage()
+      : '';
+
     const signature = JSON.stringify([
       this.inlineHierarchyExpansionVersion || 0,
       this.relationStructureVersion || 0,
       patch?.noteCardSearchState?.target?.key || '',
+      emptyMessage,
       items.map((item) => [
         item.tag,
         item.displayName,
@@ -807,6 +831,9 @@ export class TagPaneBehavior {
       listEl.dataset.puffsSignature = signature;
       listEl.empty();
 
+      if (emptyMessage) {
+        listEl.createDiv({ text: emptyMessage, cls: 'puffs-tag-list-empty' });
+      }
       for (const item of items) {
         this.renderListModeTagItem(listEl, item, view, patch);
       }

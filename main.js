@@ -374,6 +374,10 @@ function getTagFilterQuery(value) {
   const noteCardSearch = parseNoteCardSearch(value);
   return noteCardSearch ? noteCardSearch.tagQuery : String(value || "");
 }
+function parseCurrentNoteTagSearch(value) {
+  const text = String(value || "").trim();
+  return { matched: text === "\uFF1A\uFF1A" || text === "::" };
+}
 function fileMatchesNoteSearch(file, value, displayName = "") {
   const term = String(value || "").trim().toLowerCase();
   if (!term) return false;
@@ -908,11 +912,19 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
       return;
     }
     this.hierarchySearchActive = false;
-    const effectiveQuery = this.plugin.resolvePinnedSearchQuery(query);
-    const matchingItems = this.plugin.getTagShelfItems(effectiveQuery, false);
-    const items = this.plugin.prependPinnedTagItem(matchingItems, query);
-    const noteCardSearch = parseNoteCardSearch(effectiveQuery);
-    if (noteCardSearch && noteCardSearch.isValid) {
+    const currentNoteTagSearch = parseCurrentNoteTagSearch(query);
+    const effectiveQuery = currentNoteTagSearch.matched ? query : this.plugin.resolvePinnedSearchQuery(query);
+    const matchingItems = currentNoteTagSearch.matched ? this.plugin.getCurrentNoteTagItems() : this.plugin.getTagShelfItems(effectiveQuery, false);
+    const items = currentNoteTagSearch.matched ? matchingItems : this.plugin.prependPinnedTagItem(matchingItems, query);
+    const noteCardSearch = currentNoteTagSearch.matched ? null : parseNoteCardSearch(effectiveQuery);
+    if (currentNoteTagSearch.matched) {
+      this.clearAutoExpandedTag();
+      this.plugin.syncCurrentNoteTagSearchState(
+        this.noteCardSearchState,
+        matchingItems,
+        this.expandedTags
+      );
+    } else if (noteCardSearch && noteCardSearch.isValid) {
       this.clearAutoExpandedTag();
       this.plugin.syncNoteCardSearchState(
         this.noteCardSearchState,
@@ -937,7 +949,11 @@ var PuffsTagShelfView = class extends import_obsidian2.ItemView {
     if (items.length === 0) {
       const emptyEl = document.createElement("div");
       emptyEl.className = "puffs-tag-shelf-empty";
-      emptyEl.textContent = query ? "\u6CA1\u6709\u5339\u914D\u7684\u6807\u7B7E\u3002" : "\u6682\u65E0\u53EF\u5C55\u793A\u7684\u6807\u7B7E\u3002";
+      if (currentNoteTagSearch.matched) {
+        emptyEl.textContent = this.plugin.getCurrentNoteTagEmptyMessage();
+      } else {
+        emptyEl.textContent = query ? "\u6CA1\u6709\u5339\u914D\u7684\u6807\u7B7E\u3002" : "\u6682\u65E0\u53EF\u5C55\u793A\u7684\u6807\u7B7E\u3002";
+      }
       this.listEl.appendChild(emptyEl);
       this.plugin.scheduleNoteCardSearchEffect(
         this.listEl,
@@ -1445,6 +1461,7 @@ var PersistenceBehavior = class {
 
 // src/interactions.ts
 var import_obsidian5 = require("obsidian");
+var CURRENT_NOTE_TAG_SEARCH_STATE_QUERY = "\0current-note-tags";
 var _InteractionsBehavior = class _InteractionsBehavior {
   getOrderedFilesForTag(tagValue, files) {
     const tag = normalizeTag(tagValue);
@@ -1644,6 +1661,56 @@ var _InteractionsBehavior = class _InteractionsBehavior {
     ));
     const matchingItems = unionTerms ? items.filter((item) => tagMatchesAnySearchTerm(item.tag, unionTerms)) : items.filter((item) => tagMatchesSearchText(item.tag, tagQuery));
     return includePinned ? this.prependPinnedTagItem(matchingItems, query) : matchingItems;
+  }
+  getCurrentNoteTagItems() {
+    const path = this.currentMainFilePath;
+    const file = path && this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof import_obsidian5.TFile) || file.extension !== "md") return [];
+    return Array.from(this.getLogicalTagSet()).filter((tag) => !isNestedTag(tag)).map((tag) => ({ tag, browseData: this.getTagBrowseData(tag) })).filter(({ browseData }) => browseData.exactFiles.some((exactFile) => exactFile.path === path)).map(({ tag, browseData }) => ({
+      tag,
+      displayName: getTagDisplayName(tag),
+      isVirtual: false,
+      files: browseData.files,
+      exactCount: browseData.exactCount,
+      inheritedCount: browseData.inheritedCount,
+      inheritanceEnabled: browseData.inheritanceEnabled,
+      hasInheritance: browseData.hasInheritance,
+      sourcesByPath: browseData.sourcesByPath
+    })).sort((a, b) => compareTagItemsByCount(
+      { count: a.files.length, name: a.displayName },
+      { count: b.files.length, name: b.displayName }
+    ));
+  }
+  getCurrentNoteTagEmptyMessage() {
+    const path = this.currentMainFilePath;
+    const file = path && this.app.vault.getAbstractFileByPath(path);
+    return file instanceof import_obsidian5.TFile && file.extension === "md" ? "\u5F53\u524D\u7B14\u8BB0\u6CA1\u6709\u6807\u7B7E\u3002" : "\u5F53\u524D\u6CA1\u6709\u6253\u5F00\u7B14\u8BB0\u3002";
+  }
+  getCurrentNoteTagMatches(items) {
+    const path = this.currentMainFilePath;
+    if (!path) return [];
+    return items.map((item) => ({
+      tag: item.tag,
+      path,
+      key: `${item.tag}\0${path}`
+    }));
+  }
+  syncCurrentNoteTagSearchState(state, items, expandedTags = this.expandedTags) {
+    const matches = this.getCurrentNoteTagMatches(items);
+    if (matches.length === 0) {
+      this.clearNoteCardSearchState(state, expandedTags);
+      return null;
+    }
+    const query = `${CURRENT_NOTE_TAG_SEARCH_STATE_QUERY}\0${this.currentMainFilePath || ""}`;
+    const queryChanged = state.query !== query;
+    let activeIndex = queryChanged ? 0 : matches.findIndex(
+      (match) => state.target && match.tag === state.target.tag && match.path === state.target.path
+    );
+    if (activeIndex < 0) activeIndex = 0;
+    state.query = query;
+    state.matches = matches;
+    state.activeIndex = activeIndex;
+    return this.activateNoteCardSearchTarget(state, matches[activeIndex], expandedTags);
   }
   getNoteCardSearchMatches(query, items) {
     const noteCardSearch = parseNoteCardSearch(query);
@@ -2317,15 +2384,18 @@ var WorkspaceBehavior = class {
       }
     }
   }
-  refreshCurrentNoteHierarchySearchViews() {
+  followsCurrentNote(searchValue) {
+    return this.getHierarchySearchContext(searchValue).mode === "current-note" || parseCurrentNoteTagSearch(searchValue).matched;
+  }
+  refreshCurrentNoteSearchViews() {
     for (const leaf of this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []) {
       const view = leaf.view;
-      if (!view || this.getHierarchySearchContext(this.getTagSearchValue(view)).mode !== "current-note") continue;
+      if (!view || !this.followsCurrentNote(this.getTagSearchValue(view))) continue;
       this.scheduleSyncView(view, 0);
     }
     for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE) || []) {
       const view = leaf.view;
-      if (!view || this.getHierarchySearchContext(view.searchQuery).mode !== "current-note") continue;
+      if (!view || !this.followsCurrentNote(view.searchQuery)) continue;
       if (typeof view.renderTagList === "function") view.renderTagList();
       else if (typeof view.refresh === "function") view.refresh();
     }
@@ -2334,7 +2404,7 @@ var WorkspaceBehavior = class {
     const nextPath = filePath || null;
     if (nextPath === this.currentMainFilePath) return false;
     this.currentMainFilePath = nextPath;
-    this.refreshCurrentNoteHierarchySearchViews();
+    this.refreshCurrentNoteSearchViews();
     return true;
   }
   handleWorkspaceFileOpen(_file) {
@@ -3838,6 +3908,12 @@ var TagPaneBehavior = class {
         this.scheduleSyncView(view, 0);
         return;
       }
+      if (parseCurrentNoteTagSearch(rawQuery).matched) {
+        view.searchQuery = createMultiTagSearchQuery(rawQuery, []);
+        if (typeof view.updateTags === "function") view.updateTags();
+        this.scheduleSyncView(view, 0);
+        return;
+      }
       const query = this.resolvePinnedSearchQuery(rawQuery);
       const noteCardSearch = parseNoteCardSearch(query);
       const tagQuery = noteCardSearch ? noteCardSearch.tagQuery : query;
@@ -4097,12 +4173,16 @@ var TagPaneBehavior = class {
     const patch = this.viewPatches.get(view);
     const shouldResetSearchScroll = !!(patch && rawQuery !== patch.lastRenderedSearchQuery && rawQuery.trim() && !rawQuery.includes("*"));
     if (patch) patch.lastRenderedSearchQuery = rawQuery;
-    const effectiveQuery = this.resolvePinnedSearchQuery(rawQuery);
-    const matchingItems = this.getListModeItems(view, effectiveQuery, false);
-    const items = this.prependPinnedTagItem(matchingItems, rawQuery);
-    const noteCardSearch = parseNoteCardSearch(effectiveQuery);
+    const currentNoteTagSearch = parseCurrentNoteTagSearch(rawQuery);
+    const effectiveQuery = currentNoteTagSearch.matched ? rawQuery : this.resolvePinnedSearchQuery(rawQuery);
+    const matchingItems = currentNoteTagSearch.matched ? this.getCurrentNoteTagItems() : this.getListModeItems(view, effectiveQuery, false);
+    const items = currentNoteTagSearch.matched ? matchingItems : this.prependPinnedTagItem(matchingItems, rawQuery);
+    const noteCardSearch = currentNoteTagSearch.matched ? null : parseNoteCardSearch(effectiveQuery);
     if (patch) {
-      if (noteCardSearch && noteCardSearch.isValid) {
+      if (currentNoteTagSearch.matched) {
+        this.clearAutoExpandedTag(patch);
+        this.syncCurrentNoteTagSearchState(patch.noteCardSearchState, matchingItems);
+      } else if (noteCardSearch && noteCardSearch.isValid) {
         this.clearAutoExpandedTag(patch);
         this.syncNoteCardSearchState(patch.noteCardSearchState, effectiveQuery, matchingItems);
       } else {
@@ -4116,10 +4196,12 @@ var TagPaneBehavior = class {
       }
     }
     this.clearStaleVirtualExpandedTags(new Set(items.map((item) => item.tag)));
+    const emptyMessage = currentNoteTagSearch.matched && items.length === 0 ? this.getCurrentNoteTagEmptyMessage() : "";
     const signature = JSON.stringify([
       this.inlineHierarchyExpansionVersion || 0,
       this.relationStructureVersion || 0,
       ((_b = (_a = patch == null ? void 0 : patch.noteCardSearchState) == null ? void 0 : _a.target) == null ? void 0 : _b.key) || "",
+      emptyMessage,
       items.map((item) => {
         var _a2;
         return [
@@ -4140,6 +4222,9 @@ var TagPaneBehavior = class {
     if (listEl.dataset.puffsSignature !== signature) {
       listEl.dataset.puffsSignature = signature;
       listEl.empty();
+      if (emptyMessage) {
+        listEl.createDiv({ text: emptyMessage, cls: "puffs-tag-list-empty" });
+      }
       for (const item of items) {
         this.renderListModeTagItem(listEl, item, view, patch);
       }
