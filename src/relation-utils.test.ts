@@ -52,6 +52,30 @@ describe('标签继承合并', () => {
     expect(result.sourcesByPath.get('shared.md')).toEqual(['#子一']);
   });
 
+  it('选择名单只放行指定自由路径且固定分支始终放行', () => {
+    const result = mergeInheritedPaths(
+      [],
+      [
+        { source: '#自由', paths: ['选择.md', '未选.md'] },
+        { source: '#固定', paths: ['固定.md'], fixed: true },
+      ],
+      [],
+      ['选择.md']
+    );
+    expect(result.inheritedPaths).toEqual(['选择.md', '固定.md']);
+
+    const tree = buildTagInheritanceGroupTree(
+      '#父',
+      { '#父': ['#自由', '#固定'] },
+      { '#父': [], '#自由': ['选择.md', '未选.md'], '#固定': ['固定.md'] },
+      [],
+      new Set(['#固定']),
+      ['选择.md']
+    );
+    expect(tree?.children.map((child) => [child.tag, child.paths]))
+      .toEqual([['#自由', ['选择.md']], ['#固定', ['固定.md']]]);
+  });
+
   it('按标签关系递归构建分组、保留跨组重复并统计子树去重数量', () => {
     const tree = buildTagInheritanceGroupTree(
       '#帮助',

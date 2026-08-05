@@ -8,7 +8,9 @@ import {
   getNoteRelationEnterAction,
   getNoteRelationSubmitError,
   getTagRelationCandidates,
+  filterInheritanceCandidates,
   groupExcludedPathsBySource,
+  groupInheritanceCandidates,
 } from "./relation-modals";
 
 describe('标签绑定笔记候选', () => {
@@ -107,6 +109,34 @@ describe('已排除继承笔记分组', () => {
   });
 });
 
+describe('选择继承候选', () => {
+  it('按首次来源分组且多来源笔记只出现一次', () => {
+    const shared = new (TFile as any)('共享.md');
+    const groups = groupInheritanceCandidates([
+      { path: '共享.md', file: shared, source: '#子一', sources: ['#子一', '#子二'], fixed: false },
+      { path: '其他.md', file: new (TFile as any)('其他.md'), source: '#子二', sources: ['#子二'], fixed: false },
+    ]);
+
+    expect(groups.map((group) => [group.source, group.candidates.map((candidate: any) => candidate.path)]))
+      .toEqual([['#子一', ['共享.md']], ['#子二', ['其他.md']]]);
+  });
+
+  it('搜索同时匹配名称、路径和 alias', () => {
+    const alpha = new (TFile as any)('目录/Alpha.md');
+    const beta = new (TFile as any)('资料/Beta.md');
+    const candidates = [
+      { path: alpha.path, file: alpha },
+      { path: beta.path, file: beta },
+    ];
+    const aliases: Record<string, string[]> = { [beta.path]: ['别名'] };
+
+    expect(filterInheritanceCandidates(candidates, 'alpha').map((item: any) => item.path)).toEqual([alpha.path]);
+    expect(filterInheritanceCandidates(candidates, '资料').map((item: any) => item.path)).toEqual([beta.path]);
+    expect(filterInheritanceCandidates(candidates, '别名', (file: TFile) => aliases[file.path] || []).map((item: any) => item.path))
+      .toEqual([beta.path]);
+  });
+});
+
 describe('管理子标签立即保存', () => {
   function createModal(children = ['#旧']) {
     const modal = Object.create(TagInheritanceModal.prototype) as any;
@@ -177,6 +207,49 @@ describe('管理子标签立即保存', () => {
     expect(modal.renderExclusionGroups).not.toHaveBeenCalled();
     expect(modal.isSubmitting).toBe(false);
     expect((Notice as any).messages).toEqual(['保存失败']);
+  });
+});
+
+describe('选择继承弹窗操作', () => {
+  it('模式切换立即保存并刷新两个名单区', async () => {
+    const modal = Object.create(TagInheritanceModal.prototype) as any;
+    let mode = 'all';
+    modal.parentTag = '#父';
+    modal.isSubmitting = false;
+    modal.syncMutationState = vi.fn();
+    modal.renderInheritanceModeControls = vi.fn();
+    modal.renderExclusionGroups = vi.fn();
+    modal.renderInheritanceSelection = vi.fn();
+    modal.plugin = {
+      getTagInheritanceMode: vi.fn(() => mode),
+      setTagInheritanceMode: vi.fn(async (_tag, nextMode) => { mode = nextMode; }),
+    };
+
+    await modal.changeInheritanceMode('selected');
+
+    expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#父', 'selected');
+    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
+    expect(modal.renderInheritanceSelection).toHaveBeenCalledOnce();
+    expect(modal.isSubmitting).toBe(false);
+  });
+
+  it('批量操作只修改筛选结果并跳过固定路径', async () => {
+    const modal = Object.create(TagInheritanceModal.prototype) as any;
+    modal.isSubmitting = false;
+    modal.parentTag = '#父';
+    modal.plugin = { getIncludedInheritedPaths: vi.fn(() => ['原有.md']) };
+    modal.getFilteredInheritanceCandidates = vi.fn(() => [
+      { path: '筛选.md', fixed: false },
+      { path: '固定.md', fixed: true },
+    ]);
+    modal.persistInheritanceSelection = vi.fn(async () => true);
+
+    await modal.applyInheritanceSelectionBatch(true);
+    expect(modal.persistInheritanceSelection).toHaveBeenCalledWith(['原有.md', '筛选.md']);
+
+    modal.plugin.getIncludedInheritedPaths.mockReturnValue(['原有.md', '筛选.md', '其他.md']);
+    await modal.applyInheritanceSelectionBatch(false);
+    expect(modal.persistInheritanceSelection).toHaveBeenLastCalledWith(['原有.md', '其他.md']);
   });
 });
 

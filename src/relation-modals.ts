@@ -87,6 +87,33 @@ function groupExcludedPathsBySource(
   return groups;
 }
 
+function filterInheritanceCandidates(candidates, query, getAliases: (file: TFile) => string[] = () => []) {
+  const term = String(query || '').trim().toLowerCase();
+  if (!term) return [...(candidates || [])];
+  return (candidates || []).filter((candidate) => {
+    const file = candidate.file;
+    return String(candidate.path || '').toLowerCase().includes(term) ||
+      String(file?.basename || '').toLowerCase().includes(term) ||
+      (file instanceof TFile && (getAliases(file) || []).some((alias) => String(alias).toLowerCase().includes(term)));
+  });
+}
+
+function groupInheritanceCandidates(candidates) {
+  const groups = [];
+  const groupsBySource = new Map();
+  for (const candidate of candidates || []) {
+    const source = normalizeTag(candidate.source) || null;
+    let group = groupsBySource.get(source);
+    if (!group) {
+      group = { source, candidates: [] };
+      groupsBySource.set(source, group);
+      groups.push(group);
+    }
+    group.candidates.push(candidate);
+  }
+  return groups;
+}
+
 function createTagCandidatePicker(options) {
   const { hostEl, inputEl, getCandidates, onInput, onSelect, setComposing } = options;
   const resultsEl = hostEl.createDiv({ cls: 'puffs-relation-tag-results' });
@@ -211,8 +238,16 @@ class TagInheritanceModal extends Modal {
     this.inputEl = null;
     this.picker = null;
     this.childrenListEl = null;
+    this.modeSectionEl = null;
+    this.modeDescriptionEl = null;
+    this.modeButtons = new Map();
     this.exclusionsSectionEl = null;
     this.exclusionGroupsEl = null;
+    this.selectionSectionEl = null;
+    this.selectionSummaryEl = null;
+    this.selectionInputEl = null;
+    this.selectionGroupsEl = null;
+    this.selectionQuery = '';
   }
 
   onOpen() {
@@ -227,6 +262,7 @@ class TagInheritanceModal extends Modal {
       text: `管理 ${getTagDisplayName(this.parentTag)} 的${relationName}`,
       cls: 'puffs-relation-modal-title puffs-tag-rename-title',
     });
+    if (this.relationMode === 'children') this.buildInheritanceModeControls();
     this.searchHostEl = this.contentEl.createDiv({ cls: 'puffs-relation-tag-search' });
     this.inputEl = this.searchHostEl.createEl('input', { type: 'search', cls: 'puffs-relation-input' });
     this.inputEl.value = this.query;
@@ -255,9 +291,28 @@ class TagInheritanceModal extends Modal {
       this.exclusionsSectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-exclusions' });
       this.exclusionsSectionEl.createEl('h4', { text: '已排除笔记' });
       this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: 'puffs-relation-exclusion-groups' });
+      this.buildInheritanceSelectionSection();
     }
     this.renderChildren();
     this.renderExclusionGroups();
+    this.renderInheritanceSelection();
+
+    this.modalEl.addEventListener('keydown', (event) => {
+      if (
+        this.relationMode !== 'children' ||
+        this.plugin.getTagInheritanceMode(this.parentTag) !== 'selected' ||
+        !(event.ctrlKey || event.metaKey) ||
+        event.key.toLowerCase() !== 'f'
+      ) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (document.activeElement === this.selectionInputEl && this.selectionInputEl.value) {
+        this.selectionInputEl.value = '';
+        this.selectionQuery = '';
+        this.renderInheritanceSelection();
+      }
+      this.selectionInputEl?.focus();
+    }, true);
 
     window.setTimeout(() => {
       if (this.inputEl) {
@@ -267,6 +322,70 @@ class TagInheritanceModal extends Modal {
       this.modalEl.tabIndex = -1;
       this.modalEl.focus();
     }, 0);
+  }
+
+  buildInheritanceModeControls() {
+    this.modeSectionEl = this.contentEl.createDiv({ cls: 'puffs-inheritance-mode-section' });
+    const buttonsEl = this.modeSectionEl.createDiv({ cls: 'puffs-inheritance-mode-buttons' });
+    for (const [mode, text] of [['all', '全部继承'], ['selected', '选择继承']]) {
+      const button = buttonsEl.createEl('button', { text, cls: 'puffs-inheritance-mode-button' });
+      button.dataset.puffsInheritanceMode = mode;
+      button.addEventListener('click', () => { void this.changeInheritanceMode(mode); });
+      this.modeButtons.set(mode, button);
+    }
+    this.modeDescriptionEl = this.modeSectionEl.createDiv({ cls: 'puffs-inheritance-mode-description' });
+    this.renderInheritanceModeControls();
+  }
+
+  renderInheritanceModeControls() {
+    if (this.relationMode !== 'children' || !this.modeDescriptionEl) return;
+    const mode = this.plugin.getTagInheritanceMode(this.parentTag);
+    for (const [value, button] of this.modeButtons) {
+      const active = value === mode;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.disabled = this.isSubmitting;
+    }
+    this.modeDescriptionEl.textContent = mode === 'selected'
+      ? '仅显示已选择的后代笔记，新笔记默认不显示。'
+      : '自动显示后代标签的全部笔记，可逐篇排除。';
+  }
+
+  async changeInheritanceMode(mode) {
+    if (this.isSubmitting || this.plugin.getTagInheritanceMode(this.parentTag) === mode) return;
+    this.isSubmitting = true;
+    this.syncMutationState();
+    try {
+      await this.plugin.setTagInheritanceMode(this.parentTag, mode);
+      this.renderInheritanceModeControls();
+      this.renderExclusionGroups();
+      this.renderInheritanceSelection();
+    } catch (error) {
+      new Notice(error && error.message ? error.message : '切换继承模式失败');
+    } finally {
+      this.isSubmitting = false;
+      this.syncMutationState();
+    }
+  }
+
+  buildInheritanceSelectionSection() {
+    this.selectionSectionEl = this.contentEl.createDiv({ cls: 'puffs-inheritance-selection' });
+    const headingEl = this.selectionSectionEl.createDiv({ cls: 'puffs-inheritance-selection-heading' });
+    headingEl.createEl('h4', { text: '继承笔记' });
+    this.selectionSummaryEl = headingEl.createSpan({ cls: 'puffs-inheritance-selection-summary' });
+    const toolbarEl = this.selectionSectionEl.createDiv({ cls: 'puffs-inheritance-selection-toolbar' });
+    this.selectionInputEl = toolbarEl.createEl('input', { type: 'search', cls: 'puffs-relation-input' });
+    this.selectionInputEl.addEventListener('input', () => {
+      this.selectionQuery = this.selectionInputEl.value;
+      this.renderInheritanceSelection();
+    });
+    const selectAllButton = toolbarEl.createEl('button', { text: '全选结果' });
+    selectAllButton.dataset.puffsSelectionAction = 'select';
+    selectAllButton.addEventListener('click', () => { void this.applyInheritanceSelectionBatch(true); });
+    const clearButton = toolbarEl.createEl('button', { text: '清空结果' });
+    clearButton.dataset.puffsSelectionAction = 'clear';
+    clearButton.addEventListener('click', () => { void this.applyInheritanceSelectionBatch(false); });
+    this.selectionGroupsEl = this.selectionSectionEl.createDiv({ cls: 'puffs-inheritance-selection-groups' });
   }
 
   renderChildren() {
@@ -322,6 +441,12 @@ class TagInheritanceModal extends Modal {
     ) || []) {
       button.disabled = this.isSubmitting;
     }
+    this.renderInheritanceModeControls();
+    if (this.selectionInputEl) this.selectionInputEl.disabled = this.isSubmitting;
+    for (const control of this.selectionSectionEl?.querySelectorAll('button, input[type="checkbox"]') || []) {
+      if (control.dataset.puffsFixed === 'true') continue;
+      control.disabled = this.isSubmitting;
+    }
   }
 
   syncFixedRelationButton(rowEl, relatedTag) {
@@ -359,6 +484,7 @@ class TagInheritanceModal extends Modal {
       await this.plugin.setFixedTagRelation(parent, child, nextFixed);
       this.renderChildren();
       this.renderExclusionGroups();
+      this.renderInheritanceSelection();
       this.picker?.render();
     } catch (error) {
       new Notice(error && error.message ? error.message : '保存固定子标签失败');
@@ -391,6 +517,7 @@ class TagInheritanceModal extends Modal {
       }
       this.updateChildren(orderedChildren);
       this.renderExclusionGroups();
+      this.renderInheritanceSelection();
       return true;
     } catch (error) {
       new Notice(error && error.message ? error.message : '保存继承关系失败');
@@ -416,8 +543,160 @@ class TagInheritanceModal extends Modal {
     globalThis.setTimeout(() => this.inputEl?.focus(), 0);
   }
 
+  getFilteredInheritanceCandidates() {
+    return filterInheritanceCandidates(
+      this.plugin.getInheritanceCandidates(this.parentTag),
+      this.selectionQuery,
+      (file) => this.plugin.getNoteAliases(file)
+    );
+  }
+
+  async persistInheritanceSelection(nextPaths) {
+    if (this.isSubmitting) return false;
+    this.isSubmitting = true;
+    this.syncMutationState();
+    try {
+      await this.plugin.setIncludedInheritedPaths(this.parentTag, nextPaths);
+      this.renderInheritanceSelection();
+      return true;
+    } catch (error) {
+      new Notice(error && error.message ? error.message : '保存继承笔记失败');
+      this.renderInheritanceSelection();
+      return false;
+    } finally {
+      this.isSubmitting = false;
+      this.syncMutationState();
+    }
+  }
+
+  async toggleInheritanceCandidate(path, visible) {
+    const paths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag));
+    if (visible) paths.add(path);
+    else paths.delete(path);
+    await this.persistInheritanceSelection(Array.from(paths));
+  }
+
+  async applyInheritanceSelectionBatch(visible) {
+    if (this.isSubmitting) return;
+    const paths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag));
+    for (const candidate of this.getFilteredInheritanceCandidates()) {
+      if (candidate.fixed) continue;
+      if (visible) paths.add(candidate.path);
+      else paths.delete(candidate.path);
+    }
+    await this.persistInheritanceSelection(Array.from(paths));
+  }
+
+  renderInheritanceSelection() {
+    if (!this.selectionSectionEl || !this.selectionGroupsEl || !this.selectionSummaryEl) return;
+    const selectedMode = this.plugin.getTagInheritanceMode(this.parentTag) === 'selected';
+    this.selectionSectionEl.classList.toggle('is-hidden', !selectedMode);
+    if (!selectedMode) return;
+    const candidates = this.plugin.getInheritanceCandidates(this.parentTag);
+    const freeCandidates = candidates.filter((candidate) => !candidate.fixed);
+    const selectedPaths = new Set(this.plugin.getIncludedInheritedPaths(this.parentTag));
+    const selectedCount = freeCandidates.filter((candidate) => selectedPaths.has(candidate.path)).length;
+    this.selectionSummaryEl.textContent = `已选 ${selectedCount} / ${freeCandidates.length}`;
+    const filtered = filterInheritanceCandidates(
+      candidates,
+      this.selectionQuery,
+      (file) => this.plugin.getNoteAliases(file)
+    );
+    const scrollTop = this.selectionGroupsEl.scrollTop;
+    const existingGroups = new Map(
+      Array.from(this.selectionGroupsEl.querySelectorAll('.puffs-inheritance-selection-group'))
+        .map((groupEl) => [groupEl.dataset.puffsSource || '', groupEl])
+    );
+    if (!filtered.length) {
+      for (const groupEl of existingGroups.values()) groupEl.remove();
+      let emptyEl = this.selectionGroupsEl.querySelector('.puffs-relation-empty');
+      if (!emptyEl) emptyEl = this.selectionGroupsEl.createDiv({ cls: 'puffs-relation-empty' });
+      emptyEl.textContent = candidates.length ? '没有匹配的继承笔记' : '暂无可选择的继承笔记';
+      return;
+    }
+    this.selectionGroupsEl.querySelector('.puffs-relation-empty')?.remove();
+    for (const group of groupInheritanceCandidates(filtered)) {
+      const sourceKey = group.source || '';
+      let groupEl = existingGroups.get(sourceKey);
+      if (!groupEl) {
+        groupEl = this.selectionGroupsEl.createDiv({ cls: 'puffs-inheritance-selection-group' });
+        groupEl.dataset.puffsSource = sourceKey;
+        const headingEl = groupEl.createDiv({ cls: 'puffs-relation-exclusion-heading' });
+        const iconEl = headingEl.createSpan({ cls: 'puffs-relation-exclusion-icon' });
+        setIcon(iconEl, 'tag');
+        headingEl.createSpan({ cls: 'puffs-inheritance-selection-group-name' });
+        groupEl.createDiv({ cls: 'puffs-inheritance-selection-list' });
+      }
+      groupEl.querySelector('.puffs-inheritance-selection-group-name').textContent = group.source
+        ? getTagDisplayName(group.source)
+        : '来源未知';
+      const listEl = groupEl.querySelector('.puffs-inheritance-selection-list');
+      const existingRows = new Map(
+        Array.from(listEl.querySelectorAll('.puffs-inheritance-selection-row'))
+          .map((rowEl) => [rowEl.dataset.puffsPath || '', rowEl])
+      );
+      for (const candidate of group.candidates) {
+        let rowEl = existingRows.get(candidate.path);
+        if (!rowEl) {
+          rowEl = listEl.createEl('label', { cls: 'puffs-inheritance-selection-row' });
+          const checkbox = rowEl.createEl('input', { type: 'checkbox' });
+          checkbox.addEventListener('change', () => {
+            void this.toggleInheritanceCandidate(rowEl.dataset.puffsPath, checkbox.checked);
+          });
+          rowEl.createSpan({ cls: 'puffs-inheritance-selection-name' });
+          rowEl.createSpan({ cls: 'puffs-inheritance-selection-sources' });
+        }
+        rowEl.dataset.puffsPath = candidate.path;
+        const checkbox = rowEl.querySelector('input[type="checkbox"]');
+        checkbox.checked = candidate.fixed || selectedPaths.has(candidate.path);
+        checkbox.disabled = candidate.fixed || this.isSubmitting;
+        if (candidate.fixed) checkbox.dataset.puffsFixed = 'true';
+        else delete checkbox.dataset.puffsFixed;
+        const nameEl = rowEl.querySelector('.puffs-inheritance-selection-name');
+        nameEl.textContent = candidate.file?.basename || candidate.path;
+        nameEl.setAttribute('title', candidate.path);
+        const sourcesEl = rowEl.querySelector('.puffs-inheritance-selection-sources');
+        const existingSources = new Map(
+          Array.from(sourcesEl.querySelectorAll('.puffs-inheritance-source-chip'))
+            .map((chipEl) => [chipEl.dataset.puffsSource || '', chipEl])
+        );
+        for (const source of candidate.sources || []) {
+          let chipEl = existingSources.get(source);
+          if (!chipEl) {
+            chipEl = sourcesEl.createSpan({ cls: 'puffs-inheritance-source-chip' });
+            chipEl.dataset.puffsSource = source;
+          }
+          chipEl.textContent = getTagDisplayName(source);
+          sourcesEl.appendChild(chipEl);
+          existingSources.delete(source);
+        }
+        for (const chipEl of existingSources.values()) chipEl.remove();
+        let lockEl = rowEl.querySelector('.puffs-inheritance-selection-lock');
+        if (candidate.fixed) {
+          if (!lockEl) {
+            lockEl = rowEl.createSpan({ cls: 'puffs-inheritance-selection-lock', attr: { 'aria-label': '固定继承笔记' } });
+            setIcon(lockEl, 'lock');
+          }
+        } else {
+          lockEl?.remove();
+        }
+        listEl.appendChild(rowEl);
+        existingRows.delete(candidate.path);
+      }
+      for (const rowEl of existingRows.values()) rowEl.remove();
+      this.selectionGroupsEl.appendChild(groupEl);
+      existingGroups.delete(sourceKey);
+    }
+    for (const groupEl of existingGroups.values()) groupEl.remove();
+    this.selectionGroupsEl.scrollTop = scrollTop;
+  }
+
   renderExclusionGroups() {
     if (!this.exclusionsSectionEl || !this.exclusionGroupsEl) return;
+    if (this.plugin.getTagInheritanceMode(this.parentTag) !== 'all') {
+      this.exclusionsSectionEl.classList.add('is-hidden');
+      return;
+    }
     const exclusions = (this.plugin.getTagInheritanceSettings().excludedPathsByParent[this.parentTag] || [])
       .filter((path) => !this.plugin.isFixedInheritedFileForTag(this.parentTag, path));
     this.exclusionsSectionEl.classList.toggle('is-hidden', exclusions.length === 0);
@@ -908,5 +1187,7 @@ export {
   getNoteBindingCandidates,
   getNoteRelationSubmitError,
   getTagRelationCandidates,
+  filterInheritanceCandidates,
   groupExcludedPathsBySource,
+  groupInheritanceCandidates,
 };
