@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as obsidian from "obsidian";
 import { Notice, TFile } from "obsidian";
 import {
@@ -21,7 +20,7 @@ export class WorkspaceBehavior {
   [key: string]: any;
 
 
-  followsCurrentNote(searchValue) {
+  followsCurrentNote(searchValue: any) {
     return this.getHierarchySearchContext(searchValue).mode === 'current-note'
       || parseCurrentNoteTagSearch(searchValue).matched;
   }
@@ -33,7 +32,7 @@ export class WorkspaceBehavior {
     }
   }
 
-  updateCurrentMainFilePath(filePath) {
+  updateCurrentMainFilePath(filePath: any) {
     const nextPath = filePath || null;
     if (nextPath === this.currentMainFilePath) return false;
     this.currentMainFilePath = nextPath;
@@ -41,7 +40,7 @@ export class WorkspaceBehavior {
     return true;
   }
 
-  handleWorkspaceFileOpen(_file) {
+  handleWorkspaceFileOpen(_file: any) {
     const editorLeaf = this.app.workspace.activeEditor?.leaf;
     if (!this.isMarkdownMainLeaf(editorLeaf)) return;
     this.rememberMainLeaf(editorLeaf);
@@ -69,15 +68,15 @@ export class WorkspaceBehavior {
 
 
 
-  isNoteOrderSearchControl(target) {
+  isNoteOrderSearchControl(target: any) {
     if (!(target instanceof Element)) return false;
     return !!target.closest('.puffs-tag-sidebar-search-host');
   }
 
-  isTagSidebarScrollbarPointer(evt, target) {
+  isTagSidebarScrollbarPointer(evt: any, target: any) {
     if (!(target instanceof Element)) return false;
 
-    const scrollEl = target.closest(
+    const scrollEl: any = target.closest(
       '.workspace-leaf-content[data-type="puffs-tag-sidebar"] .tag-container'
     );
     if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight) return false;
@@ -95,7 +94,7 @@ export class WorkspaceBehavior {
   }
 
   registerKeyboardHandler() {
-    this.keydownHandler = (evt) => {
+    this.keydownHandler = (evt: any) => {
       // 快速搜索快捷键已改由视图自己的 scope 处理（见 view/tag-sidebar-view.ts），
       // 这里只留父子关系定位历史的 Alt + ←/→
       this.handleHierarchyNavigationHotkey(evt);
@@ -104,7 +103,7 @@ export class WorkspaceBehavior {
     // 只注册一处。旧实现在 window 和 document 上挂了同一个处理器，
     // 捕获阶段会依次执行两次，快捷键被处理两遍（打开后立刻关闭）。
     document.addEventListener('keydown', this.keydownHandler, true);
-    this.pointerdownHandler = (evt) => {
+    this.pointerdownHandler = (evt: any) => {
       if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
       if (target && target.closest('.puffs-tag-note-order-button')) return;
@@ -121,7 +120,7 @@ export class WorkspaceBehavior {
     };
     document.addEventListener('pointerdown', this.pointerdownHandler, true);
 
-    this.noteOrderContextMenuHandler = (evt) => {
+    this.noteOrderContextMenuHandler = (evt: any) => {
       const selectedTag = this.selectedTagOrderTarget;
       if (selectedTag) {
         const target = evt.target instanceof Element ? evt.target : null;
@@ -138,7 +137,7 @@ export class WorkspaceBehavior {
         evt.preventDefault();
         evt.stopPropagation();
         evt.stopImmediatePropagation();
-        this.moveSelectedTagAfter(parentTag, tag).catch((error) => {
+        this.moveSelectedTagAfter(parentTag, tag).catch((error: any) => {
           console.error('[Puffs Tag Enhance] Failed to move selected tag after target:', error);
           new Notice('调整子标签顺序失败');
         });
@@ -167,7 +166,7 @@ export class WorkspaceBehavior {
         evt.preventDefault();
         evt.stopPropagation();
         evt.stopImmediatePropagation();
-        this.moveSelectedHierarchyNoteAfter(targetHierarchyParent, targetPath).catch((error) => {
+        this.moveSelectedHierarchyNoteAfter(targetHierarchyParent, targetPath).catch((error: any) => {
           console.error('[Puffs Tag Enhance] Failed to move hierarchy note:', error);
           new Notice('调整子笔记顺序失败');
         });
@@ -183,7 +182,7 @@ export class WorkspaceBehavior {
       evt.preventDefault();
       evt.stopPropagation();
       evt.stopImmediatePropagation();
-      this.moveSelectedNoteAfter(targetTag, targetPath).catch((error) => {
+      this.moveSelectedNoteAfter(targetTag, targetPath).catch((error: any) => {
         console.error('[Puffs Tag Enhance] Failed to move selected note after target:', error);
         new Notice('调整笔记顺序失败');
       });
@@ -208,7 +207,7 @@ export class WorkspaceBehavior {
     return null;
   }
 
-  handleHierarchyNavigationHotkey(evt) {
+  handleHierarchyNavigationHotkey(evt: any) {
     if (
       !evt.altKey || evt.ctrlKey || evt.metaKey || evt.shiftKey ||
       (evt.key !== 'ArrowLeft' && evt.key !== 'ArrowRight')
@@ -224,7 +223,7 @@ export class WorkspaceBehavior {
     return true;
   }
 
-  eventMatchesHotkey(evt, hotkey) {
+  eventMatchesHotkey(evt: any, hotkey: any) {
     const keyMatches = evt.key && evt.key.toLowerCase() === hotkey.key.toLowerCase();
     if (!keyMatches) return false;
 
@@ -245,7 +244,7 @@ export class WorkspaceBehavior {
     );
   }
 
-  isQuickSearchHotkey(evt) {
+  isQuickSearchHotkey(evt: any) {
     return this.eventMatchesHotkey(evt, this.getQuickSearchHotkey());
   }
 
@@ -269,7 +268,7 @@ export class WorkspaceBehavior {
     );
   }
 
-  handleActiveLeafChange(leaf) {
+  handleActiveLeafChange(leaf: any) {
     if (this.isMarkdownMainLeaf(leaf)) {
       const filePath = getLeafFilePath(leaf);
       const filePathChanged = filePath !== this.currentMainFilePath;
@@ -286,11 +285,11 @@ export class WorkspaceBehavior {
     }
   }
 
-  isMarkdownMainLeaf(leaf) {
+  isMarkdownMainLeaf(leaf: any) {
     return this.isMainWorkspaceLeaf(leaf) && leaf.view && leaf.view.getViewType() === MARKDOWN_VIEW_TYPE;
   }
 
-  isManagedSidebarLeaf(leaf) {
+  isManagedSidebarLeaf(leaf: any) {
     return !!(
       leaf &&
       leaf.view &&
@@ -312,7 +311,7 @@ export class WorkspaceBehavior {
     this.handleSidebarSelection(leaf);
   }
 
-  handleSidebarSelection(leaf) {
+  handleSidebarSelection(leaf: any) {
     if (!this.isManagedSidebarLeaf(leaf)) return;
 
     const operation = this.activeSidebarSelectionOperation;
@@ -341,7 +340,7 @@ export class WorkspaceBehavior {
     return readPreferredFiles(this.settings.tagSidebarPreferredFiles);
   }
 
-  async setTagSidebarPreference(filePath, enabled) {
+  async setTagSidebarPreference(filePath: any, enabled: any) {
     if (!filePath) return;
 
     const preferred = this.getPreferredFileSet();
@@ -354,7 +353,7 @@ export class WorkspaceBehavior {
     await this.saveSettings();
   }
 
-  hasTagSidebarPreference(filePath) {
+  hasTagSidebarPreference(filePath: any) {
     return !!filePath && this.getPreferredFileSet().has(filePath);
   }
 
@@ -371,7 +370,7 @@ export class WorkspaceBehavior {
     });
   }
 
-  async switchManagedSidebarTo(requestId, filePath, viewType) {
+  async switchManagedSidebarTo(requestId: any, filePath: any, viewType: any) {
     const leaf = await this.getOrCreateManagedSidebarLeaf(viewType);
     if (this.isUnloaded) return;
     if (requestId !== this.sidebarSwitchRequestId) return;
@@ -418,7 +417,7 @@ export class WorkspaceBehavior {
     }
   }
 
-  async getOrCreateManagedSidebarLeaf(viewType) {
+  async getOrCreateManagedSidebarLeaf(viewType: any) {
     const existingLeaf = this.findManagedSidebarLeaf(viewType);
     if (existingLeaf) return existingLeaf;
 
@@ -439,8 +438,8 @@ export class WorkspaceBehavior {
     return leaf;
   }
 
-  findManagedSidebarLeaf(viewType) {
-    return this.app.workspace.getLeavesOfType(viewType).find((leaf) => this.isManagedSidebarLeaf(leaf)) || null;
+  findManagedSidebarLeaf(viewType: any) {
+    return this.app.workspace.getLeavesOfType(viewType).find((leaf: any) => this.isManagedSidebarLeaf(leaf)) || null;
   }
 
   getSelectedManagedSidebarLeaf() {
@@ -461,7 +460,7 @@ export class WorkspaceBehavior {
     return null;
   }
 
-  handlePreferredFileRename(file, oldPath) {
+  handlePreferredFileRename(file: any, oldPath: any) {
     if (!oldPath || !file || !file.path) return;
     const preferred = this.getPreferredFileSet();
     if (!preferred.has(oldPath)) return;
@@ -477,7 +476,7 @@ export class WorkspaceBehavior {
     this.saveSettings();
   }
 
-  handlePreferredFileDelete(file) {
+  handlePreferredFileDelete(file: any) {
     if (!file || !file.path) return;
     const preferred = this.getPreferredFileSet();
     if (!preferred.has(file.path)) return;
@@ -491,7 +490,7 @@ export class WorkspaceBehavior {
     this.saveSettings();
   }
 
-  handleNoteOrderFileRename(file, oldPath) {
+  handleNoteOrderFileRename(file: any, oldPath: any) {
     if (!(file instanceof TFile) || file.extension !== 'md' || !oldPath || !file.path) return;
 
     let changed = false;
@@ -505,13 +504,13 @@ export class WorkspaceBehavior {
     }
 
     if (changed) {
-      this.saveSettings().catch((error) => {
+      this.saveSettings().catch((error: any) => {
         console.error('[Puffs Tag Enhance] Failed to update note order after rename:', error);
       });
     }
   }
 
-  handleNoteOrderFileDelete(file) {
+  handleNoteOrderFileDelete(file: any) {
     if (!(file instanceof TFile) || file.extension !== 'md' || !file.path) return;
 
     let changed = false;
@@ -525,13 +524,13 @@ export class WorkspaceBehavior {
     }
 
     if (changed) {
-      this.saveSettings().catch((error) => {
+      this.saveSettings().catch((error: any) => {
         console.error('[Puffs Tag Enhance] Failed to update note order after delete:', error);
       });
     }
   }
 
-  handleNoteDisplayNameFileRename(file, oldPath) {
+  handleNoteDisplayNameFileRename(file: any, oldPath: any) {
     if (
       !(file instanceof TFile) ||
       file.extension !== 'md' ||
@@ -543,7 +542,7 @@ export class WorkspaceBehavior {
     }
 
     let changed = false;
-    for (const [tag, entries] of Object.entries(this.settings.noteDisplayNameByTag)) {
+    for (const [tag, entries] of Object.entries<any>(this.settings.noteDisplayNameByTag)) {
       if (!entries || typeof entries !== 'object' || !entries[oldPath]) continue;
 
       if (!entries[file.path]) entries[file.path] = entries[oldPath];
@@ -553,13 +552,13 @@ export class WorkspaceBehavior {
     }
 
     if (changed) {
-      this.saveSettings().catch((error) => {
+      this.saveSettings().catch((error: any) => {
         console.error('[Puffs Tag Enhance] Failed to update note display name after rename:', error);
       });
     }
   }
 
-  handleNoteDisplayNameFileDelete(file) {
+  handleNoteDisplayNameFileDelete(file: any) {
     if (
       !(file instanceof TFile) ||
       file.extension !== 'md' ||
@@ -570,7 +569,7 @@ export class WorkspaceBehavior {
     }
 
     let changed = false;
-    for (const [tag, entries] of Object.entries(this.settings.noteDisplayNameByTag)) {
+    for (const [tag, entries] of Object.entries<any>(this.settings.noteDisplayNameByTag)) {
       if (!entries || typeof entries !== 'object' || !entries[file.path]) continue;
 
       delete entries[file.path];
@@ -579,14 +578,14 @@ export class WorkspaceBehavior {
     }
 
     if (changed) {
-      this.saveSettings().catch((error) => {
+      this.saveSettings().catch((error: any) => {
         console.error('[Puffs Tag Enhance] Failed to remove note display name after delete:', error);
       });
     }
   }
 
 
-  async openNoteCard(cardEl) {
+  async openNoteCard(cardEl: any) {
     const path = cardEl.dataset.path;
     if (!path) return;
 
@@ -599,7 +598,7 @@ export class WorkspaceBehavior {
     await this.openFileInMainWorkspace(file);
   }
 
-  async openFileInMainWorkspace(file) {
+  async openFileInMainWorkspace(file: any) {
     const openLeaf = this.findOpenMainLeaf(file.path);
     if (openLeaf) {
       await this.app.workspace.revealLeaf(openLeaf);
@@ -619,10 +618,10 @@ export class WorkspaceBehavior {
     await this.app.workspace.openLinkText(file.path, '', false);
   }
 
-  findOpenMainLeaf(filePath) {
-    let foundLeaf = null;
+  findOpenMainLeaf(filePath: any) {
+    let foundLeaf: any = null;
 
-    this.app.workspace.iterateAllLeaves((leaf) => {
+    this.app.workspace.iterateAllLeaves((leaf: any) => {
       if (foundLeaf) return;
       if (!this.isMainWorkspaceLeaf(leaf)) return;
       if (getLeafFilePath(leaf) !== filePath) return;
@@ -642,8 +641,8 @@ export class WorkspaceBehavior {
       return activeLeaf;
     }
 
-    let bestLeaf = null;
-    this.app.workspace.iterateAllLeaves((leaf) => {
+    let bestLeaf: any = null;
+    this.app.workspace.iterateAllLeaves((leaf: any) => {
       if (!this.isUsableMainLeaf(leaf)) return;
 
       if (!bestLeaf || (bestLeaf.activeTime || 0) < (leaf.activeTime || 0)) {
@@ -656,12 +655,12 @@ export class WorkspaceBehavior {
     return this.createMainWorkspaceLeaf();
   }
 
-  isUsableMainLeaf(leaf) {
+  isUsableMainLeaf(leaf: any) {
     if (!this.isMainWorkspaceLeaf(leaf)) return false;
     return true;
   }
 
-  isMainWorkspaceLeaf(leaf) {
+  isMainWorkspaceLeaf(leaf: any) {
     if (!leaf || !leaf.getRoot) return false;
     return leaf.getRoot() === this.app.workspace.rootSplit;
   }
@@ -692,8 +691,8 @@ export class WorkspaceBehavior {
       return this.lastMainLeaf.parent;
     }
 
-    let tabGroup = null;
-    workspace.iterateAllLeaves((leaf) => {
+    let tabGroup: any = null;
+    workspace.iterateAllLeaves((leaf: any) => {
       if (tabGroup) return;
       if (this.isMainWorkspaceLeaf(leaf) && leaf.parent) {
         tabGroup = leaf.parent;
@@ -703,7 +702,7 @@ export class WorkspaceBehavior {
     if (tabGroup) return tabGroup;
 
     const rootChildren = workspace.rootSplit?.children || [];
-    return rootChildren.find((child) => Array.isArray(child.children) && Number.isInteger(child.currentTab)) || null;
+    return rootChildren.find((child: any) => Array.isArray(child.children) && Number.isInteger(child.currentTab)) || null;
   }
 
   rememberCurrentMainLeaf() {
@@ -711,7 +710,7 @@ export class WorkspaceBehavior {
     const editorLeaf = this.app.workspace.activeEditor?.leaf;
     let leaf = this.isMarkdownMainLeaf(activeLeaf) ? activeLeaf : editorLeaf;
     if (!this.isMarkdownMainLeaf(leaf)) {
-      this.app.workspace.iterateAllLeaves((candidate) => {
+      this.app.workspace.iterateAllLeaves((candidate: any) => {
         if (!this.isMarkdownMainLeaf(candidate)) return;
         if (!leaf || (leaf.activeTime || 0) < (candidate.activeTime || 0)) leaf = candidate;
       });
@@ -722,7 +721,7 @@ export class WorkspaceBehavior {
     }
   }
 
-  rememberMainLeaf(leaf) {
+  rememberMainLeaf(leaf: any) {
     if (this.isUsableMainLeaf(leaf)) {
       this.lastMainLeaf = leaf;
     }

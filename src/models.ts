@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { normalizePath } from "obsidian";
 import { createDefaultSidebarToolbarButtons } from "./sidebar-toolbar";
 import { CURRENT_SCHEMA_VERSION } from "./data/schema";
@@ -79,23 +78,23 @@ const DEFAULT_SETTINGS = {
   },
 };
 
-function normalizeNewNotePosition(value) {
+function normalizeNewNotePosition(value: any) {
   return value === 'start' ? 'start' : 'end';
 }
 
-function normalizeBackupInterval(value) {
+function normalizeBackupInterval(value: any) {
   const minutes = Math.floor(Number(value));
   if (!Number.isFinite(minutes) || minutes <= 0) return 0;
   return Math.min(minutes, MAX_BACKUP_INTERVAL_MINUTES);
 }
 
-function normalizeScrollTopButtonThreshold(value) {
+function normalizeScrollTopButtonThreshold(value: any) {
   const threshold = Math.floor(Number(value));
   if (!Number.isFinite(threshold)) return DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD;
   return Math.max(0, threshold);
 }
 
-function normalizeBackupFolderPath(value) {
+function normalizeBackupFolderPath(value: any) {
   const text = String(value || '').trim().replace(/\\/g, '/');
   if (!text) return '';
 
@@ -107,14 +106,14 @@ function normalizeBackupFolderPath(value) {
   return normalizePath(segments.join('/'));
 }
 
-function normalizeBackupFileName(value) {
+function normalizeBackupFileName(value: any) {
   const text = String(value || '').trim();
   if (!text) return BACKUP_FILE_NAME;
   if (/[\\/:*?"<>|]/.test(text) || text === '.' || text === '..') return BACKUP_FILE_NAME;
   return text;
 }
 
-function getBackupPathParts(value) {
+function getBackupPathParts(value: any) {
   const normalizedPath = normalizeBackupFolderPath(value);
   if (!normalizedPath) {
     return {
@@ -138,11 +137,11 @@ function getBackupPathParts(value) {
   };
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: any) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function replaceInlineTagsByCache(content, cache, oldTag, newTag) {
+function replaceInlineTagsByCache(content: any, cache: any, oldTag: any, newTag: any) {
   const inlineTags = Array.isArray(cache && cache.tags) ? cache.tags : [];
   const replacements = [];
 
@@ -172,18 +171,18 @@ function replaceInlineTagsByCache(content, cache, oldTag, newTag) {
   return nextContent;
 }
 
-function replaceInlineTagsByText(content, oldTag, newTag) {
+function replaceInlineTagsByText(content: any, oldTag: any, newTag: any) {
   const oldName = escapeRegExp(getTagDisplayName(oldTag));
   const tagPattern = new RegExp(`(^|[^\\p{L}\\p{N}_/#-])#${oldName}(?![\\p{L}\\p{N}_/-])`, 'gu');
-  return content.replace(tagPattern, (match, prefix) => `${prefix}${newTag}`);
+  return content.replace(tagPattern, (match: any, prefix: any) => `${prefix}${newTag}`);
 }
 
-function getFrontmatterTagReplacement(originalValue, newTag) {
+function getFrontmatterTagReplacement(originalValue: any, newTag: any) {
   const text = String(originalValue);
   return text.trim().startsWith('#') ? newTag : getTagDisplayName(newTag);
 }
 
-function replaceFrontmatterTagString(value, oldTag, newTag) {
+function replaceFrontmatterTagString(value: any, oldTag: any, newTag: any) {
   const parts = String(value).split(/([,\s]+)/);
   let changed = false;
 
@@ -198,9 +197,9 @@ function replaceFrontmatterTagString(value, oldTag, newTag) {
   return changed ? nextParts.join('') : value;
 }
 
-function dedupeFrontmatterTagValue(value) {
+function dedupeFrontmatterTagValue(value: any) {
   const tags = flattenFrontmatterTags(value);
-  const uniqueTags = [];
+  const uniqueTags: any[] = [];
   const seenTags = new Set();
   let hasDuplicate = false;
 
@@ -218,7 +217,7 @@ function dedupeFrontmatterTagValue(value) {
   return hasDuplicate ? uniqueTags : value;
 }
 
-function replaceFrontmatterTagValue(value, oldTag, newTag) {
+function replaceFrontmatterTagValue(value: any, oldTag: any, newTag: any) {
   let nextValue = value;
 
   if (Array.isArray(value)) {
@@ -232,7 +231,7 @@ function replaceFrontmatterTagValue(value, oldTag, newTag) {
   return dedupeFrontmatterTagValue(nextValue);
 }
 
-function getLeafFilePath(leaf) {
+function getLeafFilePath(leaf: any) {
   if (!leaf) return null;
 
   const viewFile = leaf.view && leaf.view.file;
@@ -243,7 +242,7 @@ function getLeafFilePath(leaf) {
   return typeof stateFile === 'string' ? stateFile : null;
 }
 
-function flattenFrontmatterTags(value, output = []) {
+function flattenFrontmatterTags(value: any, output: any[] = []) {
   if (!value) return output;
 
   if (Array.isArray(value)) {
@@ -264,13 +263,13 @@ function flattenFrontmatterTags(value, output = []) {
   return output;
 }
 
-function frontmatterTagValueHasTag(value, tagValue) {
+function frontmatterTagValueHasTag(value: any, tagValue: any) {
   const tag = normalizeTag(tagValue);
   if (!tag) return false;
   return flattenFrontmatterTags(value).some((item) => normalizeTag(item) === tag);
 }
 
-function normalizeHotkeyKey(value) {
+function normalizeHotkeyKey(value: any) {
   const key = String(value || '').trim();
   const normalized = key.toLowerCase();
   if (key === '↑' || normalized === 'arrowup' || normalized === 'up') return 'ArrowUp';
@@ -278,13 +277,13 @@ function normalizeHotkeyKey(value) {
   return key.length === 1 ? key.toUpperCase() : key;
 }
 
-function formatHotkeyKey(key) {
+function formatHotkeyKey(key: any) {
   if (key === 'ArrowUp') return '↑';
   if (key === 'ArrowDown') return '↓';
   return key;
 }
 
-function parseHotkeyText(value, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
+function parseHotkeyText(value: any, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
   const text = String(value || fallback).trim();
   const parts = text.split('+').map((part) => part.trim()).filter(Boolean);
   if (parts.length === 0) return parseHotkeyText(fallback, fallback);
@@ -316,11 +315,11 @@ function parseHotkeyText(value, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
   };
 }
 
-function formatHotkey(parsedHotkey) {
+function formatHotkey(parsedHotkey: any) {
   return [...parsedHotkey.modifiers, formatHotkeyKey(parsedHotkey.key)].join(' + ');
 }
 
-function normalizeHotkeyText(value, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
+function normalizeHotkeyText(value: any, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
   return formatHotkey(parseHotkeyText(value, fallback));
 }
 

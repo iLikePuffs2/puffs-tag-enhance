@@ -1,9 +1,12 @@
-// @ts-nocheck
 import { Modal, Notice, setIcon } from "obsidian";
 import { getTagDisplayName, normalizeTag } from "./models";
 
 class PuffsTagRenameModal extends Modal {
-  constructor(app, plugin, tag) {
+  isSubmitting: any;
+  mode: any;
+  plugin: any;
+  tag: any;
+  constructor(app: any, plugin: any, tag: any) {
     super(app);
     this.plugin = plugin;
     this.tag = normalizeTag(tag);
@@ -46,7 +49,7 @@ class PuffsTagRenameModal extends Modal {
       }, 0);
     };
 
-    const renderMode = (mode) => {
+    const renderMode = (mode: any) => {
       this.mode = mode;
       titleEl.textContent = mode === 'add'
         ? '批量新增标签'
@@ -59,7 +62,7 @@ class PuffsTagRenameModal extends Modal {
       focusInput(mode === 'rename');
     };
 
-    const keepInputFocused = (evt) => {
+    const keepInputFocused = (evt: any) => {
       evt.preventDefault();
     };
     addButtonEl.addEventListener('mousedown', keepInputFocused);

@@ -1,21 +1,20 @@
-// @ts-nocheck
 import { Modal, Notice, TFile, setIcon } from "obsidian";
 import { getTagDisplayName, isNestedTag, normalizeTag } from "./models";
 
-function getDirectionalInputSide(activeSide, key, visibleSides) {
+function getDirectionalInputSide(activeSide: any, key: any, visibleSides: any) {
   if (!Array.isArray(visibleSides) || visibleSides.length < 2) return null;
   if (key === 'ArrowDown' && activeSide === 'parent' && visibleSides.includes('child')) return 'child';
   if (key === 'ArrowUp' && activeSide === 'child' && visibleSides.includes('parent')) return 'parent';
   return null;
 }
 
-function getNoteRelationSubmitError(parentCount, childCount) {
+function getNoteRelationSubmitError(parentCount: any, childCount: any) {
   if (!parentCount || !childCount) return '请分别选择父笔记和子笔记';
   if (parentCount > 1 && childCount > 1) return '批量关系仅支持一父多子或多父一子';
   return '';
 }
 
-function getNoteRelationEnterAction(event, isComposing, hasCandidate = false) {
+function getNoteRelationEnterAction(event: any, isComposing: any, hasCandidate = false) {
   if (
     event.key !== 'Enter' ||
     event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
@@ -24,7 +23,7 @@ function getNoteRelationEnterAction(event, isComposing, hasCandidate = false) {
   return hasCandidate ? 'select-candidate' : 'submit';
 }
 
-function getNoteBindingCandidates(files, query, getAliases: (file: TFile) => string[] = () => []) {
+function getNoteBindingCandidates(files: any, query: any, getAliases: (file: TFile) => string[] = () => []) {
   const term = String(query || '').trim().toLowerCase();
   if (!term) return [];
 
@@ -45,10 +44,10 @@ function getNoteBindingCandidates(files, query, getAliases: (file: TFile) => str
     ));
 }
 
-function getTagRelationCandidates(tagValues, query, canUse: (tag: string) => boolean = () => true) {
+function getTagRelationCandidates(tagValues: any, query: any, canUse: (tag: string) => boolean = () => true) {
   const term = String(query || '').trim().replace(/^#/, '').toLowerCase();
   if (!term) return [];
-  return Array.from(new Set(Array.from(tagValues || []).map(normalizeTag).filter(Boolean)))
+  return Array.from<any>(new Set(Array.from<any>(tagValues || []).map(normalizeTag).filter(Boolean)))
     .filter((tag) => !isNestedTag(tag) && canUse(tag))
     .filter((tag) => getTagDisplayName(tag).toLowerCase().includes(term))
     .sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN'));
@@ -59,7 +58,7 @@ function groupExcludedPathsBySource(
   sourcesByPath: Map<string, string[]>,
   orderedSources: string[] = []
 ) {
-  const normalizedPaths = Array.from(new Set((paths || []).filter(Boolean)));
+  const normalizedPaths = Array.from<any>(new Set((paths || []).filter(Boolean)));
   const discoveredSources = [];
   const seenSources = new Set();
   for (const source of orderedSources || []) {
@@ -76,7 +75,7 @@ function groupExcludedPathsBySource(
       discoveredSources.push(tag);
     }
   }
-  const groups = discoveredSources
+  const groups: any[] = discoveredSources
     .map((source) => ({
       source,
       paths: normalizedPaths.filter((path) => (sourcesByPath.get(path) || []).includes(source)),
@@ -87,10 +86,10 @@ function groupExcludedPathsBySource(
   return groups;
 }
 
-function filterInheritanceCandidates(candidates, query, getAliases: (file: TFile) => string[] = () => []) {
+function filterInheritanceCandidates(candidates: any, query: any, getAliases: (file: TFile) => string[] = () => []) {
   const term = String(query || '').trim().toLowerCase();
   if (!term) return [...(candidates || [])];
-  return (candidates || []).filter((candidate) => {
+  return (candidates || []).filter((candidate: any) => {
     const file = candidate.file;
     return String(candidate.path || '').toLowerCase().includes(term) ||
       String(file?.basename || '').toLowerCase().includes(term) ||
@@ -98,7 +97,7 @@ function filterInheritanceCandidates(candidates, query, getAliases: (file: TFile
   });
 }
 
-function groupInheritanceCandidates(candidates) {
+function groupInheritanceCandidates(candidates: any) {
   const groups = [];
   const groupsBySource = new Map();
   for (const candidate of candidates || []) {
@@ -114,11 +113,11 @@ function groupInheritanceCandidates(candidates) {
   return groups;
 }
 
-function createTagCandidatePicker(options) {
+function createTagCandidatePicker(options: any) {
   const { hostEl, inputEl, getCandidates, onInput, onSelect, setComposing } = options;
   const resultsEl = hostEl.createDiv({ cls: 'puffs-relation-tag-results' });
   let activeIndex = 0;
-  let candidates = [];
+  let candidates: any[] = [];
   let isComposing = false;
   const render = () => {
     resultsEl.empty();
@@ -129,13 +128,13 @@ function createTagCandidatePicker(options) {
       return;
     }
     activeIndex = Math.max(0, Math.min(candidates.length - 1, activeIndex));
-    candidates.forEach((tag, index) => {
+    candidates.forEach((tag: any, index: any) => {
       const rowEl = resultsEl.createDiv({ cls: 'puffs-relation-tag-result is-clickable' });
       rowEl.classList.toggle('is-active', index === activeIndex);
       rowEl.createDiv({ text: getTagDisplayName(tag), cls: 'puffs-relation-tag-result-name' });
       rowEl.addEventListener('mouseenter', () => {
         activeIndex = index;
-        resultsEl.querySelectorAll('.puffs-relation-tag-result').forEach((el, rowIndex) => {
+        resultsEl.querySelectorAll('.puffs-relation-tag-result').forEach((el: any, rowIndex: any) => {
           el.classList.toggle('is-active', rowIndex === index);
         });
       });
@@ -164,7 +163,7 @@ function createTagCandidatePicker(options) {
     activeIndex = 0;
     render();
   });
-  inputEl.addEventListener('keydown', (event) => {
+  inputEl.addEventListener('keydown', (event: any) => {
     if (isComposing || event.isComposing) return;
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && candidates.length) {
       const delta = event.key === 'ArrowDown' ? 1 : -1;
@@ -186,7 +185,11 @@ function createTagCandidatePicker(options) {
 }
 
 class RemoveTagRelationConfirmModal extends Modal {
-  constructor(app, subjectTag, relatedTag, relationMode, onConfirm) {
+  onConfirm: any;
+  relatedTag: any;
+  relationMode: any;
+  subjectTag: any;
+  constructor(app: any, subjectTag: any, relatedTag: any, relationMode: any, onConfirm: any) {
     super(app);
     this.subjectTag = subjectTag;
     this.relatedTag = relatedTag;
@@ -220,7 +223,27 @@ class RemoveTagRelationConfirmModal extends Modal {
 }
 
 class TagInheritanceModal extends Modal {
-  constructor(app, plugin, subjectTag, relationMode = 'children') {
+  activeChild: any;
+  children: any;
+  childrenListEl: any;
+  exclusionGroupsEl: any;
+  exclusionsSectionEl: any;
+  inputEl: any;
+  isComposing: any;
+  isSubmitting: any;
+  parentTag: any;
+  picker: any;
+  plugin: any;
+  query: any;
+  relationMode: any;
+  searchHostEl: any;
+  selectionGroupsEl: any;
+  selectionInputEl: any;
+  selectionQuery: any;
+  selectionSectionEl: any;
+  selectionSummaryEl: any;
+  selectionTitleEl: any;
+  constructor(app: any, plugin: any, subjectTag: any, relationMode = 'children') {
     super(app);
     this.plugin = plugin;
     this.relationMode = relationMode;
@@ -267,7 +290,7 @@ class TagInheritanceModal extends Modal {
     this.picker = createTagCandidatePicker({
       hostEl: this.searchHostEl,
       inputEl: this.inputEl,
-      getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
+      getCandidates: (query: any) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
         tag !== this.parentTag &&
         !this.children.includes(tag) &&
         !(this.relationMode === 'parents' && this.plugin.isFixedChild(this.parentTag)) &&
@@ -277,11 +300,11 @@ class TagInheritanceModal extends Modal {
           this.relationMode === 'parents' ? this.parentTag : tag
         )
       )),
-      onInput: (value) => { this.query = value; },
-      onSelect: (tag) => {
+      onInput: (value: any) => { this.query = value; },
+      onSelect: (tag: any) => {
         void this.addChild(tag);
       },
-      setComposing: (value) => { this.isComposing = value; },
+      setComposing: (value: any) => { this.isComposing = value; },
     });
 
     this.childrenListEl = this.contentEl.createDiv({ cls: 'puffs-relation-child-list' });
@@ -321,7 +344,7 @@ class TagInheritanceModal extends Modal {
     }, 0);
   }
 
-  getEdge(relatedTag) {
+  getEdge(relatedTag: any) {
     return this.relationMode === 'parents'
       ? { parent: relatedTag, child: this.parentTag }
       : { parent: this.parentTag, child: relatedTag };
@@ -331,7 +354,7 @@ class TagInheritanceModal extends Modal {
     return this.getEdge(this.activeChild);
   }
 
-  async changeInheritanceMode(relatedTag, mode) {
+  async changeInheritanceMode(relatedTag: any, mode: any) {
     const { parent, child } = this.getEdge(relatedTag);
     if (!relatedTag || this.isSubmitting || this.plugin.isFixedTagEdge(parent, child) ||
       this.plugin.getTagInheritanceMode(parent, child) === mode) return;
@@ -351,7 +374,7 @@ class TagInheritanceModal extends Modal {
     }
   }
 
-  selectActiveChild(child) {
+  selectActiveChild(child: any) {
     if (!child || !this.children.includes(child)) return;
     this.activeChild = child;
     this.renderChildren();
@@ -385,7 +408,7 @@ class TagInheritanceModal extends Modal {
       this.children = this.plugin.sortTagsByVisibleCount(this.children);
     }
     const existingRows = new Map(
-      Array.from(this.childrenListEl.querySelectorAll('.puffs-relation-child-row'))
+      Array.from<any>(this.childrenListEl.querySelectorAll('.puffs-relation-child-row'))
         .map((row) => [row.dataset.puffsTag, row])
     );
     this.childrenListEl.querySelector('.puffs-relation-empty')?.remove();
@@ -401,7 +424,7 @@ class TagInheritanceModal extends Modal {
         const modeButton = rowEl.createEl('button', {
           cls: 'clickable-icon puffs-inheritance-edge-mode',
         });
-        modeButton.addEventListener('click', (event) => {
+        modeButton.addEventListener('click', (event: any) => {
           event.stopPropagation();
           const relatedTag = modeButton.dataset.puffsRelatedTag;
           this.activeChild = relatedTag;
@@ -415,7 +438,7 @@ class TagInheritanceModal extends Modal {
           const nextMode = this.plugin.getTagInheritanceMode(edge.parent, edge.child) === 'selected' ? 'all' : 'selected';
           void this.changeInheritanceMode(relatedTag, nextMode);
         });
-        rowEl.addEventListener('click', (event) => {
+        rowEl.addEventListener('click', (event: any) => {
           if (event.target.closest('button')) return;
           this.selectActiveChild(rowEl.dataset.puffsTag);
         });
@@ -424,7 +447,7 @@ class TagInheritanceModal extends Modal {
           attr: { 'aria-label': `移除 ${getTagDisplayName(child)}` },
         });
         setIcon(removeButton, 'x');
-        removeButton.addEventListener('click', (event) => {
+        removeButton.addEventListener('click', (event: any) => {
           event.stopPropagation();
           new RemoveTagRelationConfirmModal(this.app, this.parentTag, child, this.relationMode, () => {
             void this.removeChild(child);
@@ -451,7 +474,7 @@ class TagInheritanceModal extends Modal {
     this.syncMutationState();
   }
 
-  syncInheritanceModeButton(rowEl, relatedTag) {
+  syncInheritanceModeButton(rowEl: any, relatedTag: any) {
     const button = rowEl.querySelector('.puffs-inheritance-edge-mode');
     if (!button) return;
     const { parent, child } = this.getEdge(relatedTag);
@@ -485,7 +508,7 @@ class TagInheritanceModal extends Modal {
     }
   }
 
-  syncFixedRelationButton(rowEl, relatedTag) {
+  syncFixedRelationButton(rowEl: any, relatedTag: any) {
     const { parent, child } = this.getEdge(relatedTag);
     const eligible = this.plugin.isFixedTagRelationEligible(parent, child);
     let button = rowEl.querySelector('.puffs-relation-fixed-toggle');
@@ -497,7 +520,7 @@ class TagInheritanceModal extends Modal {
       button = rowEl.createEl('button', { cls: 'clickable-icon puffs-relation-fixed-toggle' });
       const removeButton = rowEl.querySelector('.puffs-relation-child-remove');
       if (removeButton) rowEl.insertBefore(button, removeButton);
-      button.addEventListener('click', (event) => {
+      button.addEventListener('click', (event: any) => {
         event.stopPropagation();
         void this.toggleFixedRelation(button);
       });
@@ -511,7 +534,7 @@ class TagInheritanceModal extends Modal {
     button.disabled = this.isSubmitting;
   }
 
-  async toggleFixedRelation(button) {
+  async toggleFixedRelation(button: any) {
     if (this.isSubmitting) return;
     const parent = button.dataset.puffsParentTag;
     const child = button.dataset.puffsChildTag;
@@ -532,7 +555,7 @@ class TagInheritanceModal extends Modal {
     }
   }
 
-  updateChildren(nextChildren) {
+  updateChildren(nextChildren: any) {
     this.children = this.relationMode === 'parents'
       ? this.plugin.sortTagsByVisibleCount(nextChildren)
       : [...nextChildren];
@@ -543,7 +566,7 @@ class TagInheritanceModal extends Modal {
     this.picker?.render();
   }
 
-  async persistChildren(nextChildren) {
+  async persistChildren(nextChildren: any) {
     if (this.isSubmitting) return;
     this.isSubmitting = true;
     this.syncMutationState();
@@ -569,7 +592,7 @@ class TagInheritanceModal extends Modal {
     }
   }
 
-  async addChild(tag) {
+  async addChild(tag: any) {
     if (!tag || this.children.includes(tag) || this.isSubmitting) return;
     if (!await this.persistChildren([...this.children, tag])) return;
     if (this.relationMode === 'children') this.selectActiveChild(tag);
@@ -579,9 +602,9 @@ class TagInheritanceModal extends Modal {
     globalThis.setTimeout(() => this.inputEl?.focus(), 0);
   }
 
-  async removeChild(child) {
+  async removeChild(child: any) {
     if (!child || !this.children.includes(child) || this.isSubmitting) return;
-    if (!await this.persistChildren(this.children.filter((tag) => tag !== child))) return;
+    if (!await this.persistChildren(this.children.filter((tag: any) => tag !== child))) return;
     globalThis.setTimeout(() => this.inputEl?.focus(), 0);
   }
 
@@ -595,7 +618,7 @@ class TagInheritanceModal extends Modal {
     );
   }
 
-  async persistInheritanceSelection(nextPaths) {
+  async persistInheritanceSelection(nextPaths: any) {
     if (this.isSubmitting || !this.activeChild) return false;
     this.isSubmitting = true;
     this.syncMutationState();
@@ -614,7 +637,7 @@ class TagInheritanceModal extends Modal {
     }
   }
 
-  async toggleInheritanceCandidate(path, visible) {
+  async toggleInheritanceCandidate(path: any, visible: any) {
     const { parent, child } = this.getActiveEdge();
     const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
     if (visible) paths.add(path);
@@ -622,7 +645,7 @@ class TagInheritanceModal extends Modal {
     await this.persistInheritanceSelection(Array.from(paths));
   }
 
-  async applyInheritanceSelectionBatch(visible) {
+  async applyInheritanceSelectionBatch(visible: any) {
     if (this.isSubmitting) return;
     const { parent, child } = this.getActiveEdge();
     const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
@@ -644,9 +667,9 @@ class TagInheritanceModal extends Modal {
       this.selectionTitleEl.textContent = `继承笔记（${getTagDisplayName(parent)} ← ${getTagDisplayName(child)}）`;
     }
     const candidates = this.plugin.getInheritanceCandidates(parent, child);
-    const freeCandidates = candidates.filter((candidate) => !candidate.fixed);
+    const freeCandidates = candidates.filter((candidate: any) => !candidate.fixed);
     const selectedPaths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
-    const selectedCount = freeCandidates.filter((candidate) => selectedPaths.has(candidate.path)).length;
+    const selectedCount = freeCandidates.filter((candidate: any) => selectedPaths.has(candidate.path)).length;
     this.selectionSummaryEl.textContent = `已选 ${selectedCount} / ${freeCandidates.length}`;
     const filtered = filterInheritanceCandidates(
       candidates,
@@ -655,7 +678,7 @@ class TagInheritanceModal extends Modal {
     );
     const scrollTop = this.selectionGroupsEl.scrollTop;
     const existingGroups = new Map(
-      Array.from(this.selectionGroupsEl.querySelectorAll('.puffs-inheritance-selection-group'))
+      Array.from<any>(this.selectionGroupsEl.querySelectorAll('.puffs-inheritance-selection-group'))
         .map((groupEl) => [groupEl.dataset.puffsSource || '', groupEl])
     );
     if (!filtered.length) {
@@ -683,7 +706,7 @@ class TagInheritanceModal extends Modal {
         : '来源未知';
       const listEl = groupEl.querySelector('.puffs-inheritance-selection-list');
       const existingRows = new Map(
-        Array.from(listEl.querySelectorAll('.puffs-inheritance-selection-row'))
+        Array.from<any>(listEl.querySelectorAll('.puffs-inheritance-selection-row'))
           .map((rowEl) => [rowEl.dataset.puffsPath || '', rowEl])
       );
       for (const candidate of group.candidates) {
@@ -708,7 +731,7 @@ class TagInheritanceModal extends Modal {
         nameEl.setAttribute('title', candidate.path);
         const sourcesEl = rowEl.querySelector('.puffs-inheritance-selection-sources');
         const existingSources = new Map(
-          Array.from(sourcesEl.querySelectorAll('.puffs-inheritance-source-chip'))
+          Array.from<any>(sourcesEl.querySelectorAll('.puffs-inheritance-source-chip'))
             .map((chipEl) => [chipEl.dataset.puffsSource || '', chipEl])
         );
         for (const source of candidate.sources || []) {
@@ -754,8 +777,8 @@ class TagInheritanceModal extends Modal {
     this.exclusionGroupsEl.empty();
     if (!exclusions.length) return;
     const candidatesByPath = new Map(this.plugin.getInheritanceCandidates(parent, child)
-      .map((candidate) => [candidate.path, candidate]));
-    const sourcesByPath = new Map(exclusions.map((path) => [path, candidatesByPath.get(path)?.sources || []]));
+      .map((candidate: any) => [candidate.path, candidate]));
+    const sourcesByPath: Map<any, any> = new Map(exclusions.map((path: any) => [path, (candidatesByPath.get(path) as any)?.sources || []]));
     const groups = groupExcludedPathsBySource(
       exclusions,
       sourcesByPath,
@@ -774,7 +797,7 @@ class TagInheritanceModal extends Modal {
       for (const path of group.paths) {
         const rowEl = listEl.createDiv({ cls: 'puffs-relation-manage-row' });
         rowEl.dataset.puffsPath = path;
-        const file = this.app.vault.getAbstractFileByPath(path);
+        const file: any = this.app.vault.getAbstractFileByPath(path);
         rowEl.createSpan({ text: file && file.basename ? file.basename : path, cls: 'puffs-relation-manage-name' });
         const restoreButton = rowEl.createEl('button', { text: '恢复' });
         restoreButton.addEventListener('click', async () => {
@@ -793,12 +816,12 @@ class TagInheritanceModal extends Modal {
     }
   }
 
-  removeExcludedPath(path) {
+  removeExcludedPath(path: any) {
     if (!this.exclusionGroupsEl || !this.exclusionsSectionEl) return;
-    for (const rowEl of Array.from(this.exclusionGroupsEl.querySelectorAll('.puffs-relation-manage-row'))) {
+    for (const rowEl of Array.from<any>(this.exclusionGroupsEl.querySelectorAll('.puffs-relation-manage-row'))) {
       if (rowEl.dataset.puffsPath === path) rowEl.remove();
     }
-    for (const groupEl of Array.from(this.exclusionGroupsEl.querySelectorAll('.puffs-relation-exclusion-group'))) {
+    for (const groupEl of Array.from<any>(this.exclusionGroupsEl.querySelectorAll('.puffs-relation-exclusion-group'))) {
       if (!groupEl.querySelector('.puffs-relation-manage-row')) groupEl.remove();
     }
     this.exclusionsSectionEl.classList.toggle(
@@ -809,13 +832,23 @@ class TagInheritanceModal extends Modal {
 }
 
 class ManageParentTagModal extends TagInheritanceModal {
-  constructor(app, plugin, childTag) {
+  constructor(app: any, plugin: any, childTag: any) {
     super(app, plugin, childTag, 'parents');
   }
 }
 
 class TagNoteBindingModal extends Modal {
-  constructor(app, plugin, tagValue) {
+  activeIndex: any;
+  candidates: any;
+  hasPersisted: any;
+  isComposing: any;
+  isSubmitting: any;
+  originalPath: any;
+  plugin: any;
+  query: any;
+  selectedPath: any;
+  tag: any;
+  constructor(app: any, plugin: any, tagValue: any) {
     super(app);
     this.plugin = plugin;
     this.tag = normalizeTag(tagValue);
@@ -870,7 +903,7 @@ class TagNoteBindingModal extends Modal {
       });
     };
 
-    const selectCandidate = (candidate) => {
+    const selectCandidate = (candidate: any) => {
       if (!candidate) return;
       this.selectedPath = candidate.file.path;
       this.query = '';
@@ -895,7 +928,7 @@ class TagNoteBindingModal extends Modal {
         return;
       }
       this.activeIndex = Math.max(0, Math.min(this.activeIndex, this.candidates.length - 1));
-      this.candidates.forEach((candidate, index) => {
+      this.candidates.forEach((candidate: any, index: any) => {
         const rowEl = resultsEl.createDiv({ cls: 'puffs-relation-note-result is-clickable' });
         rowEl.classList.toggle('is-active', index === this.activeIndex);
         rowEl.createDiv({ text: candidate.displayName, cls: 'puffs-relation-note-result-name' });
@@ -986,7 +1019,19 @@ class TagNoteBindingModal extends Modal {
 }
 
 class NoteRelationModal extends Modal {
-  constructor(app, plugin, sourcePath: any = null, mode: any = null) {
+  activeIndex: any;
+  activeSide: any;
+  isComposing: any;
+  isSubmitting: any;
+  lockedChildren: any;
+  lockedParents: any;
+  mode: any;
+  plugin: any;
+  queries: any;
+  selectedChildren: any;
+  selectedParents: any;
+  sourcePath: any;
+  constructor(app: any, plugin: any, sourcePath: any = null, mode: any = null) {
     super(app);
     this.plugin = plugin;
     this.sourcePath = sourcePath;
@@ -1027,12 +1072,12 @@ class NoteRelationModal extends Modal {
       ? `为 ${sourceName} 添加${this.mode === 'parent' ? '父笔记' : '子笔记'}`
       : '新增父子笔记';
     this.contentEl.createDiv({ text: title, cls: 'puffs-relation-modal-title puffs-tag-rename-title' });
-    const inputBySide = {};
-    const selectedBySide = {};
+    const inputBySide: any = {};
+    const selectedBySide: any = {};
     const visibleSides = this.sourcePath
       ? [this.mode === 'parent' ? 'parent' : 'child']
       : ['parent', 'child'];
-    const createSelector = (side, label) => {
+    const createSelector = (side: any, label: any) => {
       const sectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-selector' });
       const locked = side === 'parent' ? this.lockedParents : this.lockedChildren;
       sectionEl.createDiv({ text: label, cls: 'puffs-relation-selector-label' });
@@ -1095,13 +1140,13 @@ class NoteRelationModal extends Modal {
       }
     };
 
-    const findMatch = (file, term) => {
+    const findMatch = (file: any, term: any) => {
       const basename = file.basename.toLowerCase();
       if (basename.includes(term)) return { displayName: file.basename, alias: '' };
-      const alias = this.plugin.getNoteAliases(file).find((value) => value.toLowerCase().includes(term));
+      const alias = this.plugin.getNoteAliases(file).find((value: any) => value.toLowerCase().includes(term));
       return alias ? { displayName: alias, alias } : null;
     };
-    const canSelect = (side, path) => {
+    const canSelect = (side: any, path: any) => {
       if (side === 'parent' && this.selectedChildren.size > 1 && this.selectedParents.size >= 1) return false;
       if (side === 'child' && this.selectedParents.size > 1 && this.selectedChildren.size >= 1) return false;
       const opposite = side === 'parent' ? this.selectedChildren : this.selectedParents;
@@ -1114,7 +1159,7 @@ class NoteRelationModal extends Modal {
       }
       return hasNewRelation;
     };
-    const selectCandidate = (candidate) => {
+    const selectCandidate = (candidate: any) => {
       const map = this.activeSide === 'parent' ? this.selectedParents : this.selectedChildren;
       if (map.has(candidate.file.path)) map.delete(candidate.file.path);
       else if (canSelect(this.activeSide, candidate.file.path)) {
@@ -1169,7 +1214,7 @@ class NoteRelationModal extends Modal {
       resultsEl.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
     };
     for (const side of visibleSides) {
-      inputBySide[side].addEventListener('keydown', (event) => {
+      inputBySide[side].addEventListener('keydown', (event: any) => {
         if (this.isComposing || event.isComposing) return;
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && visibleSides.length > 1) {
           const focusSide = getDirectionalInputSide(this.activeSide, event.key, visibleSides);
@@ -1182,7 +1227,7 @@ class NoteRelationModal extends Modal {
           }
           return;
         }
-        const rows = Array.from(resultsEl.querySelectorAll('.puffs-relation-note-result'));
+        const rows = Array.from<any>(resultsEl.querySelectorAll('.puffs-relation-note-result'));
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && rows.length) {
           const delta = event.key === 'ArrowDown' ? 1 : -1;
           this.activeIndex = Math.max(0, Math.min(rows.length - 1, this.activeIndex + delta));

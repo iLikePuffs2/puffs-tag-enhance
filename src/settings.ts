@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { PluginSettingTab, Setting } from "obsidian";
 import {
   DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
@@ -14,7 +13,8 @@ import {
 } from "./sidebar-toolbar";
 
 class PuffsTagEnhanceSettingTab extends PluginSettingTab {
-  constructor(app, plugin) {
+  plugin: any;
+  constructor(app: any, plugin: any) {
     super(app, plugin);
     this.plugin = plugin;
   }

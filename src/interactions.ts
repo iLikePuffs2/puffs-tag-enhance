@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Notice, Scope, TFile } from "obsidian";
 import {
   DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
@@ -28,15 +27,15 @@ export class InteractionsBehavior {
 
   static readonly NOTE_ORDER_LONG_PRESS_MS = NOTE_ORDER_LONG_PRESS_MS;
 
-  getOrderedFilesForTag(tagValue, files) {
+  getOrderedFilesForTag(tagValue: any, files: any) {
     const tag = normalizeTag(tagValue);
     const savedOrder = tag && this.settings.noteOrderByTag[tag];
     if (!Array.isArray(savedOrder) || savedOrder.length === 0) return files;
 
-    const rank = new Map(savedOrder.map((path, index) => [path, index]));
+    const rank: Map<any, any> = new Map(savedOrder.map((path: any, index: any) => [path, index]));
     return files
-      .map((file, index) => ({ file, index }))
-      .sort((a, b) => {
+      .map((file: any, index: any) => ({ file, index }))
+      .sort((a: any, b: any) => {
         const aRank = rank.get(a.file.path);
         const bRank = rank.get(b.file.path);
         const aIsRanked = Number.isInteger(aRank);
@@ -47,26 +46,26 @@ export class InteractionsBehavior {
         if (bIsRanked) return 1;
         return a.index - b.index;
       })
-      .map(({ file }) => file);
+      .map(({ file }: any) => file);
   }
 
-  getOrderedRootFilesForTag(tagValue, files) {
+  getOrderedRootFilesForTag(tagValue: any, files: any) {
     const orderedFiles = this.getOrderedFilesForTag(tagValue, files);
-    const visiblePaths = new Set(orderedFiles.map((file) => file.path));
-    return orderedFiles.filter((file) =>
-      !this.getHierarchyParents(file.path).some((parentPath) => visiblePaths.has(parentPath))
+    const visiblePaths = new Set(orderedFiles.map((file: any) => file.path));
+    return orderedFiles.filter((file: any) =>
+      !this.getHierarchyParents(file.path).some((parentPath: any) => visiblePaths.has(parentPath))
     );
   }
 
-  getNoteAliases(file) {
+  getNoteAliases(file: any) {
     if (!(file instanceof TFile) || file.extension !== 'md') return [];
 
     const cache = this.app.metadataCache.getFileCache(file);
     const frontmatter = cache && cache.frontmatter;
     if (!frontmatter) return [];
 
-    const aliases = [];
-    const collectAliases = (value) => {
+    const aliases: any[] = [];
+    const collectAliases = (value: any) => {
       if (Array.isArray(value)) {
         value.forEach(collectAliases);
         return;
@@ -82,7 +81,7 @@ export class InteractionsBehavior {
     return Array.from(new Set(aliases)).filter((alias) => alias !== file.basename);
   }
 
-  getNoteDisplayName(tagValue, file, isVirtual = false) {
+  getNoteDisplayName(tagValue: any, file: any, isVirtual = false) {
     if (!(file instanceof TFile) || isVirtual) return file && file.basename ? file.basename : '';
 
     const tag = normalizeTag(tagValue);
@@ -96,14 +95,14 @@ export class InteractionsBehavior {
   }
 
 
-  async setNoteDisplayName(tagValue, file, displayName) {
+  async setNoteDisplayName(tagValue: any, file: any, displayName: any) {
     const tag = normalizeTag(tagValue);
     if (
       !tag ||
       isNestedTag(tag) ||
       !(file instanceof TFile) ||
       file.extension !== 'md' ||
-      !(this.tagFileIndex.get(tag) || []).some((candidate) => candidate.path === file.path)
+      !(this.tagFileIndex.get(tag) || []).some((candidate: any) => candidate.path === file.path)
     ) {
       return;
     }
@@ -133,7 +132,7 @@ export class InteractionsBehavior {
 
 
 
-  resolvePinnedSearchQuery(value) {
+  resolvePinnedSearchQuery(value: any) {
     const query = String(value || '').trimStart();
     const pinnedTag = normalizeTag(this.settings.pinnedTag);
     if (!pinnedTag || !['*', '&', '|'].includes(query.charAt(0))) return query;
@@ -160,12 +159,12 @@ export class InteractionsBehavior {
     };
   }
 
-  prependPinnedTagItem(items, query = '') {
+  prependPinnedTagItem(items: any, query = '') {
     const pinnedItem = this.getPinnedTagItem();
     if (!pinnedItem) return items;
 
-    const remainingItems = items.filter((item) => item.tag !== pinnedItem.tag);
-    const matchingItem = items.find((item) => item.tag === pinnedItem.tag);
+    const remainingItems = items.filter((item: any) => item.tag !== pinnedItem.tag);
+    const matchingItem = items.find((item: any) => item.tag === pinnedItem.tag);
     const positionedPinnedItem = {
       ...(matchingItem || pinnedItem),
       isPinnedExtra: !matchingItem,
@@ -177,7 +176,7 @@ export class InteractionsBehavior {
       : [positionedPinnedItem, ...remainingItems];
   }
 
-  isPinnedOnlyTagResult(query, items) {
+  isPinnedOnlyTagResult(query: any, items: any) {
     const pinnedTag = normalizeTag(this.settings.pinnedTag);
     return !!(
       pinnedTag &&
@@ -187,7 +186,7 @@ export class InteractionsBehavior {
     );
   }
 
-  async togglePinnedTag(tagValue) {
+  async togglePinnedTag(tagValue: any) {
     const tag = normalizeTag(tagValue);
     if (!tag || isNestedTag(tag) || this.getTagBrowseData(tag).files.length === 0) return;
 
@@ -241,7 +240,7 @@ export class InteractionsBehavior {
     return Array.from(this.getLogicalTagSet())
       .filter((tag) => !isNestedTag(tag))
       .map((tag) => ({ tag, browseData: this.getTagBrowseData(tag) }))
-      .filter(({ browseData }) => browseData.exactFiles.some((exactFile) => exactFile.path === path))
+      .filter(({ browseData }) => browseData.exactFiles.some((exactFile: any) => exactFile.path === path))
       .map(({ tag, browseData }) => ({
         tag,
         displayName: getTagDisplayName(tag),
@@ -267,18 +266,18 @@ export class InteractionsBehavior {
       : '当前没有打开笔记。';
   }
 
-  getCurrentNoteTagMatches(items) {
+  getCurrentNoteTagMatches(items: any) {
     const path = this.currentMainFilePath;
     if (!path) return [];
 
-    return items.map((item) => ({
+    return items.map((item: any) => ({
       tag: item.tag,
       path,
       key: `${item.tag}\u0000${path}`,
     }));
   }
 
-  syncCurrentNoteTagSearchState(state, items, expandedTags = this.expandedTags) {
+  syncCurrentNoteTagSearchState(state: any, items: any, expandedTags = this.expandedTags) {
     const matches = this.getCurrentNoteTagMatches(items);
     if (matches.length === 0) {
       this.clearNoteCardSearchState(state, expandedTags);
@@ -290,7 +289,7 @@ export class InteractionsBehavior {
     let activeIndex = queryChanged
       ? 0
       : matches.findIndex(
-          (match) =>
+          (match: any) =>
             state.target &&
             match.tag === state.target.tag &&
             match.path === state.target.path
@@ -303,13 +302,13 @@ export class InteractionsBehavior {
     return this.activateNoteCardSearchTarget(state, matches[activeIndex], expandedTags);
   }
 
-  getNoteCardSearchMatches(query, items) {
+  getNoteCardSearchMatches(query: any, items: any) {
     const noteCardSearch = parseNoteCardSearch(query);
     if (!noteCardSearch || !noteCardSearch.isValid) return [];
 
     const matches = [];
     for (const item of items) {
-      const visiblePaths = new Set(item.files.map((file) => file.path));
+      const visiblePaths = new Set(item.files.map((file: any) => file.path));
       for (const file of item.files) {
         const displayNames = [this.getNoteDisplayName(item.tag, file, item.isVirtual)];
         if (!item.isVirtual) {
@@ -330,7 +329,7 @@ export class InteractionsBehavior {
     return matches;
   }
 
-  syncNoteCardSearchState(state, query, items, expandedTags = this.expandedTags) {
+  syncNoteCardSearchState(state: any, query: any, items: any, expandedTags = this.expandedTags) {
     const matches = this.getNoteCardSearchMatches(query, items);
     if (matches.length === 0) {
       this.clearNoteCardSearchState(state, expandedTags);
@@ -354,7 +353,7 @@ export class InteractionsBehavior {
     return this.activateNoteCardSearchTarget(state, matches[activeIndex], expandedTags);
   }
 
-  activateNoteCardSearchTarget(state, target, expandedTags = this.expandedTags) {
+  activateNoteCardSearchTarget(state: any, target: any, expandedTags = this.expandedTags) {
     if (!state || !target) return null;
     if (state.autoExpandedTag && state.autoExpandedTag !== target.tag) {
       this.clearNoteCardSearchAutoExpansion(state, expandedTags);
@@ -372,14 +371,14 @@ export class InteractionsBehavior {
     return target;
   }
 
-  advanceNoteCardSearchState(state, expandedTags = this.expandedTags) {
+  advanceNoteCardSearchState(state: any, expandedTags = this.expandedTags) {
     if (!state || state.matches.length <= 1 || state.activeIndex < 0) return false;
     state.activeIndex = (state.activeIndex + 1) % state.matches.length;
     this.activateNoteCardSearchTarget(state, state.matches[state.activeIndex], expandedTags);
     return true;
   }
 
-  clearNoteCardSearchAutoExpansion(state, expandedTags = this.expandedTags) {
+  clearNoteCardSearchAutoExpansion(state: any, expandedTags = this.expandedTags) {
     if (!state || !state.autoExpandedTag) return;
     if (!state.autoExpandedWasAlreadyExpanded) {
       expandedTags.delete(state.autoExpandedTag);
@@ -389,7 +388,7 @@ export class InteractionsBehavior {
     state.autoExpandedWasAlreadyExpanded = false;
   }
 
-  clearNoteCardSearchState(state, expandedTags = this.expandedTags) {
+  clearNoteCardSearchState(state: any, expandedTags = this.expandedTags) {
     if (!state) return;
     this.clearNoteCardSearchAutoExpansion(state, expandedTags);
     if (state.effectTimer !== null) {
@@ -407,7 +406,7 @@ export class InteractionsBehavior {
 
 
 
-  isNoteOrderTargetSelected(tag, path, hierarchyParent = '') {
+  isNoteOrderTargetSelected(tag: any, path: any, hierarchyParent = '') {
     return !!(
       this.selectedNoteOrderTarget &&
       (hierarchyParent
@@ -418,7 +417,7 @@ export class InteractionsBehavior {
   }
 
 
-  isTagOrderTargetSelected(parentTagValue, tagValue) {
+  isTagOrderTargetSelected(parentTagValue: any, tagValue: any) {
     const parentTag = normalizeTag(parentTagValue);
     const tag = normalizeTag(tagValue);
     return !!(
@@ -428,7 +427,7 @@ export class InteractionsBehavior {
     );
   }
 
-  isTagOrderModeActive(parentTagValue) {
+  isTagOrderModeActive(parentTagValue: any) {
     const parentTag = normalizeTag(parentTagValue);
     return !!parentTag && this.activeTagOrderParent === parentTag;
   }
@@ -449,9 +448,9 @@ export class InteractionsBehavior {
     if (this.noteOrderHotkeyScope || (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget)) return;
 
     const scope = new Scope();
-    const registerMoveHotkey = (settingValue, fallback, direction) => {
+    const registerMoveHotkey = (settingValue: any, fallback: any, direction: any) => {
       const hotkey = parseHotkeyText(settingValue, fallback);
-      scope.register(hotkey.modifiers, hotkey.key, (evt) => {
+      scope.register(hotkey.modifiers as any, hotkey.key, (evt) => {
         evt.preventDefault();
         evt.stopPropagation();
         this.moveSelectedOrderTarget(direction).catch((error) => {
@@ -488,7 +487,7 @@ export class InteractionsBehavior {
     if (shouldReactivate) this.activateNoteOrderHotkeyScope();
   }
 
-  toggleNoteOrderTarget(tagValue, path, surface = '') {
+  toggleNoteOrderTarget(tagValue: any, path: any, surface = '') {
     const tag = normalizeTag(tagValue);
     if (!tag || !path) return;
 
@@ -503,7 +502,7 @@ export class InteractionsBehavior {
     this.refreshOrderSelectionState();
   }
 
-  toggleHierarchyNoteOrderTarget(parentPath, path, surface = '') {
+  toggleHierarchyNoteOrderTarget(parentPath: any, path: any, surface = '') {
     if (!parentPath || !path) return;
     if (this.isNoteOrderTargetSelected('', path, parentPath)) {
       this.selectedNoteOrderTarget = null;
@@ -516,7 +515,7 @@ export class InteractionsBehavior {
     this.refreshOrderSelectionState();
   }
 
-  toggleTagOrderTarget(parentTagValue, tagValue, surface = '') {
+  toggleTagOrderTarget(parentTagValue: any, tagValue: any, surface = '') {
     const parentTag = normalizeTag(parentTagValue);
     const tag = normalizeTag(tagValue);
     if (!parentTag || !tag || !this.isTagOrderModeActive(parentTag)) return;
@@ -531,7 +530,7 @@ export class InteractionsBehavior {
     this.refreshOrderSelectionState();
   }
 
-  toggleTagOrderMode(parentTagValue, surface = '') {
+  toggleTagOrderMode(parentTagValue: any, surface = '') {
     const parentTag = normalizeTag(parentTagValue);
     if (!parentTag || !this.hasInheritanceChildren(parentTag)) return;
     if (this.isTagOrderModeActive(parentTag)) {
@@ -580,14 +579,14 @@ export class InteractionsBehavior {
     this.clearTagOrderTarget();
   }
 
-  async moveSelectedOrderTarget(direction) {
+  async moveSelectedOrderTarget(direction: any) {
     if (this.selectedTagOrderTarget) return this.moveSelectedTag(direction);
     return this.moveSelectedNote(direction);
   }
 
 
 
-  async moveSelectedTag(direction) {
+  async moveSelectedTag(direction: any) {
     const target = this.selectedTagOrderTarget;
     if (!target || (direction !== -1 && direction !== 1)) return false;
     const children = this.getInheritanceChildren(target.parentTag);
@@ -611,7 +610,7 @@ export class InteractionsBehavior {
     return true;
   }
 
-  async moveSelectedTagAfter(parentTagValue, targetTagValue) {
+  async moveSelectedTagAfter(parentTagValue: any, targetTagValue: any) {
     const selected = this.selectedTagOrderTarget;
     const parentTag = normalizeTag(parentTagValue);
     const targetTag = normalizeTag(targetTagValue);
@@ -637,7 +636,7 @@ export class InteractionsBehavior {
     return true;
   }
 
-  async reorderChildTag(parentTagValue, movingTagValue, targetTagValue, placement) {
+  async reorderChildTag(parentTagValue: any, movingTagValue: any, targetTagValue: any, placement: any) {
     const parentTag = normalizeTag(parentTagValue);
     const movingTag = normalizeTag(movingTagValue);
     const targetTag = normalizeTag(targetTagValue);
@@ -654,7 +653,7 @@ export class InteractionsBehavior {
     return true;
   }
 
-  async moveSelectedNote(direction) {
+  async moveSelectedNote(direction: any) {
     const target = this.selectedNoteOrderTarget;
     if (!target || (direction !== -1 && direction !== 1)) return false;
 
@@ -668,7 +667,7 @@ export class InteractionsBehavior {
     }
 
     const files = this.getOrderedRootFilesForTag(target.tag, this.tagFileIndex.get(target.tag) || []);
-    const currentIndex = files.findIndex((file) => file.path === target.path);
+    const currentIndex = files.findIndex((file: any) => file.path === target.path);
     if (currentIndex < 0) {
       this.clearNoteOrderTarget();
       return false;
@@ -691,7 +690,7 @@ export class InteractionsBehavior {
     return true;
   }
 
-  async moveSelectedNoteAfter(targetTagValue, targetPath) {
+  async moveSelectedNoteAfter(targetTagValue: any, targetPath: any) {
     const selected = this.selectedNoteOrderTarget;
     if (selected && selected.hierarchyParent) {
       return this.moveSelectedHierarchyNoteAfter(selected.hierarchyParent, targetPath);
@@ -710,7 +709,7 @@ export class InteractionsBehavior {
     const order = this.getOrderedFilesForTag(
       selected.tag,
       this.tagFileIndex.get(selected.tag) || []
-    ).map((file) => file.path);
+    ).map((file: any) => file.path);
     const movingIndex = order.indexOf(selected.path);
     const targetIndex = order.indexOf(targetPath);
 
@@ -727,11 +726,11 @@ export class InteractionsBehavior {
     return true;
   }
 
-  async reorderNote(tagValue, movingPath, targetPath, placement) {
+  async reorderNote(tagValue: any, movingPath: any, targetPath: any, placement: any) {
     const tag = normalizeTag(tagValue);
     if (!tag || isNestedTag(tag) || !movingPath || !targetPath || movingPath === targetPath) return;
 
-    const order = this.getOrderedFilesForTag(tag, this.tagFileIndex.get(tag) || []).map((file) => file.path);
+    const order = this.getOrderedFilesForTag(tag, this.tagFileIndex.get(tag) || []).map((file: any) => file.path);
     const movingIndex = order.indexOf(movingPath);
     const targetIndex = order.indexOf(targetPath);
     if (movingIndex < 0 || targetIndex < 0) return;

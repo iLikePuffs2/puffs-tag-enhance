@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Notice, setIcon } from "obsidian";
 import {
   LIST_MODE_ICON,
@@ -44,7 +43,7 @@ export class TagPaneBehavior {
 
 
 
-  getTagSearchValue(view) {
+  getTagSearchValue(view: any) {
     // 自绘视图以 searchQuery 为准（输入框可能处于收起状态）
     if (view && typeof view.getSearchValue === 'function') return view.getSearchValue();
 
@@ -82,7 +81,7 @@ export class TagPaneBehavior {
 
 
   getListModeItems(
-    view,
+    view: any,
     queryValue = this.resolvePinnedSearchQuery(this.getTagSearchValue(view)),
     includePinned = true
   ) {
@@ -94,11 +93,11 @@ export class TagPaneBehavior {
     }
 
     const unionTerms = splitUnionSearchTerms(query);
-    const items = [];
+    const items: any[] = [];
     const processedTags = new Set();
     const browseDataByTag = new Map();
 
-    const tagMatchesQuery = (tag) => unionTerms
+    const tagMatchesQuery = (tag: any) => unionTerms
       ? tagMatchesAnySearchTerm(tag, unionTerms)
       : tagMatchesSearchText(tag, query);
     const fixedMatchesByRoot = new Map();
@@ -113,7 +112,7 @@ export class TagPaneBehavior {
       }
     }
 
-    const shouldShowTag = (tag) => {
+    const shouldShowTag = (tag: any) => {
       if (this.isFixedChild(tag)) return false;
       if (!tagMatchesQuery(tag) && !fixedMatchesByRoot.has(tag)) return false;
       const browseData = browseDataByTag.get(tag) || this.getTagBrowseData(tag);
@@ -122,7 +121,7 @@ export class TagPaneBehavior {
       return true;
     };
 
-    const pushTag = (tag) => {
+    const pushTag = (tag: any) => {
       const normalizedTag = normalizeTag(tag);
       if (!normalizedTag || processedTags.has(normalizedTag)) return;
       processedTags.add(normalizedTag);
@@ -170,13 +169,13 @@ export class TagPaneBehavior {
     return includePinned ? this.prependPinnedTagItem(items, queryValue) : items;
   }
 
-  getIntersectionSearchItems(terms) {
+  getIntersectionSearchItems(terms: any) {
     const tags = Array.from(this.tagFileIndex.keys())
       .filter((tag) => !isNestedTag(tag) && (this.tagFileIndex.get(tag) || []).length > 0)
       .sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN'));
-    const items = [];
+    const items: any[] = [];
     const seenCombinations = new Set();
-    const pushCombination = (selectedTags) => {
+    const pushCombination = (selectedTags: any) => {
       const canonicalTags = [...selectedTags].sort();
       const combinationId = canonicalTags.join('&');
       if (seenCombinations.has(combinationId)) return;
@@ -203,12 +202,12 @@ export class TagPaneBehavior {
         }
       }
     } else {
-      const candidateGroups = terms.map((term) =>
+      const candidateGroups = terms.map((term: any) =>
         tags.filter((tag) => tagMatchesAnySearchTerm(tag, [term]))
       );
-      if (candidateGroups.some((candidates) => candidates.length === 0)) return [];
+      if (candidateGroups.some((candidates: any) => candidates.length === 0)) return [];
 
-      const visitCombinations = (groupIndex, selectedTags) => {
+      const visitCombinations = (groupIndex: any, selectedTags: any) => {
         if (groupIndex < candidateGroups.length) {
           for (const tag of candidateGroups[groupIndex]) {
             if (selectedTags.includes(tag)) continue;
@@ -230,18 +229,18 @@ export class TagPaneBehavior {
     return items;
   }
 
-  getFilesWithAllTags(tags) {
+  getFilesWithAllTags(tags: any) {
     if (tags.length === 0) return [];
 
-    const remainingPaths = tags.slice(1).map((tag) =>
-      new Set((this.tagFileIndex.get(tag) || []).map((file) => file.path))
+    const remainingPaths = tags.slice(1).map((tag: any) =>
+      new Set((this.tagFileIndex.get(tag) || []).map((file: any) => file.path))
     );
-    return (this.tagFileIndex.get(tags[0]) || []).filter((file) =>
-      remainingPaths.every((paths) => paths.has(file.path))
+    return (this.tagFileIndex.get(tags[0]) || []).filter((file: any) =>
+      remainingPaths.every((paths: any) => paths.has(file.path))
     );
   }
 
-  renderListModeTagItem(listEl, item, view, patch) {
+  renderListModeTagItem(listEl: any, item: any, view: any, patch: any) {
     const { tag, displayName, files, isVirtual } = item;
     const isExpanded = this.expandedTags.has(tag);
     const treeItemEl = document.createElement('div');
@@ -348,7 +347,7 @@ export class TagPaneBehavior {
   }
 
 
-  getTagDomEntries(view) {
+  getTagDomEntries(view: any): any[] {
     const tagDoms = view.tagDoms;
     if (!tagDoms) return [];
 
@@ -362,8 +361,8 @@ export class TagPaneBehavior {
 
 
 
-  renderNoteList(treeItemEl, files, tagValue, isVirtual = false, options = {}) {
-    let listEl = Array.from(treeItemEl.children).find((el) =>
+  renderNoteList(treeItemEl: any, files: any, tagValue: any, isVirtual = false, options: any = {}) {
+    let listEl: any = Array.from<any>(treeItemEl.children).find((el: any) =>
       el.classList.contains('puffs-tag-note-list')
     );
 
@@ -389,15 +388,15 @@ export class TagPaneBehavior {
     }
   }
 
-  removeNoteList(treeItemEl) {
-    const listEl = Array.from(treeItemEl.children).find((el) =>
+  removeNoteList(treeItemEl: any) {
+    const listEl: any = Array.from<any>(treeItemEl.children).find((el: any) =>
       el.classList.contains('puffs-tag-note-list')
     );
     if (listEl) listEl.remove();
   }
 
 
-  toggleTagExpansion(tag, view) {
+  toggleTagExpansion(tag: any, view: any) {
     if (!tag) return;
 
     if (this.expandedTags.has(tag)) {
@@ -412,7 +411,7 @@ export class TagPaneBehavior {
 
 
 
-  findTagForElement(view, tagEl) {
+  findTagForElement(view: any, tagEl: any) {
     const inheritanceTag = normalizeTag(tagEl.dataset && tagEl.dataset.puffsInheritanceTag);
     if (inheritanceTag) return inheritanceTag;
     const datasetTag = normalizeTag(tagEl.dataset && tagEl.dataset.puffsTag);
@@ -428,7 +427,7 @@ export class TagPaneBehavior {
     return null;
   }
 
-  openRenameTagModal(tag) {
+  openRenameTagModal(tag: any) {
     new PuffsTagRenameModal(this.app, this, tag).open();
   }
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { TFile, getAllTags } from "obsidian";
 import {
   INITIAL_TAG_INDEX_REFRESH_DELAYS_MS,
@@ -19,7 +18,7 @@ export class TagIndexBehavior {
 
   registerWorkspaceHandlers() {
     this.registerEvent(
-      this.app.workspace.on('active-leaf-change', (leaf) => {
+      this.app.workspace.on('active-leaf-change', (leaf: any) => {
         this.handleActiveLeafChange(leaf);
       })
     );
@@ -32,16 +31,16 @@ export class TagIndexBehavior {
     );
 
     this.registerEvent(
-      this.app.workspace.on('file-open', (file) => this.handleWorkspaceFileOpen(file))
+      this.app.workspace.on('file-open', (file: any) => this.handleWorkspaceFileOpen(file))
     );
   }
 
   registerMetadataHandlers() {
-    const scheduleRefresh = (file) => this.scheduleMetadataRefresh(file);
+    const scheduleRefresh = (file: any) => this.scheduleMetadataRefresh(file);
 
     this.registerEvent(this.app.metadataCache.on('changed', scheduleRefresh));
     this.registerEvent(this.app.metadataCache.on('deleted', scheduleRefresh));
-    this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+    this.registerEvent(this.app.vault.on('rename', (file: any, oldPath: any) => {
       this.handlePreferredFileRename(file, oldPath);
       this.handleNoteOrderFileRename(file, oldPath);
       this.handleNoteDisplayNameFileRename(file, oldPath);
@@ -49,7 +48,7 @@ export class TagIndexBehavior {
       this.handleRelationFileRename(file, oldPath);
       this.refreshAllTagViews();
     }));
-    this.registerEvent(this.app.vault.on('delete', (file) => {
+    this.registerEvent(this.app.vault.on('delete', (file: any) => {
       this.handlePreferredFileDelete(file);
       this.handleNoteOrderFileDelete(file);
       this.handleNoteDisplayNameFileDelete(file);
@@ -76,25 +75,25 @@ export class TagIndexBehavior {
    * 批量保存或仓库同步时会连续触发数十次。现在交给调度器按 150ms 窗口合并，
    * 窗口内累积的路径一并交给顺序对账。
    */
-  scheduleMetadataRefresh(file) {
+  scheduleMetadataRefresh(file: any) {
     const changedPath = file instanceof TFile && file.extension === 'md' ? file.path : null;
     this.metadataRefreshScheduler.schedule(changedPath);
   }
 
-  runScheduledMetadataRefresh(changedPaths = []) {
+  runScheduledMetadataRefresh(changedPaths: any = []) {
     if (this.isUnloaded) return;
     this.refreshTagIndexAndViews(changedPaths);
     this.finishTagRenameProtectionIfSettled();
   }
 
-  refreshTagIndexAndViews(changedPath = null) {
+  refreshTagIndexAndViews(changedPath: any = null) {
     if (this.isUnloaded) return;
 
     // 索引即将变化，标签浏览数据的缓存全部作废
     this.tagBrowseCache?.invalidate();
     const noteOrderChanged = this.rebuildTagFileIndex(changedPath);
     if (noteOrderChanged) {
-      this.saveSettings().catch((error) => {
+      this.saveSettings().catch((error: any) => {
         console.error('[Puffs Tag Enhance] Failed to persist note order:', error);
       });
     }
@@ -106,7 +105,7 @@ export class TagIndexBehavior {
 
     for (const delay of INITIAL_TAG_INDEX_REFRESH_DELAYS_MS) {
       const timer = window.setTimeout(() => {
-        this.initialTagIndexRefreshTimers = this.initialTagIndexRefreshTimers.filter((item) => item !== timer);
+        this.initialTagIndexRefreshTimers = this.initialTagIndexRefreshTimers.filter((item: any) => item !== timer);
         this.refreshTagIndexAndViews();
       }, delay);
 
@@ -146,8 +145,8 @@ export class TagIndexBehavior {
       });
     }
 
-    const oldPaths = new Set((this.tagFileIndex.get(migration.oldTag) || []).map((file) => file.path));
-    const newPaths = new Set((this.tagFileIndex.get(migration.newTag) || []).map((file) => file.path));
+    const oldPaths = new Set((this.tagFileIndex.get(migration.oldTag) || []).map((file: any) => file.path));
+    const newPaths = new Set((this.tagFileIndex.get(migration.newTag) || []).map((file: any) => file.path));
     return Array.from(migration.affectedPaths).every((path) => !oldPaths.has(path) && newPaths.has(path));
   }
 
@@ -161,7 +160,7 @@ export class TagIndexBehavior {
     return true;
   }
 
-  scheduleTagRenameProtectionFallback(migration) {
+  scheduleTagRenameProtectionFallback(migration: any) {
     this.clearTagRenameProtectionTimer();
     this.tagRenameProtectionTimer = window.setTimeout(() => {
       this.tagRenameProtectionTimer = null;
@@ -177,16 +176,16 @@ export class TagIndexBehavior {
     if (!metadataCache || metadataCache.initialized !== true) return false;
     if (metadataCache.inProgressTaskCount !== 0) return false;
 
-    return this.app.vault.getMarkdownFiles().every((file) => {
+    return this.app.vault.getMarkdownFiles().every((file: any) => {
       return metadataCache.getFileCache(file) != null;
     });
   }
 
-  getStableNoteOrderTags(nextIndex) {
+  getStableNoteOrderTags(nextIndex: any) {
     const existingTags = Object.keys(this.settings.noteOrderByTag)
       .filter((tag) => nextIndex.has(tag));
     const existingTagSet = new Set(existingTags);
-    const addedTags = Array.from(nextIndex.keys())
+    const addedTags: any[] = Array.from<any>(nextIndex.keys())
       .filter((tag) => !existingTagSet.has(tag))
       .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
     return existingTags.concat(addedTags);
@@ -205,7 +204,7 @@ export class TagIndexBehavior {
     }
 
     for (const files of nextIndex.values()) {
-      files.sort((a, b) => {
+      files.sort((a: any, b: any) => {
         const byName = a.basename.localeCompare(b.basename, 'zh-Hans-CN');
         return byName || a.path.localeCompare(b.path, 'zh-Hans-CN');
       });
@@ -238,8 +237,8 @@ export class TagIndexBehavior {
     return noteOrderChanged || tagInheritanceOrderChanged || pinnedTagChanged || noteDisplayNamesChanged || tagBoundNotesChanged;
   }
 
-  reconcileNoteDisplayNames(nextIndex) {
-    const nextDisplayNames = {};
+  reconcileNoteDisplayNames(nextIndex: any) {
+    const nextDisplayNames: any = {};
     const savedDisplayNames = this.settings.noteDisplayNameByTag || {};
 
     for (const [tag, entries] of Object.entries(savedDisplayNames)) {
@@ -247,8 +246,8 @@ export class TagIndexBehavior {
         continue;
       }
 
-      const filesByPath = new Map((nextIndex.get(tag) || []).map((file) => [file.path, file]));
-      const retainedEntries = {};
+      const filesByPath = new Map((nextIndex.get(tag) || []).map((file: any) => [file.path, file]));
+      const retainedEntries: any = {};
       for (const [path, displayName] of Object.entries(entries)) {
         const file = filesByPath.get(path);
         if (!file || !this.getNoteAliases(file).includes(displayName)) continue;
@@ -264,19 +263,19 @@ export class TagIndexBehavior {
     return changed;
   }
 
-  initializeNoteOrders(nextIndex) {
-    const nextOrders = {};
+  initializeNoteOrders(nextIndex: any) {
+    const nextOrders: any = {};
 
     for (const tag of this.getStableNoteOrderTags(nextIndex)) {
       const files = nextIndex.get(tag) || [];
-      const currentPaths = files.map((file) => file.path);
+      const currentPaths = files.map((file: any) => file.path);
       const currentPathSet = new Set(currentPaths);
       const savedOrder = Array.isArray(this.settings.noteOrderByTag[tag])
         ? this.settings.noteOrderByTag[tag]
         : [];
       const retainedPaths = savedOrder.filter((path) => currentPathSet.has(path));
       const retainedPathSet = new Set(retainedPaths);
-      const remainingPaths = currentPaths.filter((path) => !retainedPathSet.has(path));
+      const remainingPaths = currentPaths.filter((path: any) => !retainedPathSet.has(path));
       const order = retainedPaths.concat(remainingPaths);
       // 顺序与默认序完全一致时不落盘：读取时缺失的标签本就回落到默认序，
       // 存了等于不存。实测能省掉约四分之一的顺序记录。
@@ -288,8 +287,8 @@ export class TagIndexBehavior {
     return changed;
   }
 
-  reconcileNoteOrders(nextIndex, changedPath = null) {
-    const nextOrders = {};
+  reconcileNoteOrders(nextIndex: any, changedPath: any = null) {
+    const nextOrders: any = {};
     // 防抖后一个窗口内可能有多个文件变更，统一按数组处理（仍兼容单个字符串）
     const changedPaths = Array.isArray(changedPath)
       ? changedPath.filter(Boolean)
@@ -297,13 +296,13 @@ export class TagIndexBehavior {
 
     for (const tag of this.getStableNoteOrderTags(nextIndex)) {
       const files = nextIndex.get(tag) || [];
-      const currentPaths = files.map((file) => file.path);
+      const currentPaths = files.map((file: any) => file.path);
       const currentPathSet = new Set(currentPaths);
       const savedOrder = Array.isArray(this.settings.noteOrderByTag[tag])
         ? this.settings.noteOrderByTag[tag]
         : [];
       const savedPathSet = new Set(savedOrder);
-      const rawAddedPaths = currentPaths.filter((path) => !savedPathSet.has(path));
+      const rawAddedPaths = currentPaths.filter((path: any) => !savedPathSet.has(path));
 
       // 插件关闭期间移动过的笔记，旧路径已失效、新路径看起来像新增。
       // 按文件名唯一匹配把顺序迁移过去，保住原有排序位置。
@@ -313,7 +312,7 @@ export class TagIndexBehavior {
         .map((path) => (currentPathSet.has(path) ? path : movedPaths.get(path)))
         .filter(Boolean);
       const movedTargets = new Set(movedPaths.values());
-      const addedPaths = rawAddedPaths.filter((path) => !movedTargets.has(path));
+      const addedPaths = rawAddedPaths.filter((path: any) => !movedTargets.has(path));
 
       // 刚变更的笔记排在其他新增之后
       for (const path of changedPaths) {
@@ -360,7 +359,7 @@ export class TagIndexBehavior {
     return true;
   }
 
-  getExactTagsForFile(file) {
+  getExactTagsForFile(file: any) {
     const cache = this.app.metadataCache.getFileCache(file);
     if (!cache) return new Set();
 
@@ -409,7 +408,7 @@ export class TagIndexBehavior {
   }
 
 
-  async renameTag(oldTagValue, newTagValue) {
+  async renameTag(oldTagValue: any, newTagValue: any) {
     const oldTag = normalizeTag(oldTagValue);
     const newTag = normalizeTag(newTagValue);
 
@@ -421,9 +420,9 @@ export class TagIndexBehavior {
 
     this.rebuildTagFileIndex();
     const files = Array.from(new Set(this.tagFileIndex.get(oldTag) || []));
-    const oldNoteOrder = this.getOrderedFilesForTag(oldTag, files).map((file) => file.path);
+    const oldNoteOrder = this.getOrderedFilesForTag(oldTag, files).map((file: any) => file.path);
     const existingNewFiles = Array.from(new Set(this.tagFileIndex.get(newTag) || []));
-    const existingNewOrder = this.getOrderedFilesForTag(newTag, existingNewFiles).map((file) => file.path);
+    const existingNewOrder = this.getOrderedFilesForTag(newTag, existingNewFiles).map((file: any) => file.path);
     const migratedOrder = Array.from(new Set([...oldNoteOrder, ...existingNewOrder]));
     const oldDisplayNames = {
       ...((this.settings.noteDisplayNameByTag && this.settings.noteDisplayNameByTag[oldTag]) || {}),
@@ -435,7 +434,7 @@ export class TagIndexBehavior {
       mode: 'rename',
       oldTag,
       newTag,
-      affectedPaths: new Set(files.map((file) => file.path)),
+      affectedPaths: new Set(files.map((file: any) => file.path)),
       committed: false,
     };
 
@@ -489,7 +488,7 @@ export class TagIndexBehavior {
     }
   }
 
-  fileHasFrontmatterTag(file, tagValue) {
+  fileHasFrontmatterTag(file: any, tagValue: any) {
     const cache = this.app.metadataCache.getFileCache(file);
     return frontmatterTagValueHasTag(
       cache && cache.frontmatter && cache.frontmatter.tags,
@@ -497,25 +496,25 @@ export class TagIndexBehavior {
     );
   }
 
-  fileHasInlineTag(file, tagValue) {
+  fileHasInlineTag(file: any, tagValue: any) {
     const tag = normalizeTag(tagValue);
     if (!tag) return false;
 
     const cache = this.app.metadataCache.getFileCache(file);
-    return Array.isArray(cache && cache.tags) && cache.tags.some((tagEntry) => {
+    return Array.isArray(cache && cache.tags) && cache.tags.some((tagEntry: any) => {
       return normalizeTag(tagEntry && tagEntry.tag) === tag;
     });
   }
 
-  async addTagToTaggedNotes(sourceTagValue, newTagValue) {
+  async addTagToTaggedNotes(sourceTagValue: any, newTagValue: any) {
     await this.updateTagPropertiesForTaggedNotes('add', sourceTagValue, newTagValue);
   }
 
-  async deleteTagFromTaggedNotes(sourceTagValue, targetTagValue) {
+  async deleteTagFromTaggedNotes(sourceTagValue: any, targetTagValue: any) {
     await this.updateTagPropertiesForTaggedNotes('delete', sourceTagValue, targetTagValue);
   }
 
-  async updateTagPropertiesForTaggedNotes(mode, sourceTagValue, targetTagValue) {
+  async updateTagPropertiesForTaggedNotes(mode: any, sourceTagValue: any, targetTagValue: any) {
     const sourceTag = normalizeTag(sourceTagValue);
     const targetTag = normalizeTag(targetTagValue);
 
@@ -528,7 +527,7 @@ export class TagIndexBehavior {
     this.rebuildTagFileIndex();
     const sourceFiles = Array.from(new Set(this.tagFileIndex.get(sourceTag) || []));
     const orderedSourceFiles = this.getOrderedFilesForTag(sourceTag, sourceFiles);
-    const files = orderedSourceFiles.filter((file) => {
+    const files = orderedSourceFiles.filter((file: any) => {
       const hasTag = this.fileHasFrontmatterTag(file, targetTag);
       return mode === 'add' ? !hasTag : hasTag;
     });
@@ -536,9 +535,9 @@ export class TagIndexBehavior {
 
     const existingTargetFiles = Array.from(new Set(this.tagFileIndex.get(targetTag) || []));
     const existingTargetOrder = this.getOrderedFilesForTag(targetTag, existingTargetFiles)
-      .map((file) => file.path);
-    const existingTargetPaths = new Set(existingTargetFiles.map((file) => file.path));
-    const affectedPaths = new Set(files.map((file) => file.path));
+      .map((file: any) => file.path);
+    const existingTargetPaths = new Set(existingTargetFiles.map((file: any) => file.path));
+    const affectedPaths = new Set(files.map((file: any) => file.path));
     const migration = {
       mode,
       targetTag,
@@ -550,7 +549,7 @@ export class TagIndexBehavior {
 
     try {
       for (const file of files) {
-        await this.app.fileManager.processFrontMatter(file, (fm) => {
+        await this.app.fileManager.processFrontMatter(file, (fm: any) => {
           const tags = flattenFrontmatterTags(fm.tags);
 
           if (mode === 'add') {
@@ -567,8 +566,8 @@ export class TagIndexBehavior {
 
       if (mode === 'add') {
         const newlyAddedPaths = files
-          .map((file) => file.path)
-          .filter((path) => !existingTargetPaths.has(path));
+          .map((file: any) => file.path)
+          .filter((path: any) => !existingTargetPaths.has(path));
         const nextOrder = this.settings.newNotePosition === 'start'
           ? newlyAddedPaths.concat(existingTargetOrder)
           : existingTargetOrder.concat(newlyAddedPaths);
@@ -576,10 +575,10 @@ export class TagIndexBehavior {
       } else {
         const removedPaths = new Set(
           files
-            .filter((file) => !this.fileHasInlineTag(file, targetTag))
-            .map((file) => file.path)
+            .filter((file: any) => !this.fileHasInlineTag(file, targetTag))
+            .map((file: any) => file.path)
         );
-        const nextOrder = existingTargetOrder.filter((path) => !removedPaths.has(path));
+        const nextOrder = existingTargetOrder.filter((path: any) => !removedPaths.has(path));
         if (nextOrder.length > 0) this.settings.noteOrderByTag[targetTag] = nextOrder;
         else delete this.settings.noteOrderByTag[targetTag];
       }
@@ -602,16 +601,16 @@ export class TagIndexBehavior {
     }
   }
 
-  async renameTagInFile(file, oldTag, newTag) {
+  async renameTagInFile(file: any, oldTag: any, newTag: any) {
     const cache = this.app.metadataCache.getFileCache(file);
     if (!cache) return;
 
-    const hasInlineTag = Array.isArray(cache.tags) && cache.tags.some((tagEntry) => {
+    const hasInlineTag = Array.isArray(cache.tags) && cache.tags.some((tagEntry: any) => {
       return normalizeTag(tagEntry && tagEntry.tag) === oldTag;
     });
 
     if (hasInlineTag) {
-      await this.app.vault.process(file, (content) => {
+      await this.app.vault.process(file, (content: any) => {
         const nextContent = replaceInlineTagsByCache(content, cache, oldTag, newTag);
         return nextContent === content ? replaceInlineTagsByText(content, oldTag, newTag) : nextContent;
       });
@@ -620,7 +619,7 @@ export class TagIndexBehavior {
     const frontmatter = cache.frontmatter;
     if (!frontmatter || !Object.prototype.hasOwnProperty.call(frontmatter, 'tags')) return;
 
-    await this.app.fileManager.processFrontMatter(file, (fm) => {
+    await this.app.fileManager.processFrontMatter(file, (fm: any) => {
       if (!Object.prototype.hasOwnProperty.call(fm, 'tags')) return;
       fm.tags = replaceFrontmatterTagValue(fm.tags, oldTag, newTag);
     });
