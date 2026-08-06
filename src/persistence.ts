@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { normalizePath } from "obsidian";
 import {
   BACKUP_FILE_NAME,
@@ -89,7 +88,7 @@ export class PersistenceBehavior {
     await this.settingsSavePromise;
   }
 
-  async updateSettings(newSettings) {
+  async updateSettings(newSettings: any) {
     this.settings = Object.assign({}, this.settings, newSettings);
     this.settings.freezeSearchWhileComposing = this.settings.freezeSearchWhileComposing !== false;
     this.settings.toggleSearchHotkey = normalizeHotkeyText(this.settings.toggleSearchHotkey);
@@ -167,7 +166,7 @@ export class PersistenceBehavior {
 
   clearBackupTimer() {
     if (this.backupTimer === null) return;
-    window.clearInterval(this.backupTimer);
+    globalThis.clearInterval(this.backupTimer);
     this.backupTimer = null;
   }
 
@@ -176,14 +175,14 @@ export class PersistenceBehavior {
     const intervalMinutes = normalizeBackupInterval(this.settings.backupIntervalMinutes);
     if (intervalMinutes <= 0) return;
 
-    this.backupTimer = window.setInterval(() => {
+    this.backupTimer = globalThis.setInterval(() => {
       this.writeDataBackup().catch((error) => {
         console.error('[Puffs Tag Enhance] 备份插件数据失败:', error);
       });
     }, intervalMinutes * 60 * 1000);
   }
 
-  async ensureBackupFolder(folderPath) {
+  async ensureBackupFolder(folderPath: any) {
     if (!folderPath) return;
 
     const adapter = this.app.vault.adapter;
@@ -209,10 +208,10 @@ export class PersistenceBehavior {
     return backupPath;
   }
 
-  normalizeNoteOrderByTag(value) {
+  normalizeNoteOrderByTag(value: any) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
 
-    const result = {};
+    const result: Record<string, string[]> = {};
     for (const [rawTag, rawPaths] of Object.entries(value)) {
       const tag = normalizeTag(rawTag);
       if (!tag || !Array.isArray(rawPaths)) continue;
@@ -232,10 +231,10 @@ export class PersistenceBehavior {
     return result;
   }
 
-  normalizeNoteDisplayNameByTag(value) {
+  normalizeNoteDisplayNameByTag(value: any) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
 
-    const result = {};
+    const result: Record<string, Record<string, string>> = {};
     for (const [rawTag, rawEntries] of Object.entries(value)) {
       const tag = normalizeTag(rawTag);
       if (
@@ -248,7 +247,7 @@ export class PersistenceBehavior {
         continue;
       }
 
-      const entries = {};
+      const entries: Record<string, string> = {};
       for (const [rawPath, rawDisplayName] of Object.entries(rawEntries)) {
         const path = typeof rawPath === 'string' ? rawPath.trim() : '';
         const displayName = typeof rawDisplayName === 'string' ? rawDisplayName.trim() : '';
@@ -262,10 +261,10 @@ export class PersistenceBehavior {
     return result;
   }
 
-  normalizeTagBoundNoteByTag(value) {
+  normalizeTagBoundNoteByTag(value: any) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
 
-    const result = {};
+    const result: Record<string, string> = {};
     for (const [rawTag, rawPath] of Object.entries(value)) {
       const tag = normalizeTag(rawTag);
       const path = typeof rawPath === 'string' ? rawPath.trim() : '';

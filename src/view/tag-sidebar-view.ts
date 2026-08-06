@@ -64,6 +64,7 @@ class PuffsTagSidebarView extends ItemView {
     this.searchHotkeyRegistration = null;
     // 上一轮各标签行的签名，用于判断哪些行可以整棵复用
     this.lastRowSignatures = new Map();
+    this.openRenderFallbackTimer = null;
   }
 
   getViewType() {
@@ -82,10 +83,21 @@ class PuffsTagSidebarView extends ItemView {
   async onOpen() {
     this.buildLayout();
     this.render();
+    // 兜底重绘：视图刚打开时 Obsidian 尚未把 contentEl 接入文档，此刻渲染出的内容
+    // 有可能不被应用采纳（实测首次打开会看到空列表）。用一个宏任务再渲染一次，
+    // 此时布局已稳定。重复渲染的代价很低 —— 内容没变时所有行都命中复用。
+    this.openRenderFallbackTimer = globalThis.setTimeout(() => {
+      this.openRenderFallbackTimer = null;
+      this.render();
+    }, 0);
   }
 
   async onClose() {
     this.cancelPendingRender();
+    if (this.openRenderFallbackTimer !== null) {
+      globalThis.clearTimeout(this.openRenderFallbackTimer);
+      this.openRenderFallbackTimer = null;
+    }
     this.plugin.clearNoteCardSearchState(this.noteCardSearchState);
     this.hierarchyNavigationHistory = createHierarchyNavigationHistory();
     this.searchComponent = null;
@@ -293,7 +305,10 @@ class PuffsTagSidebarView extends ItemView {
   }
 
   render() {
-    if (!this.listEl?.isConnected) return;
+    // 只挡视图已关闭的情况（onClose 会把 listEl 置空）。
+    // 不能用 isConnected 挡：onOpen 时 contentEl 还没接入文档，那样首次渲染会被跳过、
+    // 打开侧边栏看到空列表。在游离的 DOM 树上渲染同样有效，挂载后自然显示。
+    if (!this.listEl) return;
 
     const plugin = this.plugin;
     const resolved = resolveSearch(this.searchQuery, (query) => plugin.resolvePinnedSearchQuery(query));

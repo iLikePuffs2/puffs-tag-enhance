@@ -3,6 +3,9 @@ import { DEFAULT_SETTINGS, TAG_SIDEBAR_VIEW_TYPE } from "./models";
 import { MetadataRefreshScheduler, TagBrowseCache } from "./data/tag-store";
 import { PuffsTagSidebarView } from "./view/tag-sidebar-view";
 import { SidebarRegistryBehavior } from "./view/sidebar-registry";
+import { TagTreeRendererBehavior } from "./view/tag-tree-renderer";
+import { ContextMenusBehavior } from "./view/context-menus";
+import { OrderControllerBehavior } from "./view/order-controller";
 import { PuffsTagEnhanceSettingTab } from "./settings";
 import { PersistenceBehavior } from "./persistence";
 import { InteractionsBehavior } from "./interactions";
@@ -116,7 +119,10 @@ const applyBehavior = (behavior: Function): void => {
   TagIndexBehavior,
   TagPaneBehavior,
   RelationsBehavior,
-  SidebarRegistryBehavior
+  SidebarRegistryBehavior,
+  TagTreeRendererBehavior,
+  ContextMenusBehavior,
+  OrderControllerBehavior
 ].forEach(applyBehavior);
 
 export default PuffsTagEnhancePlugin;

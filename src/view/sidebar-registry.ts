@@ -94,15 +94,23 @@ export class SidebarRegistryBehavior {
       }
       await leaf.setViewState({ type: TAG_SIDEBAR_VIEW_TYPE, active: false });
     }
-    if (reveal) await this.focusSidebarView(leaf.view, leaf);
+    if (reveal) await this.focusSidebarView(null, leaf);
     return leaf;
   }
 
+  /**
+   * 显示并聚焦侧边栏。
+   *
+   * 必须先 loadIfDeferred：Obsidian 1.7 起侧边栏视图默认是延迟视图，
+   * leaf.view 只是占位对象、onOpen 不会执行。不显式加载就会打开一个空面板
+   * （实测新建 leaf 后 render 一次都没被调用）。
+   */
   async focusSidebarView(view: any, leaf: any = view?.leaf) {
     if (!leaf) return;
+    if (typeof leaf.loadIfDeferred === 'function') await leaf.loadIfDeferred();
     if (this.app.workspace.revealLeaf) await this.app.workspace.revealLeaf(leaf);
     if (this.app.workspace.setActiveLeaf) this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    view?.focusSearch?.();
+    (view || leaf.view)?.focusSearch?.();
   }
 
   /**

@@ -43,6 +43,14 @@ const DOM_PATTERNS: Array<[string, RegExp]> = [
   ['requestAnimationFrame', /\brequestAnimationFrame\s*\(/],
 ];
 
+/**
+ * 尚未搬进 data/ 或 core/ 目录、但已完成 DOM 剥离的业务层文件。
+ *
+ * relations.ts 曾有 145 处 DOM 操作、interactions.ts 84 处，渲染部分已迁往 view/。
+ * 把它们纳入守卫，才是"渲染代码真的搬走了、不是换个文件名继续混着"的客观证据。
+ */
+const DOM_FREE_FILES = ['relations.ts', 'interactions.ts', 'persistence.ts'];
+
 describe('分层守卫 · 数据层与业务层不得触碰 DOM', () => {
   for (const dir of ['data', 'core']) {
     const sources = collectSources(dir);
@@ -58,6 +66,21 @@ describe('分层守卫 · 数据层与业务层不得触碰 DOM', () => {
         expect(found, `${file} 出现了 DOM 相关用法：${found.join(', ')}`).toEqual([]);
       });
     }
+  }
+
+  for (const name of DOM_FREE_FILES) {
+    it(`${name} 保持无 DOM（渲染部分已迁往 view/）`, () => {
+      const code = stripCommentsAndStrings(fs.readFileSync(path.join(SRC, name), 'utf8'));
+      const found = DOM_PATTERNS.filter(([, pattern]) => pattern.test(code)).map(([label]) => label);
+      expect(found, `${name} 又出现了 DOM 用法：${found.join(', ')}`).toEqual([]);
+    });
+
+    it(`${name} 不再依赖 obsidian 的 UI 类`, () => {
+      const code = stripCommentsAndStrings(fs.readFileSync(path.join(SRC, name), 'utf8'));
+      // Notice 是纯提示、不构造界面，允许保留
+      expect(/\b(?:Menu|ItemView|Modal|SearchComponent|PluginSettingTab)\b/.test(code),
+        `${name} 用到了 obsidian 的界面类`).toBe(false);
+    });
   }
 });
 

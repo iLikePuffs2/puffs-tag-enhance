@@ -1,11 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TFile } from "obsidian";
-import { InteractionsBehavior } from "./interactions";
+import { InteractionsBehavior } from './interactions';
+import { OrderControllerBehavior } from './view/order-controller';
+
+// 排序交互的 DOM 部分已搬到 view/order-controller.ts，数据部分仍在 interactions.ts。
+// 运行时两者都被 mixin 到同一个 plugin 对象上，这里如实模拟那个合并后的对象。
+function createMixedBehavior(): any {
+  const behavior: any = Object.create(InteractionsBehavior.prototype);
+  for (const [name, descriptor] of Object.entries(
+    Object.getOwnPropertyDescriptors(OrderControllerBehavior.prototype)
+  )) {
+    if (name !== 'constructor') Object.defineProperty(behavior, name, descriptor);
+  }
+  return behavior;
+}
 import { createNoteCardSearchState } from "./models";
 
 describe('标签笔记搜索与父子嵌套', () => {
   it('可按当前可见父级下的关系 alias 命中子笔记', () => {
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.getNoteDisplayName = (_tag: string, file: any) => file.basename;
     behavior.getHierarchyParents = (path: string) => path === '子.md' ? ['父.md'] : [];
     behavior.getInlineHierarchyDisplayName = () => '关系别名';
@@ -22,7 +35,7 @@ describe('标签笔记搜索与父子嵌套', () => {
 
 describe('当前笔记标签定位', () => {
   const createBehavior = (currentPath: string | null, files: Record<string, any>) => {
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.currentMainFilePath = currentPath;
     behavior.app = {
       vault: {
@@ -152,7 +165,7 @@ describe('当前笔记标签定位', () => {
 
 describe('固定标签与父笔记排序', () => {
   it('搜索框为空时只返回已固定的真实标签', () => {
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.settings = { pinnedTag: '#固定' };
     behavior.getPinnedTagItem = () => ({ tag: '#固定', files: [] });
     const items = [
@@ -170,7 +183,7 @@ describe('固定标签与父笔记排序', () => {
   });
 
   it('移动父笔记时忽略嵌套在卡片内的子笔记', () => {
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.settings = {
       noteOrderByTag: {
         '#标签': ['父一.md', '子一.md', '子二.md', '父二.md'],
@@ -212,7 +225,7 @@ describe('固定标签与父笔记排序', () => {
   afterEach(() => vi.useRealTimers());
 
   it('父笔记组合按钮短按只切换展开状态', () => {
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.isNoteOrderTargetSelected = () => false;
     const button = createPointerButton();
     const toggleExpansion = vi.fn();
@@ -230,7 +243,7 @@ describe('固定标签与父笔记排序', () => {
   it('父笔记组合按钮长按 500ms 只进入排序且释放时不折叠', () => {
     vi.useFakeTimers();
     let selected = false;
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.isNoteOrderTargetSelected = () => selected;
     const button = createPointerButton();
     const toggleExpansion = vi.fn();
@@ -252,7 +265,7 @@ describe('固定标签与父笔记排序', () => {
   it('排序选中态单击只取消排序，移出按钮会取消未完成的长按', () => {
     vi.useFakeTimers();
     let selected = true;
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.isNoteOrderTargetSelected = () => selected;
     const button = createPointerButton();
     const toggleExpansion = vi.fn();
@@ -307,7 +320,7 @@ describe('子标签排序', () => {
       '#父': ['#甲', '#乙', '#丙'],
       '#另一父': ['#甲', '#丁'],
     };
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.activeTagOrderParent = '#父';
     behavior.selectedTagOrderTarget = { parentTag: '#父', tag: '#甲', surface: 'sidebar' };
     behavior.getInheritanceChildren = (parent: string) => [...childrenByParent[parent]];
@@ -323,7 +336,7 @@ describe('子标签排序', () => {
   });
 
   it('父级模式与子标签选择分离，并与笔记排序互斥', () => {
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.selectedNoteOrderTarget = { tag: '#标签', path: '笔记.md' };
     behavior.activeTagOrderParent = null;
     behavior.selectedTagOrderTarget = null;
@@ -348,7 +361,7 @@ describe('子标签排序', () => {
 
   it('长按父标签进入或退出模式且释放时不折叠', () => {
     vi.useFakeTimers();
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.activeTagOrderParent = null;
     behavior.activeTagOrderSurface = '';
     behavior.selectedNoteOrderTarget = null;
@@ -383,7 +396,7 @@ describe('子标签排序', () => {
 
   it('父级模式中子按钮点击选中，点击外部只取消选中', () => {
     vi.useFakeTimers();
-    const behavior = Object.create(InteractionsBehavior.prototype) as any;
+    const behavior = createMixedBehavior();
     behavior.activeTagOrderParent = '#父';
     behavior.activeTagOrderSurface = 'sidebar';
     behavior.selectedNoteOrderTarget = null;
