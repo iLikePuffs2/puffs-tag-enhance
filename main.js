@@ -2613,7 +2613,128 @@ var NoteRelationModal = class extends import_obsidian4.Modal {
   }
   onOpen() {
     this.modalEl.classList.add("puffs-relation-modal", "puffs-note-relation-modal");
-    this.render();
+    if (this.sourcePath) this.renderManagement();
+    else this.render();
+  }
+  renderManagement() {
+    this.modalEl.classList.add("puffs-note-relation-management-modal");
+    this.contentEl.empty();
+    const sourceFile = this.app.vault.getAbstractFileByPath(this.sourcePath);
+    const sourceName = sourceFile instanceof import_obsidian4.TFile ? sourceFile.basename : this.sourcePath;
+    const relationName = this.mode === "parent" ? "\u7236\u7B14\u8BB0" : "\u5B50\u7B14\u8BB0";
+    this.contentEl.createDiv({
+      text: `\u7BA1\u7406 ${sourceName} \u7684${relationName}`,
+      cls: "puffs-relation-modal-title puffs-tag-rename-title"
+    });
+    const searchHostEl = this.contentEl.createDiv({ cls: "puffs-relation-tag-search" });
+    const inputEl = searchHostEl.createEl("input", { type: "search", cls: "puffs-relation-input" });
+    const resultsEl = searchHostEl.createDiv({ cls: "puffs-relation-note-results is-empty-query" });
+    const relationsEl = this.contentEl.createDiv({ cls: "puffs-relation-child-list" });
+    const getRelatedPaths = () => this.mode === "parent" ? this.plugin.getHierarchyParents(this.sourcePath) : this.plugin.getHierarchyChildren(this.sourcePath);
+    const getEdge = (relatedPath) => this.mode === "parent" ? { parentPath: relatedPath, childPath: this.sourcePath } : { parentPath: this.sourcePath, childPath: relatedPath };
+    const findMatch = (file, term) => {
+      if (file.basename.toLowerCase().includes(term)) return { displayName: file.basename, alias: "" };
+      const alias = this.plugin.getNoteAliases(file).find((value) => value.toLowerCase().includes(term));
+      return alias ? { displayName: alias, alias } : null;
+    };
+    const renderRelations = () => {
+      relationsEl.empty();
+      const relatedPaths = getRelatedPaths();
+      for (const path of relatedPaths) {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof import_obsidian4.TFile)) continue;
+        const rowEl = relationsEl.createDiv({ cls: "puffs-relation-child-row" });
+        const iconEl = rowEl.createSpan({ cls: "puffs-relation-child-icon" });
+        (0, import_obsidian4.setIcon)(iconEl, "file-text");
+        rowEl.createSpan({ text: file.basename, cls: "puffs-relation-manage-name" });
+        const removeButton = rowEl.createEl("button", {
+          cls: "clickable-icon puffs-relation-child-remove",
+          attr: { "aria-label": `\u79FB\u9664 ${file.basename}` }
+        });
+        (0, import_obsidian4.setIcon)(removeButton, "x");
+        removeButton.addEventListener("click", async () => {
+          if (this.isSubmitting) return;
+          this.isSubmitting = true;
+          const { parentPath, childPath } = getEdge(path);
+          try {
+            await this.plugin.removeNoteHierarchyEdge(parentPath, childPath);
+            renderRelations();
+            renderResults();
+          } catch (error) {
+            new import_obsidian4.Notice(error && error.message ? error.message : "\u79FB\u9664\u7236\u5B50\u7B14\u8BB0\u5173\u7CFB\u5931\u8D25");
+          } finally {
+            this.isSubmitting = false;
+          }
+        });
+      }
+      if (!relationsEl.childElementCount) {
+        relationsEl.createDiv({ text: `\u6682\u65E0${relationName}`, cls: "puffs-relation-empty" });
+      }
+    };
+    const renderResults = () => {
+      resultsEl.empty();
+      const term = inputEl.value.trim().toLowerCase();
+      if (!term) {
+        resultsEl.classList.add("is-empty-query");
+        return;
+      }
+      resultsEl.classList.remove("is-empty-query");
+      const related = new Set(getRelatedPaths());
+      const candidates = this.app.vault.getMarkdownFiles().map((file) => ({ file, match: findMatch(file, term) })).filter(({ file, match }) => {
+        if (!match || file.path === this.sourcePath || related.has(file.path)) return false;
+        const { parentPath, childPath } = getEdge(file.path);
+        return !this.plugin.wouldCreateNoteHierarchyCycle(parentPath, childPath);
+      }).sort((a, b) => a.match.displayName.localeCompare(b.match.displayName, "zh-Hans-CN"));
+      if (!candidates.length) {
+        resultsEl.createDiv({ text: "\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u7B14\u8BB0\u3002", cls: "puffs-relation-empty" });
+        return;
+      }
+      candidates.forEach(({ file, match }, index) => {
+        const rowEl = resultsEl.createDiv({ cls: "puffs-relation-note-result is-clickable" });
+        rowEl.classList.toggle("is-active", index === 0);
+        rowEl.createDiv({ text: match.displayName, cls: "puffs-relation-note-result-name" });
+        rowEl.createDiv({ text: file.path, cls: "puffs-relation-note-result-path" });
+        rowEl.addEventListener("click", async () => {
+          if (this.isSubmitting) return;
+          this.isSubmitting = true;
+          const { parentPath, childPath } = getEdge(file.path);
+          try {
+            const childSelection = { path: childPath, displayName: this.mode === "child" ? match.alias : "" };
+            await this.plugin.addNoteHierarchyEdges(
+              [{ path: parentPath, displayName: "" }],
+              [childSelection]
+            );
+            inputEl.value = "";
+            renderRelations();
+            renderResults();
+            inputEl.focus();
+          } catch (error) {
+            new import_obsidian4.Notice(error && error.message ? error.message : "\u6DFB\u52A0\u7236\u5B50\u7B14\u8BB0\u5173\u7CFB\u5931\u8D25");
+          } finally {
+            this.isSubmitting = false;
+          }
+        });
+      });
+    };
+    inputEl.addEventListener("compositionstart", () => {
+      this.isComposing = true;
+    });
+    inputEl.addEventListener("compositionend", () => {
+      this.isComposing = false;
+      renderResults();
+    });
+    inputEl.addEventListener("input", () => {
+      if (!this.isComposing) renderResults();
+    });
+    inputEl.addEventListener("keydown", (event) => {
+      const firstCandidate = resultsEl.querySelector(".puffs-relation-note-result");
+      if (getNoteRelationEnterAction(event, this.isComposing, !!firstCandidate) !== "select-candidate") return;
+      event.preventDefault();
+      event.stopPropagation();
+      firstCandidate.click();
+    });
+    renderRelations();
+    globalThis.setTimeout(() => inputEl.focus(), 0);
   }
   render() {
     this.contentEl.empty();
@@ -3183,7 +3304,7 @@ var TagTreeRendererBehavior = class {
     toggleEl.classList.toggle("is-collapsed", !expanded);
     (0, import_obsidian5.setIcon)(toggleEl, "right-triangle");
     rowEl.createDiv({ text: item.parentFile.basename, cls: "tree-item-inner" });
-    const addChildButton = rowEl.createEl("button", { cls: "clickable-icon puffs-hierarchy-add-child-button", attr: { "aria-label": "\u6DFB\u52A0\u5B50\u7B14\u8BB0" } });
+    const addChildButton = rowEl.createEl("button", { cls: "clickable-icon puffs-hierarchy-add-child-button", attr: { "aria-label": "\u7BA1\u7406\u5B50\u7B14\u8BB0" } });
     (0, import_obsidian5.setIcon)(addChildButton, "user-round-plus");
     addChildButton.addEventListener("click", (event) => {
       event.preventDefault();
@@ -3292,10 +3413,10 @@ var ContextMenusBehavior = class {
   showHierarchyParentMenu(event, file) {
     const menu = new import_obsidian6.Menu();
     menu.addItem((item) => item.setTitle("\u6253\u5F00\u7B14\u8BB0").setIcon("file-text").onClick(() => this.openFileInMainWorkspace(file)));
-    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => {
+    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => {
       new NoteRelationModal(this.app, this, file.path, "child").open();
     }));
-    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => {
+    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => {
       new NoteRelationModal(this.app, this, file.path, "parent").open();
     }));
     menu.showAtMouseEvent(event);
@@ -3309,8 +3430,8 @@ var ContextMenusBehavior = class {
         window.setTimeout(() => this.showHierarchyDisplayNameOptions(position, parentPath, file, aliases), 0);
       }));
     }
-    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => new NoteRelationModal(this.app, this, file.path, "child").open()));
-    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => new NoteRelationModal(this.app, this, file.path, "parent").open()));
+    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => new NoteRelationModal(this.app, this, file.path, "child").open()));
+    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => new NoteRelationModal(this.app, this, file.path, "parent").open()));
     menu.addItem((item) => item.setTitle("\u4ECE\u5F53\u524D\u79FB\u9664").setIcon("unlink").onClick(() => this.removeNoteHierarchyEdge(parentPath, file.path)));
     menu.showAtMouseEvent(event);
   }
@@ -3351,10 +3472,10 @@ var ContextMenusBehavior = class {
       }));
     }
     if (inherited && !fixedInherited || aliases.length > 0) menu.addSeparator();
-    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => {
+    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u7236\u7B14\u8BB0").setIcon("corner-left-up").onClick(() => {
       new NoteRelationModal(this.app, this, path, "parent").open();
     }));
-    menu.addItem((item) => item.setTitle("\u6DFB\u52A0\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => {
+    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u5B50\u7B14\u8BB0").setIcon("user-round-plus").onClick(() => {
       new NoteRelationModal(this.app, this, path, "child").open();
     }));
     if (this.getHierarchyParents(path).length > 0 || this.getHierarchyChildren(path).length > 0) {

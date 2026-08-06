@@ -18,10 +18,10 @@ export class ContextMenusBehavior {
   showHierarchyParentMenu(event: any, file: any) {
     const menu = new Menu();
     menu.addItem((item) => item.setTitle('打开笔记').setIcon('file-text').onClick(() => this.openFileInMainWorkspace(file)));
-    menu.addItem((item) => item.setTitle('添加子笔记').setIcon('user-round-plus').onClick(() => {
+    menu.addItem((item) => item.setTitle('管理子笔记').setIcon('user-round-plus').onClick(() => {
       new NoteRelationModal(this.app, this, file.path, 'child').open();
     }));
-    menu.addItem((item) => item.setTitle('添加父笔记').setIcon('corner-left-up').onClick(() => {
+    menu.addItem((item) => item.setTitle('管理父笔记').setIcon('corner-left-up').onClick(() => {
       new NoteRelationModal(this.app, this, file.path, 'parent').open();
     }));
     menu.showAtMouseEvent(event);
@@ -36,8 +36,8 @@ export class ContextMenusBehavior {
         window.setTimeout(() => this.showHierarchyDisplayNameOptions(position, parentPath, file, aliases), 0);
       }));
     }
-    menu.addItem((item) => item.setTitle('添加子笔记').setIcon('user-round-plus').onClick(() => new NoteRelationModal(this.app, this, file.path, 'child').open()));
-    menu.addItem((item) => item.setTitle('添加父笔记').setIcon('corner-left-up').onClick(() => new NoteRelationModal(this.app, this, file.path, 'parent').open()));
+    menu.addItem((item) => item.setTitle('管理子笔记').setIcon('user-round-plus').onClick(() => new NoteRelationModal(this.app, this, file.path, 'child').open()));
+    menu.addItem((item) => item.setTitle('管理父笔记').setIcon('corner-left-up').onClick(() => new NoteRelationModal(this.app, this, file.path, 'parent').open()));
     menu.addItem((item) => item.setTitle('从当前移除').setIcon('unlink').onClick(() => this.removeNoteHierarchyEdge(parentPath, file.path)));
     menu.showAtMouseEvent(event);
   }
@@ -84,10 +84,10 @@ export class ContextMenusBehavior {
       }));
     }
     if ((inherited && !fixedInherited) || aliases.length > 0) menu.addSeparator();
-    menu.addItem((item) => item.setTitle('添加父笔记').setIcon('corner-left-up').onClick(() => {
+    menu.addItem((item) => item.setTitle('管理父笔记').setIcon('corner-left-up').onClick(() => {
       new NoteRelationModal(this.app, this, path, 'parent').open();
     }));
-    menu.addItem((item) => item.setTitle('添加子笔记').setIcon('user-round-plus').onClick(() => {
+    menu.addItem((item) => item.setTitle('管理子笔记').setIcon('user-round-plus').onClick(() => {
       new NoteRelationModal(this.app, this, path, 'child').open();
     }));
     if (this.getHierarchyParents(path).length > 0 || this.getHierarchyChildren(path).length > 0) {

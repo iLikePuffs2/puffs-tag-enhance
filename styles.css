@@ -664,6 +664,16 @@
   overflow: hidden;
 }
 
+/* 管理弹窗的候选区只在搜索时出现，避免挤开下方的已关联列表。 */
+.puffs-note-relation-management-modal .puffs-relation-note-results {
+  height: auto;
+  max-height: min(240px, 36vh);
+}
+
+.puffs-note-relation-management-modal .puffs-relation-note-results.is-empty-query {
+  display: none;
+}
+
 .puffs-relation-note-result {
   box-sizing: border-box;
   flex: 0 0 49px;

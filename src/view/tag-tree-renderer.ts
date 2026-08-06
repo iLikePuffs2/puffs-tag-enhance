@@ -386,7 +386,7 @@ export class TagTreeRendererBehavior {
     toggleEl.classList.toggle('is-collapsed', !expanded);
     setIcon(toggleEl, 'right-triangle');
     rowEl.createDiv({ text: item.parentFile.basename, cls: 'tree-item-inner' });
-    const addChildButton = rowEl.createEl('button', { cls: 'clickable-icon puffs-hierarchy-add-child-button', attr: { 'aria-label': '添加子笔记' } });
+    const addChildButton = rowEl.createEl('button', { cls: 'clickable-icon puffs-hierarchy-add-child-button', attr: { 'aria-label': '管理子笔记' } });
     setIcon(addChildButton, 'user-round-plus');
     addChildButton.addEventListener('click', (event: any) => {
       event.preventDefault();

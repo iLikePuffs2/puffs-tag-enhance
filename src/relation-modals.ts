@@ -1061,7 +1061,135 @@ class NoteRelationModal extends Modal {
 
   onOpen() {
     this.modalEl.classList.add('puffs-relation-modal', 'puffs-note-relation-modal');
-    this.render();
+    if (this.sourcePath) this.renderManagement();
+    else this.render();
+  }
+
+  renderManagement() {
+    this.modalEl.classList.add('puffs-note-relation-management-modal');
+    this.contentEl.empty();
+    const sourceFile = this.app.vault.getAbstractFileByPath(this.sourcePath);
+    const sourceName = sourceFile instanceof TFile ? sourceFile.basename : this.sourcePath;
+    const relationName = this.mode === 'parent' ? '父笔记' : '子笔记';
+    this.contentEl.createDiv({
+      text: `管理 ${sourceName} 的${relationName}`,
+      cls: 'puffs-relation-modal-title puffs-tag-rename-title',
+    });
+    const searchHostEl = this.contentEl.createDiv({ cls: 'puffs-relation-tag-search' });
+    const inputEl = searchHostEl.createEl('input', { type: 'search', cls: 'puffs-relation-input' });
+    const resultsEl = searchHostEl.createDiv({ cls: 'puffs-relation-note-results is-empty-query' });
+    const relationsEl = this.contentEl.createDiv({ cls: 'puffs-relation-child-list' });
+
+    const getRelatedPaths = () => this.mode === 'parent'
+      ? this.plugin.getHierarchyParents(this.sourcePath)
+      : this.plugin.getHierarchyChildren(this.sourcePath);
+    const getEdge = (relatedPath: string) => this.mode === 'parent'
+      ? { parentPath: relatedPath, childPath: this.sourcePath }
+      : { parentPath: this.sourcePath, childPath: relatedPath };
+    const findMatch = (file: any, term: string) => {
+      if (file.basename.toLowerCase().includes(term)) return { displayName: file.basename, alias: '' };
+      const alias = this.plugin.getNoteAliases(file).find((value: any) => value.toLowerCase().includes(term));
+      return alias ? { displayName: alias, alias } : null;
+    };
+    const renderRelations = () => {
+      relationsEl.empty();
+      const relatedPaths = getRelatedPaths();
+      for (const path of relatedPaths) {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) continue;
+        const rowEl = relationsEl.createDiv({ cls: 'puffs-relation-child-row' });
+        const iconEl = rowEl.createSpan({ cls: 'puffs-relation-child-icon' });
+        setIcon(iconEl, 'file-text');
+        rowEl.createSpan({ text: file.basename, cls: 'puffs-relation-manage-name' });
+        const removeButton = rowEl.createEl('button', {
+          cls: 'clickable-icon puffs-relation-child-remove',
+          attr: { 'aria-label': `移除 ${file.basename}` },
+        });
+        setIcon(removeButton, 'x');
+        removeButton.addEventListener('click', async () => {
+          if (this.isSubmitting) return;
+          this.isSubmitting = true;
+          const { parentPath, childPath } = getEdge(path);
+          try {
+            await this.plugin.removeNoteHierarchyEdge(parentPath, childPath);
+            renderRelations();
+            renderResults();
+          } catch (error) {
+            new Notice(error && error.message ? error.message : '移除父子笔记关系失败');
+          } finally {
+            this.isSubmitting = false;
+          }
+        });
+      }
+      if (!relationsEl.childElementCount) {
+        relationsEl.createDiv({ text: `暂无${relationName}`, cls: 'puffs-relation-empty' });
+      }
+    };
+    const renderResults = () => {
+      resultsEl.empty();
+      const term = inputEl.value.trim().toLowerCase();
+      if (!term) {
+        resultsEl.classList.add('is-empty-query');
+        return;
+      }
+      resultsEl.classList.remove('is-empty-query');
+      const related = new Set(getRelatedPaths());
+      const candidates = this.app.vault.getMarkdownFiles()
+        .map((file: any) => ({ file, match: findMatch(file, term) }))
+        .filter(({ file, match }: any) => {
+          if (!match || file.path === this.sourcePath || related.has(file.path)) return false;
+          const { parentPath, childPath } = getEdge(file.path);
+          return !this.plugin.wouldCreateNoteHierarchyCycle(parentPath, childPath);
+        })
+        .sort((a: any, b: any) => a.match.displayName.localeCompare(b.match.displayName, 'zh-Hans-CN'));
+      if (!candidates.length) {
+        resultsEl.createDiv({ text: '没有可添加的笔记。', cls: 'puffs-relation-empty' });
+        return;
+      }
+      candidates.forEach(({ file, match }: any, index: number) => {
+        const rowEl = resultsEl.createDiv({ cls: 'puffs-relation-note-result is-clickable' });
+        rowEl.classList.toggle('is-active', index === 0);
+        rowEl.createDiv({ text: match.displayName, cls: 'puffs-relation-note-result-name' });
+        rowEl.createDiv({ text: file.path, cls: 'puffs-relation-note-result-path' });
+        rowEl.addEventListener('click', async () => {
+          if (this.isSubmitting) return;
+          this.isSubmitting = true;
+          const { parentPath, childPath } = getEdge(file.path);
+          try {
+            const childSelection = { path: childPath, displayName: this.mode === 'child' ? match.alias : '' };
+            await this.plugin.addNoteHierarchyEdges(
+              [{ path: parentPath, displayName: '' }],
+              [childSelection]
+            );
+            inputEl.value = '';
+            renderRelations();
+            renderResults();
+            inputEl.focus();
+          } catch (error) {
+            new Notice(error && error.message ? error.message : '添加父子笔记关系失败');
+          } finally {
+            this.isSubmitting = false;
+          }
+        });
+      });
+    };
+    inputEl.addEventListener('compositionstart', () => { this.isComposing = true; });
+    inputEl.addEventListener('compositionend', () => {
+      this.isComposing = false;
+      renderResults();
+    });
+    inputEl.addEventListener('input', () => {
+      if (!this.isComposing) renderResults();
+    });
+    inputEl.addEventListener('keydown', (event: any) => {
+      const firstCandidate: any = resultsEl.querySelector('.puffs-relation-note-result');
+      if (getNoteRelationEnterAction(event, this.isComposing, !!firstCandidate) !== 'select-candidate') return;
+      event.preventDefault();
+      event.stopPropagation();
+      firstCandidate.click();
+    });
+    renderRelations();
+    globalThis.setTimeout(() => inputEl.focus(), 0);
   }
 
   render() {
