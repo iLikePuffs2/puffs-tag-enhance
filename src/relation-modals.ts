@@ -986,7 +986,7 @@ class TagNoteBindingModal extends Modal {
 }
 
 class NoteRelationModal extends Modal {
-  constructor(app, plugin, sourcePath = null, mode = null) {
+  constructor(app, plugin, sourcePath: any = null, mode: any = null) {
     super(app);
     this.plugin = plugin;
     this.sourcePath = sourcePath;

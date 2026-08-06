@@ -1,6 +1,3 @@
-// @ts-nocheck
-// TODO(类型): 本文件为搬迁来的旧渲染代码，已补 116 处参数标注，仍剩约 52 个
-// DOM 查询相关的类型错误。去掉本行即可看到。详见交接说明。
 // 渲染层：标签继承树、标签内父子笔记树、父子层级页面。
 //
 // 这些方法原先住在 relations.ts 里，与继承关系的数据计算混在同一个 2466 行的文件中
@@ -25,7 +22,7 @@ export class TagTreeRendererBehavior {
     return view.tagContainerEl || view.containerEl?.querySelector('.tag-container') || null;
   }
 
-  renderTagInheritanceBrowseTree(hostEl: any, tree: any, options = {}) {
+  renderTagInheritanceBrowseTree(hostEl: any, tree: any, options: any = {}) {
     hostEl.empty();
     if (!tree) return;
     const rootTag = normalizeTag(tree.tag);
@@ -143,13 +140,13 @@ export class TagTreeRendererBehavior {
     this.scheduleTagOrderModeVisibilityReconcile();
   }
 
-  renderInlineTagNoteTree(hostEl: any, files: any, tagValue: any, isVirtual = false, options = {}) {
+  renderInlineTagNoteTree(hostEl: any, files: any, tagValue: any, isVirtual = false, options: any = {}) {
     hostEl.empty();
     const tag = normalizeTag(tagValue);
-    const orderedFiles = Array.from(new Map((files || []).map((file: any) => [file.path, file])).values());
-    const fileByPath = new Map(orderedFiles.map((file) => [file.path, file]));
+    const orderedFiles: any[] = Array.from(new Map((files || []).map((file: any) => [file.path, file])).values());
+    const fileByPath = new Map(orderedFiles.map((file: any) => [file.path, file]));
     const forest = buildVisibleHierarchyForest(
-      orderedFiles.map((file) => file.path),
+      orderedFiles.map((file: any) => file.path),
       this.getNoteHierarchySettings().childrenByParentPath
     );
     const collapsedBranches = this.collapsedInlineHierarchyBranches || new Set();
@@ -289,7 +286,7 @@ export class TagTreeRendererBehavior {
     }
   }
 
-  renderHierarchySearchItem(hostEl: any, state: any, options = {}) {
+  renderHierarchySearchItem(hostEl: any, state: any, options: any = {}) {
     hostEl.empty();
     const surface: any = options.surface || 'sidebar';
     const groupExpanded = state.groupExpanded !== false;
@@ -332,7 +329,7 @@ export class TagTreeRendererBehavior {
     }
   }
 
-  renderNoteHierarchyPage(hostEl: any, state: any, options = {}) {
+  renderNoteHierarchyPage(hostEl: any, state: any, options: any = {}) {
     hostEl.empty();
     hostEl.classList.add('puffs-note-hierarchy-page');
     if (options.showHeader !== false) {
@@ -363,7 +360,7 @@ export class TagTreeRendererBehavior {
       const matches: any = Array.from(listEl.querySelectorAll('.is-hierarchy-search-match'));
       if (!matches.length) return;
       state.activeMatchIndex = (state.activeMatchIndex + 1) % matches.length;
-      matches.forEach((el, index) => el.classList.toggle('is-active-match', index === state.activeMatchIndex));
+      matches.forEach((el: any, index: any) => el.classList.toggle('is-active-match', index === state.activeMatchIndex));
       matches[state.activeMatchIndex].scrollIntoView({ block: 'nearest' });
       event.preventDefault();
     };

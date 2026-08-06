@@ -1,6 +1,3 @@
-// @ts-nocheck
-// TODO(类型): 本文件为搬迁来的旧渲染代码，已补 116 处参数标注，仍剩约 52 个
-// DOM 查询相关的类型错误。去掉本行即可看到。详见交接说明。
 // 渲染层：排序模式的交互与笔记卡片的 DOM 效果。
 //
 // 自 interactions.ts 迁出（该文件曾有 84 处 DOM 操作，与笔记顺序、别名等
@@ -18,7 +15,7 @@ export class OrderControllerBehavior {
     if (!tag || !(file instanceof TFile)) return;
 
     const displayName = this.getNoteDisplayName(tag, file);
-    document.querySelectorAll('.puffs-tag-note-card[data-puffs-tag][data-path]').forEach((cardEl) => {
+    document.querySelectorAll('.puffs-tag-note-card[data-puffs-tag][data-path]').forEach((cardEl: any) => {
       if (cardEl.dataset.puffsTag !== tag || cardEl.dataset.path !== file.path) return;
       const textEl = cardEl.querySelector('.tree-item-inner-text');
       if (textEl) textEl.textContent = displayName;
@@ -87,14 +84,14 @@ export class OrderControllerBehavior {
 
     const findTargetCard = (target: any) => {
       if (!target) return null;
-      const tagRowEl = Array.from(
+      const tagRowEl: any = Array.from(
         containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
-      ).find((rowEl) => rowEl.dataset.puffsTag === target.tag);
-      const tagItemEl = tagRowEl && tagRowEl.closest('.puffs-tag-list-item');
+      ).find((rowEl: any) => rowEl.dataset.puffsTag === target.tag);
+      const tagItemEl: any = tagRowEl && tagRowEl.closest('.puffs-tag-list-item');
       return (
         tagItemEl &&
         Array.from(tagItemEl.querySelectorAll('.puffs-tag-note-card[data-path]')).find(
-          (candidate) => candidate.dataset.path === target.path
+          (candidate: any) => candidate.dataset.path === target.path
         )
       );
     };
@@ -144,11 +141,11 @@ export class OrderControllerBehavior {
     window.setTimeout(() => {
       if (!containerEl.isConnected) return;
 
-      const tagRowEl = Array.from(
+      const tagRowEl: any = Array.from(
         containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
-      ).find((rowEl) => rowEl.dataset.puffsTag === tag);
-      const tagItemEl = tagRowEl && tagRowEl.closest('.puffs-tag-list-item');
-      const noteCards = tagItemEl
+      ).find((rowEl: any) => rowEl.dataset.puffsTag === tag);
+      const tagItemEl: any = tagRowEl && tagRowEl.closest('.puffs-tag-list-item');
+      const noteCards: any[] = tagItemEl
         ? Array.from(tagItemEl.querySelectorAll('.puffs-tag-note-card[data-path]'))
         : [];
       const lastCardEl = noteCards[noteCards.length - 1];
@@ -164,9 +161,9 @@ export class OrderControllerBehavior {
     window.setTimeout(() => {
       if (!containerEl.isConnected) return;
 
-      const tagRowEl = Array.from(
+      const tagRowEl: any = Array.from(
         containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
-      ).find((rowEl) => rowEl.dataset.puffsTag === tag);
+      ).find((rowEl: any) => rowEl.dataset.puffsTag === tag);
       if (!tagRowEl) return;
 
       tagRowEl.scrollIntoView({ block: 'start', inline: 'nearest' });
@@ -379,7 +376,7 @@ export class OrderControllerBehavior {
       this.tagOrderModeVisibilityTimer = null;
       if (!this.activeTagOrderParent) return;
       const isVisible = Array.from(document.querySelectorAll('.puffs-tag-order-parent-button'))
-        .some((buttonEl) =>
+        .some((buttonEl: any) =>
           normalizeTag(buttonEl.dataset.puffsTagOrderTag) === this.activeTagOrderParent &&
           buttonEl.dataset.puffsExpanded === 'true' &&
           buttonEl.offsetParent !== null
@@ -391,9 +388,9 @@ export class OrderControllerBehavior {
   focusSelectedNoteOrderButton() {
     if (!this.selectedNoteOrderTarget) return;
     const { tag, hierarchyParent, path, surface } = this.selectedNoteOrderTarget;
-    const buttons = Array.from(document.querySelectorAll('.puffs-tag-note-order-button'));
+    const buttons: any[] = Array.from(document.querySelectorAll('.puffs-tag-note-order-button'));
     const buttonEl =
-      buttons.find((button) =>
+      buttons.find((button: any) =>
         (hierarchyParent
           ? button.dataset.puffsHierarchyParent === hierarchyParent
           : button.dataset.puffsTag === tag) &&
@@ -401,7 +398,7 @@ export class OrderControllerBehavior {
         button.dataset.puffsSurface === surface &&
         button.offsetParent !== null
       ) ||
-      buttons.find((button) =>
+      buttons.find((button: any) =>
         (hierarchyParent
           ? button.dataset.puffsHierarchyParent === hierarchyParent
           : button.dataset.puffsTag === tag) &&
@@ -414,15 +411,15 @@ export class OrderControllerBehavior {
   focusSelectedTagOrderButton() {
     if (!this.selectedTagOrderTarget) return;
     const { parentTag, tag, surface } = this.selectedTagOrderTarget;
-    const buttons = Array.from(document.querySelectorAll('.puffs-tag-order-button'));
+    const buttons: any[] = Array.from(document.querySelectorAll('.puffs-tag-order-button'));
     const buttonEl =
-      buttons.find((button) =>
+      buttons.find((button: any) =>
         button.dataset.puffsTagOrderParent === parentTag &&
         button.dataset.puffsTagOrderTag === tag &&
         button.dataset.puffsSurface === surface &&
         button.offsetParent !== null
       ) ||
-      buttons.find((button) =>
+      buttons.find((button: any) =>
         button.dataset.puffsTagOrderParent === parentTag &&
         button.dataset.puffsTagOrderTag === tag &&
         button.offsetParent !== null
