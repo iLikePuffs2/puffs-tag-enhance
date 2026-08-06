@@ -1,0 +1,253 @@
+// 标签索引与笔记顺序对账的契约测试。
+//
+// 阶段 1 要把这块搬进 data/tag-store.ts，并加上防抖、增量更新和「对账安全阀」。
+// 这里先钉住现状，其中「标签消失导致顺序记录被整体丢弃」的用例记录的是一个
+// 真实的数据风险（详见方案「数据安全」一节）—— 阶段 1 加安全阀后，该用例需按新
+// 预期更新，届时它正好是安全阀生效的证据。
+
+import { describe, expect, it } from 'vitest';
+import { TFile } from './test-obsidian-mock';
+import { TagIndexBehavior } from './tag-index';
+
+type AnyRecord = Record<string, unknown>;
+
+function makeBehavior(options: {
+  files?: string[];
+  cacheByPath?: Record<string, unknown>;
+  noteOrderByTag?: Record<string, string[]>;
+  newNotePosition?: 'start' | 'end';
+  noteOrderTrackingReady?: boolean;
+  cacheReady?: boolean;
+} = {}) {
+  const {
+    files = [],
+    cacheByPath = {},
+    noteOrderByTag = {},
+    newNotePosition = 'end',
+    noteOrderTrackingReady = true,
+    cacheReady = true,
+  } = options;
+
+  const tFiles = files.map((path) => new TFile(path));
+  const behavior = Object.create(TagIndexBehavior.prototype) as AnyRecord & {
+    rebuildTagFileIndex: (changedPath?: string | null) => boolean;
+    reconcileNoteOrders: (nextIndex: Map<string, unknown[]>, changedPath?: string | null) => boolean;
+    initializeNoteOrders: (nextIndex: Map<string, unknown[]>) => boolean;
+    getExactTagsForFile: (file: unknown) => Set<string>;
+    reconcileExpandedTags: () => void;
+    getStableNoteOrderTags: (nextIndex: Map<string, unknown[]>) => string[];
+  };
+
+  behavior.app = {
+    vault: {
+      getMarkdownFiles: () => tFiles,
+      getAbstractFileByPath: (path: string) => tFiles.find((f) => f.path === path) || null,
+    },
+    metadataCache: {
+      initialized: true,
+      inProgressTaskCount: 0,
+      getFileCache: (file: { path: string }) => (cacheReady ? cacheByPath[file.path] ?? {} : null),
+    },
+  };
+  behavior.settings = {
+    noteOrderByTag,
+    noteDisplayNameByTag: {},
+    tagBoundNoteByTag: {},
+    newNotePosition,
+    pinnedTag: null,
+    relations: { tagInheritance: { childrenByParent: {}, enabledParents: [] } },
+  };
+  behavior.tagFileIndex = new Map();
+  behavior.expandedTags = new Set<string>();
+  behavior.noteOrderTrackingReady = noteOrderTrackingReady;
+  behavior.tagBindingTrackingReady = true;
+  behavior.activeTagRename = null;
+  behavior.isUnloaded = false;
+
+  // 跨 Behavior 的协作方法，在此以最小实现替身
+  behavior.initializeTagInheritanceOrder = () => false;
+  behavior.reconcileNoteDisplayNames = () => false;
+  behavior.reconcileTagBoundNotes = () => false;
+  behavior.reconcilePinnedTag = () => false;
+  behavior.clearInlineHierarchyBranchState = () => undefined;
+  behavior.isFixedChild = () => false;
+  behavior.getNoteAliases = () => [];
+  behavior.normalizeNoteOrderByTag = (value: unknown) => value;
+
+  return behavior;
+}
+
+describe('从元数据提取标签', () => {
+  it('合并正文标签与 frontmatter tags 并去重', () => {
+    const behavior = makeBehavior();
+    const tags = behavior.getExactTagsForFile.call(behavior, { path: 'a.md' } as never);
+    expect(tags.size).toBe(0);
+
+    const withCache = makeBehavior({
+      cacheByPath: {
+        'a.md': { tags: [{ tag: '#读书' }], frontmatter: { tags: ['科幻', '读书'] } },
+      },
+    });
+    const merged = withCache.getExactTagsForFile.call(withCache, { path: 'a.md' } as never);
+    expect(Array.from(merged).sort()).toEqual(['#科幻', '#读书']);
+  });
+
+  it('frontmatter 的逗号与空格分隔写法都能拆开', () => {
+    const behavior = makeBehavior({
+      cacheByPath: { 'a.md': { frontmatter: { tags: '读书, 科幻 玄幻' } } },
+    });
+    const tags = behavior.getExactTagsForFile.call(behavior, { path: 'a.md' } as never);
+    expect(Array.from(tags).sort()).toEqual(['#玄幻', '#科幻', '#读书']);
+  });
+
+  it('没有缓存时返回空集合', () => {
+    const behavior = makeBehavior({ cacheReady: false });
+    expect(behavior.getExactTagsForFile.call(behavior, { path: 'a.md' } as never).size).toBe(0);
+  });
+});
+
+describe('重建标签索引', () => {
+  it('按标签聚合笔记，一篇多标签的笔记出现在每个标签下', () => {
+    const behavior = makeBehavior({
+      files: ['a.md', 'b.md'],
+      cacheByPath: {
+        'a.md': { frontmatter: { tags: ['读书', '科幻'] } },
+        'b.md': { frontmatter: { tags: ['读书'] } },
+      },
+    });
+
+    behavior.rebuildTagFileIndex();
+    const index = behavior.tagFileIndex as Map<string, Array<{ path: string }>>;
+
+    expect(index.get('#读书')?.map((f) => f.path)).toEqual(['a.md', 'b.md']);
+    expect(index.get('#科幻')?.map((f) => f.path)).toEqual(['a.md']);
+  });
+
+  it('同一标签下的笔记按文件名中文拼音序排列', () => {
+    const behavior = makeBehavior({
+      files: ['波.md', '阿.md', '春.md'],
+      cacheByPath: {
+        '波.md': { frontmatter: { tags: ['读书'] } },
+        '阿.md': { frontmatter: { tags: ['读书'] } },
+        '春.md': { frontmatter: { tags: ['读书'] } },
+      },
+    });
+
+    behavior.rebuildTagFileIndex();
+    const index = behavior.tagFileIndex as Map<string, Array<{ path: string }>>;
+    expect(index.get('#读书')?.map((f) => f.path)).toEqual(['阿.md', '波.md', '春.md']);
+  });
+
+  it('没有标签的笔记不进入索引', () => {
+    const behavior = makeBehavior({
+      files: ['a.md', 'b.md'],
+      cacheByPath: { 'a.md': { frontmatter: { tags: ['读书'] } }, 'b.md': {} },
+    });
+
+    behavior.rebuildTagFileIndex();
+    expect((behavior.tagFileIndex as Map<string, unknown>).size).toBe(1);
+  });
+});
+
+describe('笔记顺序对账', () => {
+  const indexOf = (entries: Record<string, string[]>) =>
+    new Map(Object.entries(entries).map(([tag, paths]) => [tag, paths.map((p) => new TFile(p))]));
+
+  it('保留已存在笔记的手工顺序', () => {
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['b.md', 'a.md'] } });
+    behavior.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md'] }));
+    expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
+      .noteOrderByTag['#读书']).toEqual(['b.md', 'a.md']);
+  });
+
+  it('新笔记按配置追加到末尾', () => {
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['b.md'] }, newNotePosition: 'end' });
+    behavior.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md'] }));
+    expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
+      .noteOrderByTag['#读书']).toEqual(['b.md', 'a.md']);
+  });
+
+  it('新笔记也可配置插入到最前', () => {
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['b.md'] }, newNotePosition: 'start' });
+    behavior.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md'] }));
+    expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
+      .noteOrderByTag['#读书']).toEqual(['a.md', 'b.md']);
+  });
+
+  it('移除已不在标签下的笔记', () => {
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['a.md', 'b.md', 'c.md'] } });
+    behavior.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'c.md'] }));
+    expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
+      .noteOrderByTag['#读书']).toEqual(['a.md', 'c.md']);
+  });
+
+  it('刚变更的笔记排在其他新增笔记之后', () => {
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['a.md'] } });
+    behavior.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md', 'c.md'] }), 'b.md');
+    expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
+      .noteOrderByTag['#读书']).toEqual(['a.md', 'c.md', 'b.md']);
+  });
+
+  it('返回值表示顺序是否发生变化', () => {
+    const unchanged = makeBehavior({ noteOrderByTag: { '#读书': ['a.md'] } });
+    expect(unchanged.reconcileNoteOrders(indexOf({ '#读书': ['a.md'] }))).toBe(false);
+
+    const changed = makeBehavior({ noteOrderByTag: { '#读书': ['a.md'] } });
+    expect(changed.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md'] }))).toBe(true);
+  });
+
+  it('【已知数据风险】标签从索引消失时，其顺序记录被整体丢弃', () => {
+    // 只遍历 nextIndex 里还存在的标签，所以旧标签的顺序不会被保留。
+    // 插件关闭期间重命名标签，重新启用后该标签的手工排序即永久丢失。
+    // 阶段 1 加入对账安全阀后，此处预期应改为「保留」。
+    const behavior = makeBehavior({
+      noteOrderByTag: { '#读书': ['b.md', 'a.md'], '#科幻': ['c.md'] },
+    });
+
+    behavior.reconcileNoteOrders(indexOf({ '#科幻': ['c.md'] }));
+
+    const orders = (behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> }).noteOrderByTag;
+    expect(orders['#读书']).toBeUndefined();
+    expect(orders['#科幻']).toEqual(['c.md']);
+  });
+
+  it('空顺序的标签不写入记录', () => {
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['a.md'] } });
+    behavior.reconcileNoteOrders(indexOf({ '#读书': [] }));
+    expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
+      .noteOrderByTag['#读书']).toBeUndefined();
+  });
+});
+
+describe('顺序初始化与标签排序基准', () => {
+  const indexOf = (entries: Record<string, string[]>) =>
+    new Map(Object.entries(entries).map(([tag, paths]) => [tag, paths.map((p) => new TFile(p))]));
+
+  it('初始化时保留已保存顺序，未记录的笔记追加在后', () => {
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['c.md', 'a.md'] } });
+    behavior.initializeNoteOrders(indexOf({ '#读书': ['a.md', 'b.md', 'c.md'] }));
+    expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
+      .noteOrderByTag['#读书']).toEqual(['c.md', 'a.md', 'b.md']);
+  });
+
+  it('已有标签保持原有键顺序，新标签按中文序追加', () => {
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['a.md'] } });
+    const tags = behavior.getStableNoteOrderTags(indexOf({
+      '#春': ['x.md'], '#读书': ['a.md'], '#阿': ['y.md'],
+    }));
+    expect(tags).toEqual(['#读书', '#阿', '#春']);
+  });
+});
+
+describe('展开态对账', () => {
+  it('清理已不存在的标签，但保留交集虚拟标签', () => {
+    const behavior = makeBehavior();
+    behavior.tagFileIndex = new Map([['#读书', []]]);
+    behavior.expandedTags = new Set(['#读书', '#已删除', 'intersection:#a&#b']);
+
+    behavior.reconcileExpandedTags();
+
+    expect(Array.from(behavior.expandedTags as Set<string>).sort())
+      .toEqual(['#读书', 'intersection:#a&#b']);
+  });
+});
