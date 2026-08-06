@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { TFile } from "obsidian";
+// 继承规则的纯计算已迁入 core/inheritance.ts，这里保留同名方法作为薄委托
+import * as core from "./core/inheritance";
 import {
   DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   getTagDisplayName,
@@ -199,54 +201,31 @@ export class RelationsBehavior {
   }
 
   parseFixedChildTag(tagValue) {
-    const tag = normalizeTag(tagValue);
-    if (!tag || isNestedTag(tag)) return null;
-    const name = getTagDisplayName(tag);
-    const parts = name.split('-');
-    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
-    return { parent: normalizeTag(parts[0]), displayName: parts[1] };
+    return core.parseFixedChildTag(tagValue);
   }
 
   isFixedTagRelationEligible(parentValue, childValue) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    const parsed = this.parseFixedChildTag(child);
-    if (!parent || !child || !parsed || parsed.parent !== parent) return false;
-    const parents = this.getInheritanceParents(child);
-    return parents.length === 1 && parents[0] === parent;
+    return core.isFixedTagRelationEligible(this.getTagInheritanceSettings(), parentValue, childValue);
   }
 
   getFixedParent(childValue) {
-    const child = normalizeTag(childValue);
-    if (!child) return null;
-    return normalizeTag(this.getTagInheritanceSettings().fixedParentByChild[child]);
+    return core.getFixedParent(this.getTagInheritanceSettings(), childValue);
   }
 
   isFixedChild(tagValue) {
-    return !!this.getFixedParent(tagValue);
+    return core.isFixedChild(this.getTagInheritanceSettings(), tagValue);
   }
 
   isFixedTagEdge(parentValue, childValue) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    return !!parent && !!child && this.getFixedParent(child) === parent;
+    return core.isFixedTagEdge(this.getTagInheritanceSettings(), parentValue, childValue);
   }
 
   getFixedChildDisplayName(tagValue) {
-    return this.parseFixedChildTag(tagValue)?.displayName || getTagDisplayName(tagValue);
+    return core.getFixedChildDisplayName(tagValue);
   }
 
   getTopLevelFixedParent(tagValue) {
-    let tag = normalizeTag(tagValue);
-    if (!tag) return null;
-    const visited = new Set();
-    let parent = this.getFixedParent(tag);
-    while (parent && !visited.has(tag)) {
-      visited.add(tag);
-      tag = parent;
-      parent = this.getFixedParent(tag);
-    }
-    return tag;
+    return core.getTopLevelFixedParent(this.getTagInheritanceSettings(), tagValue);
   }
 
   filterInheritanceTreeByTags(tree, includedTags) {
@@ -769,9 +748,7 @@ export class RelationsBehavior {
 
 
   getInheritanceChildren(tagValue) {
-    const tag = normalizeTag(tagValue);
-    if (!tag) return [];
-    return [...(this.getTagInheritanceSettings().childrenByParent[tag] || [])];
+    return core.getInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
   }
 
   initializeTagInheritanceOrder() {
@@ -817,21 +794,11 @@ export class RelationsBehavior {
   }
 
   getSortedTagInheritanceAdjacency() {
-    const result = {};
-    for (const parent of Object.keys(this.getTagInheritanceSettings().childrenByParent)) {
-      const children = this.getInheritanceChildren(parent);
-      if (children.length) result[parent] = children;
-    }
-    return result;
+    return core.getSortedTagInheritanceAdjacency(this.getTagInheritanceSettings());
   }
 
   getFixedTagInheritanceAdjacency() {
-    const result = {};
-    for (const [parent, children] of Object.entries(this.getTagInheritanceSettings().childrenByParent)) {
-      const fixedChildren = children.filter((child) => this.isFixedTagEdge(parent, child));
-      if (fixedChildren.length) result[parent] = fixedChildren;
-    }
-    return result;
+    return core.getFixedTagInheritanceAdjacency(this.getTagInheritanceSettings());
   }
 
   getActiveTagInheritanceAdjacency(tagValue) {
@@ -858,11 +825,7 @@ export class RelationsBehavior {
   }
 
   getInheritanceParents(tagValue) {
-    const tag = normalizeTag(tagValue);
-    if (!tag) return [];
-    return Object.entries(this.getTagInheritanceSettings().childrenByParent)
-      .filter(([, children]) => Array.isArray(children) && children.includes(tag))
-      .map(([parent]) => parent);
+    return core.getInheritanceParents(this.getTagInheritanceSettings(), tagValue);
   }
 
   getTagInheritanceGroupKeys(tagValue) {
@@ -933,83 +896,43 @@ export class RelationsBehavior {
   }
 
   hasInheritanceChildren(tagValue) {
-    return this.getInheritanceChildren(tagValue).length > 0;
+    return core.hasInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
   }
 
   isTagInheritanceEnabled(tagValue) {
-    const tag = normalizeTag(tagValue);
-    return !!tag && this.getTagInheritanceSettings().enabledParents.includes(tag);
+    return core.isTagInheritanceEnabled(this.getTagInheritanceSettings(), tagValue);
   }
 
   getTagInheritanceMode(parentValue, childValue) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    if (!parent || !child) return 'all';
-    return this.getTagInheritanceSettings().modeByParentChild[parent]?.[child] === 'selected' ? 'selected' : 'all';
+    return core.getTagInheritanceMode(this.getTagInheritanceSettings(), parentValue, childValue);
   }
 
   getIncludedInheritedPaths(parentValue, childValue) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    if (!parent || !child) return [];
-    return [...(this.getTagInheritanceSettings().includedPathsByParentChild[parent]?.[child] || [])];
+    return core.getIncludedInheritedPaths(this.getTagInheritanceSettings(), parentValue, childValue);
   }
 
   getExcludedInheritedPaths(parentValue, childValue) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    if (!parent || !child) return [];
-    return [...(this.getTagInheritanceSettings().excludedPathsByParentChild[parent]?.[child] || [])];
+    return core.getExcludedInheritedPaths(this.getTagInheritanceSettings(), parentValue, childValue);
   }
 
   setParentChildValue(target, parent, child, value) {
-    if (value === undefined || (Array.isArray(value) && !value.length)) {
-      if (target[parent]) {
-        delete target[parent][child];
-        if (!Object.keys(target[parent]).length) delete target[parent];
-      }
-      return;
-    }
-    if (!target[parent]) target[parent] = {};
-    target[parent][child] = value;
+    return core.setParentChildValue(target, parent, child, value);
   }
 
   cloneParentChildSettings(source) {
-    return Object.fromEntries(Object.entries(source || {}).map(([parent, children]) => [
-      parent,
-      Object.fromEntries(Object.entries(children || {}).map(([child, value]) => [
-        child,
-        Array.isArray(value) ? [...value] : value,
-      ])),
-    ]));
+    return core.cloneParentChildSettings(source);
   }
 
   isInheritanceEdgePathVisible(parentValue, childValue, path) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    if (!parent || !child || !path) return false;
-    if (this.isFixedTagEdge(parent, child)) return true;
-    return this.getTagInheritanceMode(parent, child) === 'selected'
-      ? this.getIncludedInheritedPaths(parent, child).includes(path)
-      : !this.getExcludedInheritedPaths(parent, child).includes(path);
+    return core.isInheritanceEdgePathVisible(this.getTagInheritanceSettings(), parentValue, childValue, path);
   }
 
   isInheritancePathVisible(edges, path, ignoredEdge = null) {
-    return (edges || []).every((edge) => (
-      ignoredEdge && edge.parent === ignoredEdge.parent && edge.child === ignoredEdge.child
-        ? true
-        : this.isInheritanceEdgePathVisible(edge.parent, edge.child, path)
-    ));
+    return core.isInheritancePathVisible(this.getTagInheritanceSettings(), edges, path, ignoredEdge);
   }
 
   createInheritanceEdgesFromLineage(lineage) {
-    const edges = [];
-    for (let index = 1; index < (lineage || []).length; index += 1) {
-      const parent = lineage[index - 1];
-      const child = lineage[index];
-      edges.push({ parent, child, fixed: this.isFixedTagEdge(parent, child) });
-    }
-    return edges;
+    return core.createInheritanceEdgesFromLineage(this.getTagInheritanceSettings(), lineage);
   }
 
   getInheritanceBranchData(tagValue, childValue = null, includeInactive = false) {
@@ -1325,16 +1248,11 @@ export class RelationsBehavior {
   }
 
   getTagDescendants(tagValue) {
-    const root = normalizeTag(tagValue);
-    if (!root) return [];
-    return collectDirectedDescendants(this.getSortedTagInheritanceAdjacency(), root);
+    return core.getTagDescendants(this.getTagInheritanceSettings(), tagValue);
   }
 
   wouldCreateTagInheritanceCycle(parentValue, childValue) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    if (!parent || !child) return true;
-    return wouldCreateDirectedCycle(this.getTagInheritanceSettings().childrenByParent, parent, child);
+    return core.wouldCreateTagInheritanceCycle(this.getTagInheritanceSettings(), parentValue, childValue);
   }
 
   reconcileRelationCycles() {
