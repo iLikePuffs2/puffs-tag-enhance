@@ -912,3 +912,65 @@
 .puffs-tag-sidebar-search-host:empty {
   display: none;
 }
+
+/* ===========================================================================
+   侧边栏外观定制
+   ---------------------------------------------------------------------------
+   自 snippets/侧边栏.css 迁入。原先这些规则以 [data-type="tag"] 命中核心插件的
+   标签面板；v3.0.0 改为自绘视图后选择器不再匹配，故随插件一起维护。
+   放在文件末尾：与前面 .puffs-tag-list-mode-enabled 的规则特异性相同，靠后者生效。
+   =========================================================================== */
+
+/* 标签名与计数：字号与垂直居中方式 */
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .tree-item-inner {
+  font-size: 22px !important;
+}
+
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .tree-item-self {
+  align-items: center !important;
+}
+
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .tree-item-flair {
+  display: flex !important;
+  align-items: center !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+}
+
+/* 顶栏：按钮与常驻搜索框并排一行，隐藏筛选按钮（搜索框始终可见，无需切换） */
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .nav-header {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0 !important;
+  padding: 8px 24px 4px 8px !important;
+}
+
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .nav-action-button[aria-label="筛选"] {
+  display: none !important;
+}
+
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .nav-buttons-container {
+  flex: 0 0 134px !important;
+  justify-content: center !important;
+  width: 134px !important;
+}
+
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .puffs-tag-sidebar-search-host {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: 134px !important;
+}
+
+/* 搜索框常驻：特异性高于 .puffs-tag-hidden，故 Ctrl+F 只清空内容、不再收起输入框 */
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .search-input-container {
+  display: block !important;
+  visibility: visible !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: 134px !important;
+  margin: 0 !important;
+}
+
+.workspace-leaf-content[data-type="puffs-tag-sidebar"] .search-input-container input::placeholder {
+  color: transparent !important;
+}

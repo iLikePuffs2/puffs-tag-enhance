@@ -1,4 +1,6 @@
 // @ts-nocheck
+// TODO(类型): 本文件为搬迁来的旧渲染代码，已补 116 处参数标注，仍剩约 52 个
+// DOM 查询相关的类型错误。去掉本行即可看到。详见交接说明。
 // 渲染层：排序模式的交互与笔记卡片的 DOM 效果。
 //
 // 自 interactions.ts 迁出（该文件曾有 84 处 DOM 操作，与笔记顺序、别名等
@@ -6,12 +8,12 @@
 // 顺序本身的计算规则留在 interactions.ts。
 
 import { Menu, Notice, TFile, setIcon } from "obsidian";
-import { NOTE_ORDER_LONG_PRESS_MS, getTagDisplayName, normalizeTag } from "../models";
+import { NOTE_ORDER_LONG_PRESS_MS, getTagDisplayName, isNestedTag, normalizeTag } from "../models";
 
 export class OrderControllerBehavior {
   [key: string]: any;
 
-  refreshNoteDisplayNameCards(tagValue, file) {
+  refreshNoteDisplayNameCards(tagValue: any, file: any) {
     const tag = normalizeTag(tagValue);
     if (!tag || !(file instanceof TFile)) return;
 
@@ -23,7 +25,7 @@ export class OrderControllerBehavior {
     });
   }
 
-  showNoteDisplayNameMenuForCard(event, cardEl) {
+  showNoteDisplayNameMenuForCard(event: any, cardEl: any) {
     const tag = normalizeTag(cardEl && cardEl.dataset.puffsTag);
     const path = cardEl && cardEl.dataset.path;
     if (!tag || isNestedTag(tag) || !path) return false;
@@ -50,14 +52,14 @@ export class OrderControllerBehavior {
     return true;
   }
 
-  showNoteDisplayNameOptions(position, tag, file, aliases = this.getNoteAliases(file)) {
+  showNoteDisplayNameOptions(position: any, tag: any, file: any, aliases = this.getNoteAliases(file)) {
     const currentName = this.getNoteDisplayName(tag, file);
     const menu = new Menu();
     menu.addItem((item) => {
       item
         .setTitle(file.basename)
         .setChecked(currentName === file.basename)
-        .onClick(() => this.setNoteDisplayName(tag, file, '').catch((error) => {
+        .onClick(() => this.setNoteDisplayName(tag, file, '').catch((error: any) => {
           console.error('[Puffs Tag Enhance] Failed to restore note display name:', error);
           new Notice('恢复文件名失败');
         }));
@@ -67,7 +69,7 @@ export class OrderControllerBehavior {
         item
           .setTitle(alias)
           .setChecked(currentName === alias)
-          .onClick(() => this.setNoteDisplayName(tag, file, alias).catch((error) => {
+          .onClick(() => this.setNoteDisplayName(tag, file, alias).catch((error: any) => {
             console.error('[Puffs Tag Enhance] Failed to change note display name:', error);
             new Notice('更换展示名称失败');
           }));
@@ -76,14 +78,14 @@ export class OrderControllerBehavior {
     menu.showAtPosition(position);
   }
 
-  scheduleNoteCardSearchEffect(containerEl, inputEl, state) {
+  scheduleNoteCardSearchEffect(containerEl: any, inputEl: any, state: any) {
     if (!containerEl || !state) return;
     if (state.effectTimer !== null) {
       window.clearTimeout(state.effectTimer);
       state.effectTimer = null;
     }
 
-    const findTargetCard = (target) => {
+    const findTargetCard = (target: any) => {
       if (!target) return null;
       const tagRowEl = Array.from(
         containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
@@ -99,7 +101,7 @@ export class OrderControllerBehavior {
 
     const target = state.target;
     const targetCardEl = findTargetCard(target);
-    containerEl.querySelectorAll('.puffs-tag-note-card.is-note-search-match').forEach((cardEl) => {
+    containerEl.querySelectorAll('.puffs-tag-note-card.is-note-search-match').forEach((cardEl: any) => {
       if (cardEl !== targetCardEl) cardEl.classList.remove('is-note-search-match');
     });
     if (!target || !targetCardEl) return;
@@ -136,7 +138,7 @@ export class OrderControllerBehavior {
     }, 0);
   }
 
-  scheduleLastNoteCardScroll(containerEl, tag) {
+  scheduleLastNoteCardScroll(containerEl: any, tag: any) {
     if (!containerEl || !tag) return;
 
     window.setTimeout(() => {
@@ -156,7 +158,7 @@ export class OrderControllerBehavior {
     }, 0);
   }
 
-  scheduleTagTopScroll(containerEl, tag) {
+  scheduleTagTopScroll(containerEl: any, tag: any) {
     if (!containerEl || !tag) return;
 
     window.setTimeout(() => {
@@ -171,7 +173,7 @@ export class OrderControllerBehavior {
     }, 0);
   }
 
-  syncNoteOrderButtonSelection(buttonEl) {
+  syncNoteOrderButtonSelection(buttonEl: any) {
     if (!buttonEl) return;
     const isSelected = this.isNoteOrderTargetSelected(
       buttonEl.dataset.puffsTag,
@@ -197,7 +199,7 @@ export class OrderControllerBehavior {
     if (noteItemEl) noteItemEl.classList.toggle('is-order-selected', isSelected);
   }
 
-  syncTagOrderButtonSelection(buttonEl) {
+  syncTagOrderButtonSelection(buttonEl: any) {
     if (!buttonEl) return;
     const parentTag = normalizeTag(buttonEl.dataset.puffsTagOrderParent);
     const tag = normalizeTag(buttonEl.dataset.puffsTagOrderTag);
@@ -228,9 +230,9 @@ export class OrderControllerBehavior {
     }
   }
 
-  bindOrderControlButton(buttonEl, isSelected, toggleExpansion, toggleOrder) {
+  bindOrderControlButton(buttonEl: any, isSelected: any, toggleExpansion: any, toggleOrder: any) {
     if (!buttonEl) return () => {};
-    let longPressTimer = null;
+    let longPressTimer: any = null;
     let suppressNextClick = false;
 
     const clearLongPressTimer = () => {
@@ -238,7 +240,7 @@ export class OrderControllerBehavior {
       globalThis.clearTimeout(longPressTimer);
       longPressTimer = null;
     };
-    const onPointerDown = (event) => {
+    const onPointerDown = (event: any) => {
       if (event.button !== 0 || isSelected()) return;
       clearLongPressTimer();
       suppressNextClick = false;
@@ -253,7 +255,7 @@ export class OrderControllerBehavior {
       clearLongPressTimer();
       suppressNextClick = false;
     };
-    const onClick = (event) => {
+    const onClick = (event: any) => {
       event.preventDefault();
       event.stopPropagation();
       if (suppressNextClick) {
@@ -282,7 +284,7 @@ export class OrderControllerBehavior {
     };
   }
 
-  bindNoteParentControlButton(buttonEl, toggleExpansion, toggleOrder) {
+  bindNoteParentControlButton(buttonEl: any, toggleExpansion: any, toggleOrder: any) {
     return this.bindOrderControlButton(
       buttonEl,
       () => this.isNoteOrderTargetSelected(
@@ -295,9 +297,9 @@ export class OrderControllerBehavior {
     );
   }
 
-  bindTagHierarchyControlButton(buttonEl, toggleExpansion) {
+  bindTagHierarchyControlButton(buttonEl: any, toggleExpansion: any) {
     if (!buttonEl) return () => {};
-    let longPressTimer = null;
+    let longPressTimer: any = null;
     let suppressNextClick = false;
 
     const clearLongPressTimer = () => {
@@ -305,7 +307,7 @@ export class OrderControllerBehavior {
       globalThis.clearTimeout(longPressTimer);
       longPressTimer = null;
     };
-    const onPointerDown = (event) => {
+    const onPointerDown = (event: any) => {
       const parentTag = buttonEl.dataset.puffsTagOrderParent;
       const tag = buttonEl.dataset.puffsTagOrderTag;
       const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
@@ -327,7 +329,7 @@ export class OrderControllerBehavior {
       clearLongPressTimer();
       suppressNextClick = false;
     };
-    const onClick = (event) => {
+    const onClick = (event: any) => {
       event.preventDefault();
       event.stopPropagation();
       if (suppressNextClick) {

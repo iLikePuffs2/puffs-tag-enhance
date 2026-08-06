@@ -118,7 +118,10 @@ class PuffsTagSidebarView extends ItemView {
     this.navButtonsEl = navButtonsEl;
     this.buildToolbar(navButtonsEl);
 
-    const searchHostEl = this.contentEl.createDiv({ cls: 'puffs-tag-sidebar-search-host' });
+    // 搜索框放在 nav-header 内、与按钮容器并列 —— 与原生标签面板的结构一致。
+    // 用户的外观定制（把顶栏做成「按钮 + 常驻搜索框」同一行）依赖这个层级，
+    // 放到 nav-header 之外会让搜索框换行。
+    const searchHostEl = navHeaderEl.createDiv({ cls: 'puffs-tag-sidebar-search-host' });
     this.buildSearch(searchHostEl);
 
     this.tagContainerEl = this.contentEl.createDiv({ cls: 'tag-container node-insert-event' });

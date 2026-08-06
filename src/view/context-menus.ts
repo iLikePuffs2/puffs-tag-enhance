@@ -1,11 +1,13 @@
 // @ts-nocheck
+// TODO(类型): 本文件为搬迁来的旧渲染代码，已补 116 处参数标注，仍剩约 52 个
+// DOM 查询相关的类型错误。去掉本行即可看到。详见交接说明。
 // 渲染层：标签与笔记卡片的右键菜单。
 //
 // 同样自 relations.ts 迁出。菜单只负责收集用户意图并调用下层的变更方法，
 // 不含关系计算。
 
 import { Menu, Notice, TFile } from "obsidian";
-import { getTagDisplayName, normalizeTag } from "../models";
+import { getTagDisplayName, isNestedTag, normalizeTag } from "../models";
 import {
   ManageParentTagModal,
   NoteRelationModal,
@@ -16,7 +18,7 @@ import {
 export class ContextMenusBehavior {
   [key: string]: any;
 
-  showHierarchyParentMenu(event, file) {
+  showHierarchyParentMenu(event: any, file: any) {
     const menu = new Menu();
     menu.addItem((item) => item.setTitle('打开笔记').setIcon('file-text').onClick(() => this.openFileInMainWorkspace(file)));
     menu.addItem((item) => item.setTitle('添加子笔记').setIcon('user-round-plus').onClick(() => {
@@ -28,7 +30,7 @@ export class ContextMenusBehavior {
     menu.showAtMouseEvent(event);
   }
 
-  showHierarchyChildMenu(event, parentPath, file) {
+  showHierarchyChildMenu(event: any, parentPath: any, file: any) {
     const menu = new Menu();
     const aliases = this.getNoteAliases(file);
     if (aliases.length) {
@@ -43,7 +45,7 @@ export class ContextMenusBehavior {
     menu.showAtMouseEvent(event);
   }
 
-  showHierarchyDisplayNameOptions(position, parentPath, file, aliases) {
+  showHierarchyDisplayNameOptions(position: any, parentPath: any, file: any, aliases: any) {
     const current = this.getHierarchyDisplayName(parentPath, file);
     const menu = new Menu();
     menu.addItem((item) => item.setTitle(file.basename).setChecked(current === file.basename).onClick(() => this.setHierarchyDisplayName(parentPath, file, '')));
@@ -53,7 +55,7 @@ export class ContextMenusBehavior {
     menu.showAtPosition(position);
   }
 
-  showNoteCardContextMenu(event, cardEl) {
+  showNoteCardContextMenu(event: any, cardEl: any) {
     const path = cardEl && cardEl.dataset.path;
     const file = path && this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile) || file.extension !== 'md') return false;
@@ -72,7 +74,7 @@ export class ContextMenusBehavior {
       menu.addItem((item) => item
         .setTitle(this.getInheritedFileRemovalTitle(inheritanceRootTag))
         .setIcon('eye-off')
-        .onClick(() => this.setInheritedFileVisible(inheritanceRootTag, path, false).catch((error) => {
+        .onClick(() => this.setInheritedFileVisible(inheritanceRootTag, path, false).catch((error: any) => {
           console.error('[Puffs Tag Enhance] Failed to exclude inherited note:', error);
           new Notice('排除继承笔记失败');
         })));
@@ -100,7 +102,7 @@ export class ContextMenusBehavior {
     return true;
   }
 
-  showTagContextMenu(event, tagValue) {
+  showTagContextMenu(event: any, tagValue: any) {
     const tag = normalizeTag(tagValue);
     if (!tag) return false;
     const menu = new Menu();
@@ -129,14 +131,14 @@ export class ContextMenusBehavior {
     return true;
   }
 
-  showInheritedNoteMenu(event, tagValue, path) {
+  showInheritedNoteMenu(event: any, tagValue: any, path: any) {
     const tag = normalizeTag(tagValue);
     if (!tag || !path || !this.isInheritedFileForTag(tag, path) || this.isFixedInheritedFileForTag(tag, path)) return false;
     const menu = new Menu();
     menu.addItem((item) => item
       .setTitle(this.getInheritedFileRemovalTitle(tag))
       .setIcon('eye-off')
-      .onClick(() => this.setInheritedFileVisible(tag, path, false).catch((error) => {
+      .onClick(() => this.setInheritedFileVisible(tag, path, false).catch((error: any) => {
         console.error('[Puffs Tag Enhance] Failed to exclude inherited note:', error);
         new Notice('排除继承笔记失败');
       })));

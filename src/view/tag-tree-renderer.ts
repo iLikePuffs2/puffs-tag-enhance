@@ -1,4 +1,6 @@
 // @ts-nocheck
+// TODO(类型): 本文件为搬迁来的旧渲染代码，已补 116 处参数标注，仍剩约 52 个
+// DOM 查询相关的类型错误。去掉本行即可看到。详见交接说明。
 // 渲染层：标签继承树、标签内父子笔记树、父子层级页面。
 //
 // 这些方法原先住在 relations.ts 里，与继承关系的数据计算混在同一个 2466 行的文件中
@@ -13,26 +15,27 @@ import {
   buildVisibleHierarchyForest,
   compareHierarchyParentItems,
 } from "../relation-utils";
+import { NoteRelationModal } from "../relation-modals";
 
 export class TagTreeRendererBehavior {
   [key: string]: any;
 
   /** 层级导航要恢复的滚动容器。属于渲染层职责，自 relations.ts 迁入。 */
-  getHierarchyNavigationScrollEl(view) {
+  getHierarchyNavigationScrollEl(view: any) {
     return view.tagContainerEl || view.containerEl?.querySelector('.tag-container') || null;
   }
 
-  renderTagInheritanceBrowseTree(hostEl, tree, options = {}) {
+  renderTagInheritanceBrowseTree(hostEl: any, tree: any, options = {}) {
     hostEl.empty();
     if (!tree) return;
     const rootTag = normalizeTag(tree.tag);
     const collapsed = this.collapsedInlineHierarchyBranches || new Set();
     this.collapsedInlineHierarchyBranches = collapsed;
-    const targetPath = options.targetPath || '';
-    const renderNotes = (containerEl, node, isInheritedGroup) => {
+    const targetPath: any = options.targetPath || '';
+    const renderNotes = (containerEl: any, node: any, isInheritedGroup: any) => {
       const files = node.paths
-        .map((path) => this.app.vault.getAbstractFileByPath(path))
-        .filter((file) => file instanceof TFile && file.extension === 'md');
+        .map((path: any) => this.app.vault.getAbstractFileByPath(path))
+        .filter((file: any) => file instanceof TFile && file.extension === 'md');
       this.renderInlineTagNoteTree(containerEl, files, node.tag, false, {
         ...options,
         inheritanceRootTag: rootTag,
@@ -41,12 +44,12 @@ export class TagTreeRendererBehavior {
       });
     };
     const renderGroup = (
-      containerEl,
-      label,
-      count,
-      key,
-      containsTarget,
-      renderContent,
+      containerEl: any,
+      label: any,
+      count: any,
+      key: any,
+      containsTarget: any,
+      renderContent: any,
       tagValue = null,
       parentTagValue = null,
       hasTagChildren = false
@@ -95,7 +98,7 @@ export class TagTreeRendererBehavior {
         options.rerender?.();
       });
       if (tagValue) {
-        rowEl.addEventListener('contextmenu', (event) => {
+        rowEl.addEventListener('contextmenu', (event: any) => {
           event.preventDefault();
           event.stopPropagation();
           this.showTagContextMenu(event, tagValue);
@@ -106,16 +109,16 @@ export class TagTreeRendererBehavior {
         renderContent(contentEl);
       }
     };
-    const renderNode = (containerEl, node, lineage, directParentTag) => {
+    const renderNode = (containerEl: any, node: any, lineage: any, directParentTag: any) => {
       const key = `${rootTag}\u0000tag-group\u0000${lineage.join('\u0001')}`;
-      const renderNodeContent = (contentEl) => {
+      const renderNodeContent = (contentEl: any) => {
           if (!node.children.length) {
             renderNotes(contentEl, node, true);
             return;
           }
           if (node.paths.length) {
             renderGroup(contentEl, '原生', node.paths.length, `${key}\u0000original`,
-              node.paths.includes(targetPath), (originalEl) => renderNotes(originalEl, node, true));
+              node.paths.includes(targetPath), (originalEl: any) => renderNotes(originalEl, node, true));
           }
           for (const child of node.children) {
             renderNode(contentEl, child, [...lineage, child.tag], node.tag);
@@ -134,16 +137,16 @@ export class TagTreeRendererBehavior {
     }
     if (tree.paths.length) {
       renderGroup(hostEl, '原生', tree.paths.length, `${rootTag}\u0000tag-group\u0000original`,
-        tree.paths.includes(targetPath), (contentEl) => renderNotes(contentEl, tree, false));
+        tree.paths.includes(targetPath), (contentEl: any) => renderNotes(contentEl, tree, false));
     }
     for (const child of tree.children) renderNode(hostEl, child, [child.tag], tree.tag);
     this.scheduleTagOrderModeVisibilityReconcile();
   }
 
-  renderInlineTagNoteTree(hostEl, files, tagValue, isVirtual = false, options = {}) {
+  renderInlineTagNoteTree(hostEl: any, files: any, tagValue: any, isVirtual = false, options = {}) {
     hostEl.empty();
     const tag = normalizeTag(tagValue);
-    const orderedFiles = Array.from(new Map((files || []).map((file) => [file.path, file])).values());
+    const orderedFiles = Array.from(new Map((files || []).map((file: any) => [file.path, file])).values());
     const fileByPath = new Map(orderedFiles.map((file) => [file.path, file]));
     const forest = buildVisibleHierarchyForest(
       orderedFiles.map((file) => file.path),
@@ -151,12 +154,12 @@ export class TagTreeRendererBehavior {
     );
     const collapsedBranches = this.collapsedInlineHierarchyBranches || new Set();
     this.collapsedInlineHierarchyBranches = collapsedBranches;
-    const surface = options.surface || 'sidebar';
-    const inheritanceRootTag = normalizeTag(options.inheritanceRootTag || tag);
-    const targetPath = options.targetPath || '';
-    const renderedCards = [];
+    const surface: any = options.surface || 'sidebar';
+    const inheritanceRootTag: any = normalizeTag(options.inheritanceRootTag || tag);
+    const targetPath: any = options.targetPath || '';
+    const renderedCards: any = [];
 
-    const renderNode = (containerEl, path, parentPath = '', branch = new Set()) => {
+    const renderNode = (containerEl: any, path: any, parentPath = '', branch = new Set()) => {
       if (branch.has(path)) return;
       const file = fileByPath.get(path);
       if (!(file instanceof TFile)) return;
@@ -221,7 +224,7 @@ export class TagTreeRendererBehavior {
       } else if (hasOrderButton) {
         setIcon(orderButtonEl, 'grip-vertical');
         this.syncNoteOrderButtonSelection(orderButtonEl);
-        orderButtonEl.addEventListener('click', (event) => {
+        orderButtonEl.addEventListener('click', (event: any) => {
           event.preventDefault();
           event.stopPropagation();
           toggleOrder();
@@ -233,7 +236,7 @@ export class TagTreeRendererBehavior {
         toggleEl.dataset.puffsInlineHierarchyBranchKey = branchKey;
         toggleEl.classList.toggle('is-collapsed', !expanded);
         setIcon(toggleEl, 'right-triangle');
-        toggleEl.addEventListener('click', (event) => {
+        toggleEl.addEventListener('click', (event: any) => {
           event.preventDefault();
           event.stopPropagation();
           this.toggleInlineHierarchyBranch(branchKey);
@@ -251,7 +254,7 @@ export class TagTreeRendererBehavior {
         flairOuterEl.createSpan({ text: String(children.length), cls: 'tree-item-flair tag-pane-tag-count' });
       }
       cardEl.addEventListener('click', () => this.openFileInMainWorkspace(file));
-      cardEl.addEventListener('contextmenu', (event) => {
+      cardEl.addEventListener('contextmenu', (event: any) => {
         event.preventDefault();
         event.stopPropagation();
         if (parentPath) this.showHierarchyChildMenu(event, parentPath, file);
@@ -278,7 +281,7 @@ export class TagTreeRendererBehavior {
       });
       scrollTopButtonEl.dataset.puffsTag = tagValue;
       setIcon(scrollTopButtonEl, 'arrow-up-to-line');
-      scrollTopButtonEl.addEventListener('click', (event) => {
+      scrollTopButtonEl.addEventListener('click', (event: any) => {
         event.preventDefault();
         event.stopPropagation();
         this.scheduleTagTopScroll(options.scrollContainer || hostEl, tagValue);
@@ -286,9 +289,9 @@ export class TagTreeRendererBehavior {
     }
   }
 
-  renderHierarchySearchItem(hostEl, state, options = {}) {
+  renderHierarchySearchItem(hostEl: any, state: any, options = {}) {
     hostEl.empty();
-    const surface = options.surface || 'sidebar';
+    const surface: any = options.surface || 'sidebar';
     const groupExpanded = state.groupExpanded !== false;
     const treeItemEl = hostEl.createDiv({
       cls: `tree-item puffs-tag-list-item puffs-hierarchy-search-item${surface === 'shelf' ? ' puffs-tag-shelf-card' : ''}${groupExpanded ? ' puffs-tag-expanded' : ''}`,
@@ -308,7 +311,7 @@ export class TagTreeRendererBehavior {
       attr: { 'aria-label': '新增父子笔记' },
     });
     setIcon(addButtonEl, 'plus');
-    addButtonEl.addEventListener('click', (event) => {
+    addButtonEl.addEventListener('click', (event: any) => {
       event.preventDefault();
       event.stopPropagation();
       new NoteRelationModal(this.app, this).open();
@@ -329,7 +332,7 @@ export class TagTreeRendererBehavior {
     }
   }
 
-  renderNoteHierarchyPage(hostEl, state, options = {}) {
+  renderNoteHierarchyPage(hostEl: any, state: any, options = {}) {
     hostEl.empty();
     hostEl.classList.add('puffs-note-hierarchy-page');
     if (options.showHeader !== false) {
@@ -355,9 +358,9 @@ export class TagTreeRendererBehavior {
       }
       for (const item of items) this.renderHierarchyParentItem(listEl, item, state, renderList, options.surface || 'sidebar');
     };
-    const handleSearchEnter = (event) => {
+    const handleSearchEnter = (event: any) => {
       if (event.key !== 'Enter' || event.isComposing) return;
-      const matches = Array.from(listEl.querySelectorAll('.is-hierarchy-search-match'));
+      const matches: any = Array.from(listEl.querySelectorAll('.is-hierarchy-search-match'));
       if (!matches.length) return;
       state.activeMatchIndex = (state.activeMatchIndex + 1) % matches.length;
       matches.forEach((el, index) => el.classList.toggle('is-active-match', index === state.activeMatchIndex));
@@ -378,7 +381,7 @@ export class TagTreeRendererBehavior {
     state.handleSearchEnter = handleSearchEnter;
   }
 
-  renderHierarchyParentItem(listEl, item, state, rerender, surface) {
+  renderHierarchyParentItem(listEl: any, item: any, state: any, rerender: any, surface: any) {
     const expanded = this.isHierarchyItemExpanded(state, item.parentPath, 'parent', item.forceExpand);
     const treeEl = listEl.createDiv({ cls: 'tree-item puffs-note-hierarchy-parent' });
     const rowEl = treeEl.createDiv({ cls: 'tree-item-self is-clickable mod-collapsible puffs-note-hierarchy-parent-row' });
@@ -388,7 +391,7 @@ export class TagTreeRendererBehavior {
     rowEl.createDiv({ text: item.parentFile.basename, cls: 'tree-item-inner' });
     const addChildButton = rowEl.createEl('button', { cls: 'clickable-icon puffs-hierarchy-add-child-button', attr: { 'aria-label': '添加子笔记' } });
     setIcon(addChildButton, 'user-round-plus');
-    addChildButton.addEventListener('click', (event) => {
+    addChildButton.addEventListener('click', (event: any) => {
       event.preventDefault();
       event.stopPropagation();
       new NoteRelationModal(this.app, this, item.parentPath, 'child').open();
@@ -402,7 +405,7 @@ export class TagTreeRendererBehavior {
       this.toggleHierarchyItemExpansion(state, item.parentPath, 'parent');
       rerender();
     });
-    rowEl.addEventListener('contextmenu', (event) => {
+    rowEl.addEventListener('contextmenu', (event: any) => {
       event.preventDefault();
       this.showHierarchyParentMenu(event, item.parentFile);
     });
@@ -412,7 +415,7 @@ export class TagTreeRendererBehavior {
     }
   }
 
-  renderHierarchyChildren(containerEl, rootPath, parentPath, state, matchingPaths, branch, rerender, surface, depth) {
+  renderHierarchyChildren(containerEl: any, rootPath: any, parentPath: any, state: any, matchingPaths: any, branch: any, rerender: any, surface: any, depth: any) {
     for (const childPath of this.getHierarchyChildren(parentPath)) {
       if (branch.has(childPath)) continue;
       const file = this.app.vault.getAbstractFileByPath(childPath);
@@ -434,7 +437,7 @@ export class TagTreeRendererBehavior {
       orderButtonEl.dataset.puffsSurface = surface;
       setIcon(orderButtonEl, 'grip-vertical');
       this.syncNoteOrderButtonSelection(orderButtonEl);
-      orderButtonEl.addEventListener('click', (event) => {
+      orderButtonEl.addEventListener('click', (event: any) => {
         event.preventDefault();
         event.stopPropagation();
         this.toggleHierarchyNoteOrderTarget(parentPath, file.path, surface);
@@ -444,7 +447,7 @@ export class TagTreeRendererBehavior {
         const toggleEl = cardEl.createDiv({ cls: 'tree-item-icon collapse-icon' });
         toggleEl.classList.toggle('is-collapsed', !expanded);
         setIcon(toggleEl, 'right-triangle');
-        toggleEl.addEventListener('click', (event) => {
+        toggleEl.addEventListener('click', (event: any) => {
           event.preventDefault();
           event.stopPropagation();
           this.toggleHierarchyItemExpansion(state, branchKey, 'branch');
@@ -453,7 +456,7 @@ export class TagTreeRendererBehavior {
       }
       cardEl.createDiv({ text: this.getHierarchyDisplayName(parentPath, file), cls: 'tree-item-inner' });
       cardEl.addEventListener('click', () => this.openFileInMainWorkspace(file));
-      cardEl.addEventListener('contextmenu', (event) => {
+      cardEl.addEventListener('contextmenu', (event: any) => {
         event.preventDefault();
         event.stopPropagation();
         this.showHierarchyChildMenu(event, parentPath, file);
@@ -465,13 +468,13 @@ export class TagTreeRendererBehavior {
     }
   }
 
-  captureHierarchyNavigationSnapshot(view, surface) {
+  captureHierarchyNavigationSnapshot(view: any, surface: any) {
     const query = this.getTagSearchValue(view);
     const scrollEl = this.getHierarchyNavigationScrollEl(view);
     return { query: String(query || ''), scrollTop: scrollEl?.scrollTop || 0 };
   }
 
-  applyHierarchyNavigationSnapshot(view, surface, snapshot) {
+  applyHierarchyNavigationSnapshot(view: any, surface: any, snapshot: any) {
     const history = this.getHierarchyNavigationHistory(view, surface);
     const restoreRequestId = history.restoreRequestId;
     view.searchQuery = snapshot.query;
