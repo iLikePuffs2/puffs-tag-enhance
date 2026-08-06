@@ -780,6 +780,107 @@ function buildResult(id, rawQuery, effectiveQuery) {
   };
 }
 
+// src/view/reconcile.ts
+function collectKeyedChildren(container) {
+  var _a;
+  const result = /* @__PURE__ */ new Map();
+  for (const child of Array.from(container.children)) {
+    const key = (_a = child.dataset) == null ? void 0 : _a.puffsRenderKey;
+    if (key && !result.has(key)) result.set(key, child);
+  }
+  return result;
+}
+function markRenderKey(element, key) {
+  element.dataset.puffsRenderKey = key;
+  return element;
+}
+function reconcileOrder(current, orderedNodes) {
+  const used = new Set(orderedNodes);
+  let cursor = current.firstChild;
+  for (const node of orderedNodes) {
+    if (node === cursor) {
+      cursor = cursor.nextSibling;
+      continue;
+    }
+    current.insertBefore(node, cursor);
+  }
+  for (const child of Array.from(current.childNodes)) {
+    if (!used.has(child)) child.remove();
+  }
+}
+function supportsTextSelection(el) {
+  if (el instanceof HTMLTextAreaElement) return true;
+  return el instanceof HTMLInputElement && ["text", "search", "tel", "url", "password"].includes(el.type);
+}
+function computeFocusPath(root, target) {
+  const path = [];
+  let node = target;
+  while (node && node !== root) {
+    const parent = node.parentElement;
+    if (!parent) return null;
+    path.unshift(Array.prototype.indexOf.call(parent.children, node));
+    node = parent;
+  }
+  return node === root ? path : null;
+}
+function resolveFocusPath(root, path) {
+  let node = root;
+  for (const index of path) {
+    const child = node.children[index];
+    if (!child) return null;
+    node = child;
+  }
+  return node instanceof HTMLElement ? node : null;
+}
+function capturePreservedState(scrollEl, root) {
+  const active = root.ownerDocument.activeElement;
+  const owned = active instanceof HTMLElement && root.contains(active) ? active : null;
+  return {
+    scrollTop: scrollEl.scrollTop,
+    scrollLeft: scrollEl.scrollLeft,
+    focusPath: owned ? computeFocusPath(root, owned) : null,
+    selection: owned && supportsTextSelection(owned) ? { start: owned.selectionStart, end: owned.selectionEnd } : null
+  };
+}
+function restorePreservedState(scrollEl, root, state) {
+  scrollEl.scrollTop = state.scrollTop;
+  scrollEl.scrollLeft = state.scrollLeft;
+  if (!state.focusPath) return;
+  const active = root.ownerDocument.activeElement;
+  if (active instanceof HTMLElement && root.contains(active)) return;
+  const target = resolveFocusPath(root, state.focusPath);
+  if (!target) return;
+  target.focus({ preventScroll: true });
+  if (state.selection && supportsTextSelection(target)) {
+    target.setSelectionRange(state.selection.start, state.selection.end);
+  }
+}
+function tagRowSignature(item, context) {
+  var _a, _b, _c, _d;
+  const files = item.files || [];
+  const parts = [
+    String((_a = item.tag) != null ? _a : ""),
+    String((_b = item.displayName) != null ? _b : ""),
+    item.isVirtual ? "1" : "0",
+    String(files.length),
+    String((_c = item.exactCount) != null ? _c : ""),
+    String((_d = item.inheritedCount) != null ? _d : ""),
+    item.inheritanceEnabled ? "1" : "0",
+    item.hasInheritance ? "1" : "0",
+    item.hasFreeInheritance ? "1" : "0",
+    item.hasActiveInheritance ? "1" : "0",
+    (item.fixedSearchTags || []).join(","),
+    context.pinned ? "1" : "0",
+    context.expanded ? "1" : "0",
+    context.targetPath,
+    String(context.inlineHierarchyVersion),
+    String(context.relationVersion),
+    // 展开时笔记列表参与签名；折叠时不关心，省去大量字符串拼接
+    context.expanded ? files.map((file) => file.path).join("\n") : ""
+  ];
+  return parts.join("");
+}
+
 // src/view/tag-sidebar-view.ts
 var TOOLBAR_BUTTONS = [
   { id: "expand-collapse", icon: "chevrons-up-down", label: "\u5168\u90E8\u5C55\u5F00" },
@@ -808,6 +909,7 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     this.toolbarButtonEls = /* @__PURE__ */ new Map();
     this.renderHandle = null;
     this.searchHotkeyRegistration = null;
+    this.lastRowSignatures = /* @__PURE__ */ new Map();
   }
   getViewType() {
     return TAG_SIDEBAR_VIEW_TYPE;
@@ -828,6 +930,7 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     this.hierarchyNavigationHistory = createHierarchyNavigationHistory();
     this.searchComponent = null;
     this.listEl = null;
+    this.lastRowSignatures = /* @__PURE__ */ new Map();
   }
   // --- 外壳 ---------------------------------------------------------------
   buildLayout() {
@@ -1010,18 +1113,8 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     const items = this.collectItems(resolved);
     this.syncSearchState(resolved, items);
     plugin.clearStaleVirtualExpandedTags(new Set(items.matching.map((item) => item.tag)));
-    const scrollTop = this.tagContainerEl.scrollTop;
-    this.listEl.empty();
-    if (items.display.length === 0) {
-      this.listEl.createDiv({
-        cls: "puffs-tag-list-empty",
-        text: this.emptyMessageFor(resolved)
-      });
-    } else {
-      for (const item of items.display) {
-        plugin.renderListModeTagItem(this.listEl, item, this, this);
-      }
-    }
+    const preserved = capturePreservedState(this.tagContainerEl, this.listEl);
+    this.renderTagRows(items.display, resolved);
     plugin.scheduleNoteCardSearchEffect(
       this.listEl,
       (_b = this.searchComponent) == null ? void 0 : _b.inputEl,
@@ -1031,7 +1124,57 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     plugin.scheduleTagOrderModeVisibilityReconcile();
     const shouldResetScroll = this.searchQuery !== this.lastRenderedSearchQuery && this.searchQuery.trim() && !this.searchQuery.includes("*");
     this.lastRenderedSearchQuery = this.searchQuery;
-    this.tagContainerEl.scrollTop = shouldResetScroll ? 0 : scrollTop;
+    restorePreservedState(this.tagContainerEl, this.listEl, preserved);
+    if (shouldResetScroll) this.tagContainerEl.scrollTop = 0;
+  }
+  /**
+   * 增量重绘标签列表。
+   *
+   * 逐行比对签名：未变的整棵子树直接复用（连 next 节点都不构建），变了的才重新渲染，
+   * 最后按顺序对账。150 个标签里通常只有 1–2 个展开，绝大多数行每次都命中复用，
+   * 因此展开态、焦点、文本选区都不会被刷新打断。
+   */
+  renderTagRows(displayItems, resolved) {
+    var _a, _b, _c, _d;
+    const plugin = this.plugin;
+    if (displayItems.length === 0) {
+      this.listEl.empty();
+      this.lastRowSignatures = /* @__PURE__ */ new Map();
+      this.listEl.createDiv({
+        cls: "puffs-tag-list-empty",
+        text: this.emptyMessageFor(resolved)
+      });
+      return;
+    }
+    const existingRows = collectKeyedChildren(this.listEl);
+    const nextSignatures = /* @__PURE__ */ new Map();
+    const targetPath = ((_b = (_a = this.noteCardSearchState) == null ? void 0 : _a.target) == null ? void 0 : _b.path) || "";
+    const stagingEl = this.listEl.ownerDocument.createElement("div");
+    const orderedNodes = [];
+    for (const item of displayItems) {
+      const key = String(item.tag);
+      const signature = tagRowSignature(item, {
+        expanded: plugin.expandedTags.has(item.tag),
+        pinned: plugin.settings.pinnedTag === item.tag,
+        targetPath: ((_d = (_c = this.noteCardSearchState) == null ? void 0 : _c.target) == null ? void 0 : _d.tag) === item.tag ? targetPath : "",
+        inlineHierarchyVersion: plugin.inlineHierarchyExpansionVersion || 0,
+        relationVersion: plugin.relationStructureVersion || 0
+      });
+      nextSignatures.set(key, signature);
+      const reusable = existingRows.get(key);
+      if (reusable && this.lastRowSignatures.get(key) === signature) {
+        orderedNodes.push(reusable);
+        continue;
+      }
+      plugin.renderListModeTagItem(stagingEl, item, this, this);
+      const rendered = stagingEl.lastElementChild;
+      if (rendered) {
+        markRenderKey(rendered, key);
+        orderedNodes.push(rendered);
+      }
+    }
+    reconcileOrder(this.listEl, orderedNodes);
+    this.lastRowSignatures = nextSignatures;
   }
   collectItems(resolved) {
     const plugin = this.plugin;

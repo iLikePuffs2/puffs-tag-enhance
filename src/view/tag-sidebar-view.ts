@@ -15,6 +15,14 @@ import { TAG_SIDEBAR_VIEW_TYPE, createNoteCardSearchState } from "../models";
 import { createHierarchyNavigationHistory } from "../relation-utils";
 import { resolveSearch } from "../core/search-modes";
 import {
+  capturePreservedState,
+  collectKeyedChildren,
+  markRenderKey,
+  reconcileOrder,
+  restorePreservedState,
+  tagRowSignature,
+} from "./reconcile";
+import {
   getAvailableSidebarToolbarButtons,
   normalizeSidebarToolbarButtons,
 } from "../sidebar-toolbar";
@@ -54,6 +62,8 @@ class PuffsTagSidebarView extends ItemView {
     this.toolbarButtonEls = new Map();
     this.renderHandle = null;
     this.searchHotkeyRegistration = null;
+    // 上一轮各标签行的签名，用于判断哪些行可以整棵复用
+    this.lastRowSignatures = new Map();
   }
 
   getViewType() {
@@ -80,6 +90,7 @@ class PuffsTagSidebarView extends ItemView {
     this.hierarchyNavigationHistory = createHierarchyNavigationHistory();
     this.searchComponent = null;
     this.listEl = null;
+    this.lastRowSignatures = new Map();
   }
 
   // --- 外壳 ---------------------------------------------------------------
@@ -298,20 +309,8 @@ class PuffsTagSidebarView extends ItemView {
     this.syncSearchState(resolved, items);
     plugin.clearStaleVirtualExpandedTags(new Set(items.matching.map((item: any) => item.tag)));
 
-    const scrollTop: number = this.tagContainerEl.scrollTop;
-    this.listEl.empty();
-
-    if (items.display.length === 0) {
-      this.listEl.createDiv({
-        cls: 'puffs-tag-list-empty',
-        text: this.emptyMessageFor(resolved),
-      });
-    } else {
-      for (const item of items.display) {
-        // 复用既有的标签行渲染：DOM 结构、按钮出现条件、计数文案都由 27 个契约测试守着
-        plugin.renderListModeTagItem(this.listEl, item, this, this);
-      }
-    }
+    const preserved = capturePreservedState(this.tagContainerEl, this.listEl);
+    this.renderTagRows(items.display, resolved);
 
     plugin.scheduleNoteCardSearchEffect(
       this.listEl,
@@ -321,12 +320,69 @@ class PuffsTagSidebarView extends ItemView {
     this.updateToolbarState(items.display, items.matching);
     plugin.scheduleTagOrderModeVisibilityReconcile();
 
-    // 保持滚动位置，避免刷新把用户滚走
+    // 换了搜索条件时回到顶部；否则保持用户原来的滚动位置与焦点
     const shouldResetScroll = this.searchQuery !== this.lastRenderedSearchQuery
       && this.searchQuery.trim()
       && !this.searchQuery.includes('*');
     this.lastRenderedSearchQuery = this.searchQuery;
-    this.tagContainerEl.scrollTop = shouldResetScroll ? 0 : scrollTop;
+    restorePreservedState(this.tagContainerEl, this.listEl, preserved);
+    if (shouldResetScroll) this.tagContainerEl.scrollTop = 0;
+  }
+
+  /**
+   * 增量重绘标签列表。
+   *
+   * 逐行比对签名：未变的整棵子树直接复用（连 next 节点都不构建），变了的才重新渲染，
+   * 最后按顺序对账。150 个标签里通常只有 1–2 个展开，绝大多数行每次都命中复用，
+   * 因此展开态、焦点、文本选区都不会被刷新打断。
+   */
+  renderTagRows(displayItems: any[], resolved: any) {
+    const plugin = this.plugin;
+
+    if (displayItems.length === 0) {
+      this.listEl.empty();
+      this.lastRowSignatures = new Map();
+      this.listEl.createDiv({
+        cls: 'puffs-tag-list-empty',
+        text: this.emptyMessageFor(resolved),
+      });
+      return;
+    }
+
+    const existingRows = collectKeyedChildren(this.listEl);
+    const nextSignatures = new Map();
+    const targetPath = this.noteCardSearchState?.target?.path || '';
+    // 只用来承接新建的行；复用的行留在原位不动，避免脱离文档丢焦点
+    const stagingEl = this.listEl.ownerDocument.createElement('div');
+    const orderedNodes: Node[] = [];
+
+    for (const item of displayItems) {
+      const key = String(item.tag);
+      const signature = tagRowSignature(item, {
+        expanded: plugin.expandedTags.has(item.tag),
+        pinned: plugin.settings.pinnedTag === item.tag,
+        targetPath: this.noteCardSearchState?.target?.tag === item.tag ? targetPath : '',
+        inlineHierarchyVersion: plugin.inlineHierarchyExpansionVersion || 0,
+        relationVersion: plugin.relationStructureVersion || 0,
+      });
+      nextSignatures.set(key, signature);
+
+      const reusable = existingRows.get(key);
+      if (reusable && this.lastRowSignatures.get(key) === signature) {
+        orderedNodes.push(reusable);
+        continue;
+      }
+      // 复用既有的标签行渲染：DOM 结构、按钮出现条件、计数文案都由 27 个契约测试守着
+      plugin.renderListModeTagItem(stagingEl, item, this, this);
+      const rendered = stagingEl.lastElementChild;
+      if (rendered) {
+        markRenderKey(rendered, key);
+        orderedNodes.push(rendered);
+      }
+    }
+
+    reconcileOrder(this.listEl, orderedNodes);
+    this.lastRowSignatures = nextSignatures;
   }
 
   collectItems(resolved: any) {
