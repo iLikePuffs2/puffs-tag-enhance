@@ -17,12 +17,17 @@ import {
   normalizeTag
 } from "./models";
 import { normalizeSidebarToolbarButtons } from "./sidebar-toolbar";
+import { migrateSchema, readPreferredFiles } from "./data/schema";
 
 export class PersistenceBehavior {
   [key: string]: any;
 
   async loadSettings() {
     const savedSettings = (await this.loadData()) || {};
+    // 结构迁移：跑过即记版本号，后续启动不再重复
+    const schemaChanged = migrateSchema(savedSettings, (message) => {
+      console.log('[Puffs Tag Enhance] ' + message);
+    });
     const shouldPersistFixedHierarchyKeyword =
       Object.prototype.hasOwnProperty.call(savedSettings, 'noteHierarchySearchKeyword') &&
       savedSettings.noteHierarchySearchKeyword !== DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD;
@@ -37,9 +42,7 @@ export class PersistenceBehavior {
       this.settings.moveNoteDownHotkey,
       DEFAULT_MOVE_NOTE_DOWN_HOTKEY
     );
-    if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== 'object') {
-      this.settings.tagSidebarPreferredFiles = {};
-    }
+    this.settings.tagSidebarPreferredFiles = Array.from(readPreferredFiles(this.settings.tagSidebarPreferredFiles));
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
@@ -76,7 +79,7 @@ export class PersistenceBehavior {
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
     delete this.settings.backupFileName;
-    if (shouldPersistFixedHierarchyKeyword) await this.saveSettings();
+    if (shouldPersistFixedHierarchyKeyword || schemaChanged) await this.saveSettings();
   }
 
   async saveSettings() {
@@ -100,9 +103,7 @@ export class PersistenceBehavior {
       this.settings.moveNoteDownHotkey,
       DEFAULT_MOVE_NOTE_DOWN_HOTKEY
     );
-    if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== 'object') {
-      this.settings.tagSidebarPreferredFiles = {};
-    }
+    this.settings.tagSidebarPreferredFiles = Array.from(readPreferredFiles(this.settings.tagSidebarPreferredFiles));
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(

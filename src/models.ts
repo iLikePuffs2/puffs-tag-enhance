@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { normalizePath } from "obsidian";
 import { createDefaultSidebarToolbarButtons } from "./sidebar-toolbar";
+import { CURRENT_SCHEMA_VERSION } from "./data/schema";
 import {
   DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   normalizeHierarchySearchKeyword,
@@ -42,9 +43,10 @@ const DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD = 10;
 const NOTE_ORDER_LONG_PRESS_MS = 500;
 
 const DEFAULT_SETTINGS = {
+  schemaVersion: CURRENT_SCHEMA_VERSION,
   autoSwitchToOutlineEnabled: true,
   freezeSearchWhileComposing: true,
-  tagSidebarPreferredFiles: {},
+  tagSidebarPreferredFiles: [],
   noteOrderByTag: {},
   noteDisplayNameByTag: {},
   tagBoundNoteByTag: {},

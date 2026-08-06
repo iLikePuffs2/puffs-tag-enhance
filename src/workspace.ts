@@ -13,6 +13,7 @@ import {
   parseCurrentNoteTagSearch,
   parseHotkeyText
 } from "./models";
+import { readPreferredFiles } from "./data/schema";
 
 const LEGACY_TAG_SIDEBAR_COMMAND_ID = 'puffs-immersive-mode:toggle-tag-sidebar';
 
@@ -335,25 +336,26 @@ export class WorkspaceBehavior {
     }
   }
 
+  /** 偏好以路径数组保存；readPreferredFiles 同时兼容迁移前的对象形态。 */
+  getPreferredFileSet() {
+    return readPreferredFiles(this.settings.tagSidebarPreferredFiles);
+  }
+
   async setTagSidebarPreference(filePath, enabled) {
     if (!filePath) return;
 
-    const preferredFiles = this.settings.tagSidebarPreferredFiles || {};
-    const hasPreference = preferredFiles[filePath] === true;
-    if (enabled === hasPreference) return;
+    const preferred = this.getPreferredFileSet();
+    if (enabled === preferred.has(filePath)) return;
 
-    if (enabled) {
-      preferredFiles[filePath] = true;
-    } else {
-      delete preferredFiles[filePath];
-    }
+    if (enabled) preferred.add(filePath);
+    else preferred.delete(filePath);
 
-    this.settings.tagSidebarPreferredFiles = preferredFiles;
+    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
     await this.saveSettings();
   }
 
   hasTagSidebarPreference(filePath) {
-    return !!(filePath && this.settings.tagSidebarPreferredFiles && this.settings.tagSidebarPreferredFiles[filePath]);
+    return !!filePath && this.getPreferredFileSet().has(filePath);
   }
 
   applySidebarPreferenceForCurrentFile() {
@@ -460,11 +462,13 @@ export class WorkspaceBehavior {
   }
 
   handlePreferredFileRename(file, oldPath) {
-    if (!oldPath || !file || !file.path || !this.settings.tagSidebarPreferredFiles) return;
-    if (!this.settings.tagSidebarPreferredFiles[oldPath]) return;
+    if (!oldPath || !file || !file.path) return;
+    const preferred = this.getPreferredFileSet();
+    if (!preferred.has(oldPath)) return;
 
-    delete this.settings.tagSidebarPreferredFiles[oldPath];
-    this.settings.tagSidebarPreferredFiles[file.path] = true;
+    preferred.delete(oldPath);
+    preferred.add(file.path);
+    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
 
     if (this.currentMainFilePath === oldPath) {
       this.updateCurrentMainFilePath(file.path);
@@ -474,10 +478,12 @@ export class WorkspaceBehavior {
   }
 
   handlePreferredFileDelete(file) {
-    if (!file || !file.path || !this.settings.tagSidebarPreferredFiles) return;
-    if (!this.settings.tagSidebarPreferredFiles[file.path]) return;
+    if (!file || !file.path) return;
+    const preferred = this.getPreferredFileSet();
+    if (!preferred.has(file.path)) return;
 
-    delete this.settings.tagSidebarPreferredFiles[file.path];
+    preferred.delete(file.path);
+    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
     if (this.currentMainFilePath === file.path) {
       this.updateCurrentMainFilePath(null);
     }

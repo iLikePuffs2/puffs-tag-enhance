@@ -168,17 +168,19 @@ describe('笔记顺序对账', () => {
   });
 
   it('新笔记也可配置插入到最前', () => {
+    // 用 c 作为新笔记：插到最前得到 [c, b]，与默认序 [b, c] 不同，才不会被省略
     const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['b.md'] }, newNotePosition: 'start' });
-    behavior.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md'] }));
+    behavior.reconcileNoteOrders(indexOf({ '#读书': ['b.md', 'c.md'] }));
     expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
-      .noteOrderByTag['#读书']).toEqual(['a.md', 'b.md']);
+      .noteOrderByTag['#读书']).toEqual(['c.md', 'b.md']);
   });
 
   it('移除已不在标签下的笔记', () => {
-    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['a.md', 'b.md', 'c.md'] } });
+    // 保留的部分维持手工顺序 [c, a]（默认序是 [a, c]），确认删除不打乱剩余排列
+    const behavior = makeBehavior({ noteOrderByTag: { '#读书': ['c.md', 'b.md', 'a.md'] } });
     behavior.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'c.md'] }));
     expect((behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> })
-      .noteOrderByTag['#读书']).toEqual(['a.md', 'c.md']);
+      .noteOrderByTag['#读书']).toEqual(['c.md', 'a.md']);
   });
 
   it('刚变更的笔记排在其他新增笔记之后', () => {
@@ -189,11 +191,11 @@ describe('笔记顺序对账', () => {
   });
 
   it('返回值表示顺序是否发生变化', () => {
-    const unchanged = makeBehavior({ noteOrderByTag: { '#读书': ['a.md'] } });
-    expect(unchanged.reconcileNoteOrders(indexOf({ '#读书': ['a.md'] }))).toBe(false);
+    const unchanged = makeBehavior({ noteOrderByTag: { '#读书': ['b.md', 'a.md'] } });
+    expect(unchanged.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md'] }))).toBe(false);
 
-    const changed = makeBehavior({ noteOrderByTag: { '#读书': ['a.md'] } });
-    expect(changed.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md'] }))).toBe(true);
+    const changed = makeBehavior({ noteOrderByTag: { '#读书': ['b.md', 'a.md'] } });
+    expect(changed.reconcileNoteOrders(indexOf({ '#读书': ['a.md', 'b.md', 'c.md'] }))).toBe(true);
   });
 
   it('【已知数据风险】标签从索引消失时，其顺序记录被整体丢弃', () => {
@@ -204,14 +206,14 @@ describe('笔记顺序对账', () => {
     // 占总量比例很低（真实数据约 1.7%），本就不该被拦。安全阀防的是缓存未就绪
     // 导致的大面积误删，见 data/tag-store.test.ts。此处规模也低于样本下限。
     const behavior = makeBehavior({
-      noteOrderByTag: { '#读书': ['b.md', 'a.md'], '#科幻': ['c.md'] },
+      noteOrderByTag: { '#读书': ['b.md', 'a.md'], '#科幻': ['y.md', 'x.md'] },
     });
 
-    behavior.reconcileNoteOrders(indexOf({ '#科幻': ['c.md'] }));
+    behavior.reconcileNoteOrders(indexOf({ '#科幻': ['x.md', 'y.md'] }));
 
     const orders = (behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> }).noteOrderByTag;
     expect(orders['#读书']).toBeUndefined();
-    expect(orders['#科幻']).toEqual(['c.md']);
+    expect(orders['#科幻']).toEqual(['y.md', 'x.md']);
   });
 
   it('空顺序的标签不写入记录', () => {

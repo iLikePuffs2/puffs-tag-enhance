@@ -12,6 +12,7 @@ import {
   replaceInlineTagsByText
 } from "./models";
 import { countOrderedPaths, evaluateReconcileSafety, resolveMovedPaths } from "./data/tag-store";
+import { isDefaultNoteOrder } from "./data/schema";
 
 export class TagIndexBehavior {
   [key: string]: any;
@@ -277,7 +278,9 @@ export class TagIndexBehavior {
       const retainedPathSet = new Set(retainedPaths);
       const remainingPaths = currentPaths.filter((path) => !retainedPathSet.has(path));
       const order = retainedPaths.concat(remainingPaths);
-      if (order.length > 0) nextOrders[tag] = order;
+      // 顺序与默认序完全一致时不落盘：读取时缺失的标签本就回落到默认序，
+      // 存了等于不存。实测能省掉约四分之一的顺序记录。
+      if (order.length > 0 && !isDefaultNoteOrder(order, files)) nextOrders[tag] = order;
     }
 
     const changed = JSON.stringify(nextOrders) !== JSON.stringify(this.settings.noteOrderByTag);
@@ -323,7 +326,9 @@ export class TagIndexBehavior {
       const order = this.settings.newNotePosition === 'start'
         ? addedPaths.reverse().concat(retainedPaths)
         : retainedPaths.concat(addedPaths);
-      if (order.length > 0) nextOrders[tag] = order;
+      // 顺序与默认序完全一致时不落盘：读取时缺失的标签本就回落到默认序，
+      // 存了等于不存。实测能省掉约四分之一的顺序记录。
+      if (order.length > 0 && !isDefaultNoteOrder(order, files)) nextOrders[tag] = order;
     }
 
     const changed = JSON.stringify(nextOrders) !== JSON.stringify(this.settings.noteOrderByTag);

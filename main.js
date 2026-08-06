@@ -93,6 +93,91 @@ function getSidebarToolbarButtonLabel(id) {
   return ((_a = definitionById.get(id)) == null ? void 0 : _a.label) || id;
 }
 
+// src/data/schema.ts
+var CURRENT_SCHEMA_VERSION = 1;
+var migrateToV1 = {
+  version: 0,
+  description: "\u6E05\u7406\u7EE7\u627F\u540D\u5355\u6B7B\u6570\u636E\u3001\u4FA7\u8FB9\u680F\u504F\u597D\u6539\u6570\u7EC4",
+  migrate(data, { log }) {
+    var _a;
+    const inheritance = (_a = data == null ? void 0 : data.relations) == null ? void 0 : _a.tagInheritance;
+    if (inheritance) {
+      let removedEdges = 0;
+      let removedPaths = 0;
+      const isSelected = (parent, child) => {
+        var _a2, _b;
+        return ((_b = (_a2 = inheritance.modeByParentChild) == null ? void 0 : _a2[parent]) == null ? void 0 : _b[child]) === "selected";
+      };
+      const isFixed = (child) => {
+        var _a2;
+        return !!((_a2 = inheritance.fixedParentByChild) == null ? void 0 : _a2[child]);
+      };
+      for (const [key, keepWhenSelected] of [
+        ["includedPathsByParentChild", true],
+        ["excludedPathsByParentChild", false]
+      ]) {
+        const table = inheritance[key];
+        if (!table || typeof table !== "object") continue;
+        for (const [parent, children] of Object.entries(table)) {
+          if (!children || typeof children !== "object") continue;
+          for (const child of Object.keys(children)) {
+            const useful = !isFixed(child) && isSelected(parent, child) === keepWhenSelected;
+            if (useful) continue;
+            const paths = children[child];
+            removedPaths += Array.isArray(paths) ? paths.length : 0;
+            removedEdges += 1;
+            delete children[child];
+          }
+          if (Object.keys(children).length === 0) delete table[parent];
+        }
+      }
+      if (removedEdges > 0) {
+        log(`\u6E05\u7406\u7EE7\u627F\u540D\u5355\u6B7B\u6570\u636E\uFF1A${removedEdges} \u6761\u8FB9\u3001${removedPaths} \u6761\u8DEF\u5F84`);
+      }
+    }
+    const preferred = data == null ? void 0 : data.tagSidebarPreferredFiles;
+    if (preferred && !Array.isArray(preferred) && typeof preferred === "object") {
+      const paths = Object.entries(preferred).filter(([, enabled]) => enabled === true).map(([path]) => path);
+      data.tagSidebarPreferredFiles = paths;
+      log(`\u4FA7\u8FB9\u680F\u504F\u597D\u6539\u4E3A\u6570\u7EC4\uFF1A${paths.length} \u6761`);
+    }
+  }
+};
+var MIGRATIONS = [migrateToV1];
+function migrateSchema(data, log = () => {
+}) {
+  if (!data || typeof data !== "object") return false;
+  const from = Number.isInteger(data.schemaVersion) ? data.schemaVersion : 0;
+  if (from >= CURRENT_SCHEMA_VERSION) return false;
+  for (const migration of MIGRATIONS) {
+    if (migration.version < from) continue;
+    migration.migrate(data, { log });
+    log(`\u7ED3\u6784\u8FC1\u79FB v${migration.version} -> v${migration.version + 1}\uFF1A${migration.description}`);
+  }
+  data.schemaVersion = CURRENT_SCHEMA_VERSION;
+  return true;
+}
+function readPreferredFiles(value) {
+  if (Array.isArray(value)) return new Set(value.filter((path) => typeof path === "string" && path));
+  if (value && typeof value === "object") {
+    return new Set(
+      Object.entries(value).filter(([path, enabled]) => path && enabled === true).map(([path]) => path)
+    );
+  }
+  return /* @__PURE__ */ new Set();
+}
+function isDefaultNoteOrder(paths, files) {
+  if (paths.length !== files.length) return false;
+  const sorted = [...files].sort((a, b) => {
+    const byName = a.basename.localeCompare(b.basename, "zh-Hans-CN");
+    return byName || a.path.localeCompare(b.path, "zh-Hans-CN");
+  });
+  for (let index = 0; index < sorted.length; index += 1) {
+    if (sorted[index].path !== paths[index]) return false;
+  }
+  return true;
+}
+
 // src/relation-utils.ts
 function collectDirectedDescendants(adjacency, root) {
   const output = [];
@@ -348,9 +433,10 @@ var MAX_BACKUP_INTERVAL_MINUTES = Math.floor(2147483647 / 6e4);
 var DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD = 10;
 var NOTE_ORDER_LONG_PRESS_MS = 500;
 var DEFAULT_SETTINGS = {
+  schemaVersion: CURRENT_SCHEMA_VERSION,
   autoSwitchToOutlineEnabled: true,
   freezeSearchWhileComposing: true,
-  tagSidebarPreferredFiles: {},
+  tagSidebarPreferredFiles: [],
   noteOrderByTag: {},
   noteDisplayNameByTag: {},
   tagBoundNoteByTag: {},
@@ -3776,6 +3862,9 @@ var import_obsidian9 = require("obsidian");
 var PersistenceBehavior = class {
   async loadSettings() {
     const savedSettings = await this.loadData() || {};
+    const schemaChanged = migrateSchema(savedSettings, (message) => {
+      console.log("[Puffs Tag Enhance] " + message);
+    });
     const shouldPersistFixedHierarchyKeyword = Object.prototype.hasOwnProperty.call(savedSettings, "noteHierarchySearchKeyword") && savedSettings.noteHierarchySearchKeyword !== DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
     this.settings.freezeSearchWhileComposing = this.settings.freezeSearchWhileComposing !== false;
@@ -3788,9 +3877,7 @@ var PersistenceBehavior = class {
       this.settings.moveNoteDownHotkey,
       DEFAULT_MOVE_NOTE_DOWN_HOTKEY
     );
-    if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== "object") {
-      this.settings.tagSidebarPreferredFiles = {};
-    }
+    this.settings.tagSidebarPreferredFiles = Array.from(readPreferredFiles(this.settings.tagSidebarPreferredFiles));
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
@@ -3827,7 +3914,7 @@ var PersistenceBehavior = class {
     delete this.settings.listModeEnabled;
     delete this.settings.tagOrder;
     delete this.settings.backupFileName;
-    if (shouldPersistFixedHierarchyKeyword) await this.saveSettings();
+    if (shouldPersistFixedHierarchyKeyword || schemaChanged) await this.saveSettings();
   }
   async saveSettings() {
     var _a;
@@ -3848,9 +3935,7 @@ var PersistenceBehavior = class {
       this.settings.moveNoteDownHotkey,
       DEFAULT_MOVE_NOTE_DOWN_HOTKEY
     );
-    if (!this.settings.tagSidebarPreferredFiles || typeof this.settings.tagSidebarPreferredFiles !== "object") {
-      this.settings.tagSidebarPreferredFiles = {};
-    }
+    this.settings.tagSidebarPreferredFiles = Array.from(readPreferredFiles(this.settings.tagSidebarPreferredFiles));
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
@@ -4798,21 +4883,21 @@ var WorkspaceBehavior = class {
       this.setTagSidebarPreference(this.currentMainFilePath, false);
     }
   }
+  /** 偏好以路径数组保存；readPreferredFiles 同时兼容迁移前的对象形态。 */
+  getPreferredFileSet() {
+    return readPreferredFiles(this.settings.tagSidebarPreferredFiles);
+  }
   async setTagSidebarPreference(filePath, enabled) {
     if (!filePath) return;
-    const preferredFiles = this.settings.tagSidebarPreferredFiles || {};
-    const hasPreference = preferredFiles[filePath] === true;
-    if (enabled === hasPreference) return;
-    if (enabled) {
-      preferredFiles[filePath] = true;
-    } else {
-      delete preferredFiles[filePath];
-    }
-    this.settings.tagSidebarPreferredFiles = preferredFiles;
+    const preferred = this.getPreferredFileSet();
+    if (enabled === preferred.has(filePath)) return;
+    if (enabled) preferred.add(filePath);
+    else preferred.delete(filePath);
+    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
     await this.saveSettings();
   }
   hasTagSidebarPreference(filePath) {
-    return !!(filePath && this.settings.tagSidebarPreferredFiles && this.settings.tagSidebarPreferredFiles[filePath]);
+    return !!filePath && this.getPreferredFileSet().has(filePath);
   }
   applySidebarPreferenceForCurrentFile() {
     const requestId = ++this.sidebarSwitchRequestId;
@@ -4888,19 +4973,23 @@ var WorkspaceBehavior = class {
     return null;
   }
   handlePreferredFileRename(file, oldPath) {
-    if (!oldPath || !file || !file.path || !this.settings.tagSidebarPreferredFiles) return;
-    if (!this.settings.tagSidebarPreferredFiles[oldPath]) return;
-    delete this.settings.tagSidebarPreferredFiles[oldPath];
-    this.settings.tagSidebarPreferredFiles[file.path] = true;
+    if (!oldPath || !file || !file.path) return;
+    const preferred = this.getPreferredFileSet();
+    if (!preferred.has(oldPath)) return;
+    preferred.delete(oldPath);
+    preferred.add(file.path);
+    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
     if (this.currentMainFilePath === oldPath) {
       this.updateCurrentMainFilePath(file.path);
     }
     this.saveSettings();
   }
   handlePreferredFileDelete(file) {
-    if (!file || !file.path || !this.settings.tagSidebarPreferredFiles) return;
-    if (!this.settings.tagSidebarPreferredFiles[file.path]) return;
-    delete this.settings.tagSidebarPreferredFiles[file.path];
+    if (!file || !file.path) return;
+    const preferred = this.getPreferredFileSet();
+    if (!preferred.has(file.path)) return;
+    preferred.delete(file.path);
+    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
     if (this.currentMainFilePath === file.path) {
       this.updateCurrentMainFilePath(null);
     }
@@ -5303,7 +5392,7 @@ var TagIndexBehavior = class {
       const retainedPathSet = new Set(retainedPaths);
       const remainingPaths = currentPaths.filter((path) => !retainedPathSet.has(path));
       const order = retainedPaths.concat(remainingPaths);
-      if (order.length > 0) nextOrders[tag] = order;
+      if (order.length > 0 && !isDefaultNoteOrder(order, files)) nextOrders[tag] = order;
     }
     const changed = JSON.stringify(nextOrders) !== JSON.stringify(this.settings.noteOrderByTag);
     if (changed) this.settings.noteOrderByTag = nextOrders;
@@ -5331,7 +5420,7 @@ var TagIndexBehavior = class {
         addedPaths.push(path);
       }
       const order = this.settings.newNotePosition === "start" ? addedPaths.reverse().concat(retainedPaths) : retainedPaths.concat(addedPaths);
-      if (order.length > 0) nextOrders[tag] = order;
+      if (order.length > 0 && !isDefaultNoteOrder(order, files)) nextOrders[tag] = order;
     }
     const changed = JSON.stringify(nextOrders) !== JSON.stringify(this.settings.noteOrderByTag);
     if (!changed) {
