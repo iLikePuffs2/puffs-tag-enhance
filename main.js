@@ -245,113 +245,21 @@ function moveHierarchyNavigation(history, direction, current) {
   return { ...history.entries[nextIndex] };
 }
 
-// src/models.ts
-var TAG_VIEW_TYPE = "tag";
-var TAG_SHELF_VIEW_TYPE = "puffs-tag-shelf-view";
-var OUTLINE_VIEW_TYPE = "outline";
-var MARKDOWN_VIEW_TYPE = "markdown";
-var VIEW_SYNC_DELAY_MS = 30;
-var DEFAULT_QUICK_SEARCH_HOTKEY = "Ctrl + F";
-var DEFAULT_MOVE_NOTE_UP_HOTKEY = "Alt + Shift + \u2191";
-var DEFAULT_MOVE_NOTE_DOWN_HOTKEY = "Alt + Shift + \u2193";
-var LIST_MODE_ICON = "list-tree";
-var TAG_SYSTEM_ICON = LIST_MODE_ICON;
-var INITIAL_TAG_INDEX_REFRESH_DELAYS_MS = [0, 500, 1500, 3e3, 6e3];
-var BACKUP_FILE_NAME = "tag-data.md";
-var MAX_BACKUP_INTERVAL_MINUTES = Math.floor(2147483647 / 6e4);
-var DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD = 10;
-var DEFAULT_SETTINGS = {
-  autoSwitchToOutlineEnabled: true,
-  freezeSearchWhileComposing: true,
-  tagSidebarPreferredFiles: {},
-  noteOrderByTag: {},
-  noteDisplayNameByTag: {},
-  tagBoundNoteByTag: {},
-  newNotePosition: "end",
-  toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
-  moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,
-  moveNoteDownHotkey: DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
-  backupIntervalMinutes: 0,
-  backupFolderPath: "",
-  pinnedTag: null,
-  scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
-  noteHierarchySearchKeyword: DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
-  sidebarToolbarButtons: createDefaultSidebarToolbarButtons(),
-  relations: {
-    version: 6,
-    tagInheritance: {
-      childrenByParent: {},
-      enabledParents: [],
-      excludedPathsByParentChild: {},
-      modeByParentChild: {},
-      includedPathsByParentChild: {},
-      fixedParentByChild: {}
-    },
-    noteHierarchy: {
-      childrenByParentPath: {},
-      displayNamesByParentPath: {}
-    }
-  }
-};
+// src/core/tag-name.ts
 function normalizeTag(rawTag) {
   if (!rawTag) return null;
   const tag = String(rawTag).trim();
   if (!tag) return null;
   return tag.startsWith("#") ? tag : `#${tag}`;
 }
-function normalizeNewNotePosition(value) {
-  return value === "start" ? "start" : "end";
-}
-function normalizeBackupInterval(value) {
-  const minutes = Math.floor(Number(value));
-  if (!Number.isFinite(minutes) || minutes <= 0) return 0;
-  return Math.min(minutes, MAX_BACKUP_INTERVAL_MINUTES);
-}
-function normalizeScrollTopButtonThreshold(value) {
-  const threshold = Math.floor(Number(value));
-  if (!Number.isFinite(threshold)) return DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD;
-  return Math.max(0, threshold);
-}
-function normalizeBackupFolderPath(value) {
-  const text = String(value || "").trim().replace(/\\/g, "/");
-  if (!text) return "";
-  const segments = text.split("/").map((segment) => segment.trim()).filter((segment) => segment && segment !== ".");
-  if (segments.some((segment) => segment === ".." || segment.includes(":"))) return "";
-  return (0, import_obsidian.normalizePath)(segments.join("/"));
-}
-function normalizeBackupFileName(value) {
-  const text = String(value || "").trim();
-  if (!text) return BACKUP_FILE_NAME;
-  if (/[\\/:*?"<>|]/.test(text) || text === "." || text === "..") return BACKUP_FILE_NAME;
-  return text;
-}
-function getBackupPathParts(value) {
-  const normalizedPath = normalizeBackupFolderPath(value);
-  if (!normalizedPath) {
-    return {
-      folderPath: "",
-      fileName: BACKUP_FILE_NAME
-    };
-  }
-  const segments = normalizedPath.split("/");
-  const lastSegment = segments[segments.length - 1];
-  if (lastSegment.includes(".")) {
-    return {
-      folderPath: normalizeBackupFolderPath(segments.slice(0, -1).join("/")),
-      fileName: normalizeBackupFileName(lastSegment)
-    };
-  }
-  return {
-    folderPath: normalizedPath,
-    fileName: BACKUP_FILE_NAME
-  };
+function getTagDisplayName(tag) {
+  return String(tag || "").replace(/^#/, "");
 }
 function isNestedTag(tag) {
   return String(tag || "").includes("/");
 }
-function getTagDisplayName(tag) {
-  return String(tag || "").replace(/^#/, "");
-}
+
+// src/core/syntax.ts
 function normalizeSearchTerm(value) {
   return String(value || "").trim().replace(/^#/, "").toLowerCase();
 }
@@ -447,6 +355,102 @@ function createNoteCardSearchState() {
     lastScrolledKey: "",
     pendingScrollKey: "",
     effectTimer: null
+  };
+}
+
+// src/models.ts
+var TAG_VIEW_TYPE = "tag";
+var TAG_SHELF_VIEW_TYPE = "puffs-tag-shelf-view";
+var OUTLINE_VIEW_TYPE = "outline";
+var MARKDOWN_VIEW_TYPE = "markdown";
+var VIEW_SYNC_DELAY_MS = 30;
+var DEFAULT_QUICK_SEARCH_HOTKEY = "Ctrl + F";
+var DEFAULT_MOVE_NOTE_UP_HOTKEY = "Alt + Shift + \u2191";
+var DEFAULT_MOVE_NOTE_DOWN_HOTKEY = "Alt + Shift + \u2193";
+var LIST_MODE_ICON = "list-tree";
+var TAG_SYSTEM_ICON = LIST_MODE_ICON;
+var INITIAL_TAG_INDEX_REFRESH_DELAYS_MS = [0, 500, 1500, 3e3, 6e3];
+var BACKUP_FILE_NAME = "tag-data.md";
+var MAX_BACKUP_INTERVAL_MINUTES = Math.floor(2147483647 / 6e4);
+var DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD = 10;
+var DEFAULT_SETTINGS = {
+  autoSwitchToOutlineEnabled: true,
+  freezeSearchWhileComposing: true,
+  tagSidebarPreferredFiles: {},
+  noteOrderByTag: {},
+  noteDisplayNameByTag: {},
+  tagBoundNoteByTag: {},
+  newNotePosition: "end",
+  toggleSearchHotkey: DEFAULT_QUICK_SEARCH_HOTKEY,
+  moveNoteUpHotkey: DEFAULT_MOVE_NOTE_UP_HOTKEY,
+  moveNoteDownHotkey: DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
+  backupIntervalMinutes: 0,
+  backupFolderPath: "",
+  pinnedTag: null,
+  scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
+  noteHierarchySearchKeyword: DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
+  sidebarToolbarButtons: createDefaultSidebarToolbarButtons(),
+  relations: {
+    version: 6,
+    tagInheritance: {
+      childrenByParent: {},
+      enabledParents: [],
+      excludedPathsByParentChild: {},
+      modeByParentChild: {},
+      includedPathsByParentChild: {},
+      fixedParentByChild: {}
+    },
+    noteHierarchy: {
+      childrenByParentPath: {},
+      displayNamesByParentPath: {}
+    }
+  }
+};
+function normalizeNewNotePosition(value) {
+  return value === "start" ? "start" : "end";
+}
+function normalizeBackupInterval(value) {
+  const minutes = Math.floor(Number(value));
+  if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+  return Math.min(minutes, MAX_BACKUP_INTERVAL_MINUTES);
+}
+function normalizeScrollTopButtonThreshold(value) {
+  const threshold = Math.floor(Number(value));
+  if (!Number.isFinite(threshold)) return DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD;
+  return Math.max(0, threshold);
+}
+function normalizeBackupFolderPath(value) {
+  const text = String(value || "").trim().replace(/\\/g, "/");
+  if (!text) return "";
+  const segments = text.split("/").map((segment) => segment.trim()).filter((segment) => segment && segment !== ".");
+  if (segments.some((segment) => segment === ".." || segment.includes(":"))) return "";
+  return (0, import_obsidian.normalizePath)(segments.join("/"));
+}
+function normalizeBackupFileName(value) {
+  const text = String(value || "").trim();
+  if (!text) return BACKUP_FILE_NAME;
+  if (/[\\/:*?"<>|]/.test(text) || text === "." || text === "..") return BACKUP_FILE_NAME;
+  return text;
+}
+function getBackupPathParts(value) {
+  const normalizedPath = normalizeBackupFolderPath(value);
+  if (!normalizedPath) {
+    return {
+      folderPath: "",
+      fileName: BACKUP_FILE_NAME
+    };
+  }
+  const segments = normalizedPath.split("/");
+  const lastSegment = segments[segments.length - 1];
+  if (lastSegment.includes(".")) {
+    return {
+      folderPath: normalizeBackupFolderPath(segments.slice(0, -1).join("/")),
+      fileName: normalizeBackupFileName(lastSegment)
+    };
+  }
+  return {
+    folderPath: normalizedPath,
+    fileName: BACKUP_FILE_NAME
   };
 }
 function escapeRegExp(value) {
@@ -591,6 +595,139 @@ function formatHotkey(parsedHotkey) {
 }
 function normalizeHotkeyText(value, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
   return formatHotkey(parseHotkeyText(value, fallback));
+}
+
+// src/data/tag-store.ts
+var TagBrowseCache = class {
+  constructor() {
+    this.entries = /* @__PURE__ */ new Map();
+    this.hitCount = 0;
+    this.missCount = 0;
+  }
+  /** 命中则直接返回，未命中才调用 compute 并记入缓存。 */
+  resolve(tag, compute) {
+    if (this.entries.has(tag)) {
+      this.hitCount += 1;
+      return this.entries.get(tag);
+    }
+    this.missCount += 1;
+    const value = compute();
+    this.entries.set(tag, value);
+    return value;
+  }
+  invalidate() {
+    this.entries.clear();
+  }
+  /** 单个标签失效，用于关系仅影响局部时的精确失效。 */
+  invalidateTag(tag) {
+    this.entries.delete(tag);
+  }
+  get stats() {
+    return { hits: this.hitCount, misses: this.missCount, size: this.entries.size };
+  }
+  resetStats() {
+    this.hitCount = 0;
+    this.missCount = 0;
+  }
+};
+var MetadataRefreshScheduler = class {
+  constructor(run, delayMs = 150) {
+    this.run = run;
+    this.delayMs = delayMs;
+    this.timer = null;
+    this.pendingPaths = /* @__PURE__ */ new Set();
+  }
+  schedule(changedPath) {
+    if (changedPath) this.pendingPaths.add(changedPath);
+    if (this.timer !== null) return;
+    this.timer = globalThis.setTimeout(() => {
+      this.timer = null;
+      const paths = Array.from(this.pendingPaths);
+      this.pendingPaths.clear();
+      this.run(paths);
+    }, this.delayMs);
+  }
+  /** 立即执行挂起的刷新，用于需要同步结果的场合（如标签改名后）。 */
+  flush() {
+    if (this.timer === null) return;
+    globalThis.clearTimeout(this.timer);
+    this.timer = null;
+    const paths = Array.from(this.pendingPaths);
+    this.pendingPaths.clear();
+    this.run(paths);
+  }
+  cancel() {
+    if (this.timer !== null) globalThis.clearTimeout(this.timer);
+    this.timer = null;
+    this.pendingPaths.clear();
+  }
+  get hasPending() {
+    return this.timer !== null;
+  }
+};
+var RECONCILE_REMOVAL_LIMIT = 0.3;
+var RECONCILE_GUARD_MIN_SAMPLE = 20;
+function evaluateReconcileSafety(previousPathCount, nextPathCount, limit = RECONCILE_REMOVAL_LIMIT, minSample = RECONCILE_GUARD_MIN_SAMPLE) {
+  const removedCount = Math.max(0, previousPathCount - nextPathCount);
+  const removedRatio = previousPathCount > 0 ? removedCount / previousPathCount : 0;
+  if (previousPathCount === 0) {
+    return { safe: true, removedRatio: 0, removedCount, totalCount: previousPathCount, reason: "\u65E0\u65E2\u6709\u8BB0\u5F55" };
+  }
+  if (removedCount === 0) {
+    return { safe: true, removedRatio, removedCount, totalCount: previousPathCount, reason: "\u6CA1\u6709\u8BB0\u5F55\u88AB\u6E05\u7406" };
+  }
+  if (previousPathCount < minSample) {
+    return {
+      safe: true,
+      removedRatio,
+      removedCount,
+      totalCount: previousPathCount,
+      reason: `\u8BB0\u5F55\u4EC5 ${previousPathCount} \u6761\uFF0C\u4F4E\u4E8E ${minSample} \u6761\u6837\u672C\u4E0B\u9650\uFF0C\u4E0D\u505A\u6BD4\u4F8B\u5224\u65AD`
+    };
+  }
+  if (removedRatio > limit) {
+    return {
+      safe: false,
+      removedRatio,
+      removedCount,
+      totalCount: previousPathCount,
+      reason: `\u672C\u6B21\u5C06\u6E05\u7406 ${removedCount}/${previousPathCount} \u6761\u987A\u5E8F\u8BB0\u5F55\uFF08${(removedRatio * 100).toFixed(1)}%\uFF09\uFF0C\u8D85\u8FC7 ${(limit * 100).toFixed(0)}% \u9608\u503C\uFF0C\u5224\u5B9A\u4E3A\u5143\u6570\u636E\u7F13\u5B58\u672A\u5C31\u7EEA`
+    };
+  }
+  return { safe: true, removedRatio, removedCount, totalCount: previousPathCount, reason: "\u6E05\u7406\u6BD4\u4F8B\u5728\u9608\u503C\u5185" };
+}
+function countOrderedPaths(orderByTag) {
+  if (!orderByTag) return 0;
+  let total = 0;
+  for (const paths of Object.values(orderByTag)) {
+    if (Array.isArray(paths)) total += paths.length;
+  }
+  return total;
+}
+function resolveMovedPaths(missingPaths, candidatePaths) {
+  const result = /* @__PURE__ */ new Map();
+  if (missingPaths.length === 0 || candidatePaths.length === 0) return result;
+  const basename = (path) => {
+    const file = path.split("/").pop() || path;
+    return file.replace(/\.[^.]+$/, "");
+  };
+  const candidatesByName = /* @__PURE__ */ new Map();
+  for (const path of candidatePaths) {
+    const name = basename(path);
+    const list = candidatesByName.get(name);
+    if (list) list.push(path);
+    else candidatesByName.set(name, [path]);
+  }
+  const claimed = /* @__PURE__ */ new Set();
+  for (const missing of missingPaths) {
+    const matches = candidatesByName.get(basename(missing));
+    if (!matches || matches.length !== 1) continue;
+    const target = matches[0];
+    if (claimed.has(target)) continue;
+    claimed.add(target);
+    result.set(missing, target);
+  }
+  return result;
 }
 
 // src/views.ts
@@ -1299,6 +1436,8 @@ var PersistenceBehavior = class {
     if (shouldPersistFixedHierarchyKeyword) await this.saveSettings();
   }
   async saveSettings() {
+    var _a;
+    (_a = this.tagBrowseCache) == null ? void 0 : _a.invalidate();
     this.settingsSavePromise = this.settingsSavePromise.catch(() => {
     }).then(() => this.saveData(this.settings));
     await this.settingsSavePromise;
@@ -3058,13 +3197,24 @@ var TagIndexBehavior = class {
       this.queueInitialTagIndexRefreshes();
     });
   }
+  /**
+   * 元数据变更入口。原实现每收到一个 changed 事件就全量重建索引（遍历 2191 个文件），
+   * 批量保存或仓库同步时会连续触发数十次。现在交给调度器按 150ms 窗口合并，
+   * 窗口内累积的路径一并交给顺序对账。
+   */
   scheduleMetadataRefresh(file) {
     const changedPath = file instanceof import_obsidian7.TFile && file.extension === "md" ? file.path : null;
-    this.refreshTagIndexAndViews(changedPath);
+    this.metadataRefreshScheduler.schedule(changedPath);
+  }
+  runScheduledMetadataRefresh(changedPaths = []) {
+    if (this.isUnloaded) return;
+    this.refreshTagIndexAndViews(changedPaths);
     this.finishTagRenameProtectionIfSettled();
   }
   refreshTagIndexAndViews(changedPath = null) {
+    var _a;
     if (this.isUnloaded) return;
+    (_a = this.tagBrowseCache) == null ? void 0 : _a.invalidate();
     const noteOrderChanged = this.rebuildTagFileIndex(changedPath);
     if (noteOrderChanged) {
       this.saveSettings().catch((error) => {
@@ -3218,24 +3368,49 @@ var TagIndexBehavior = class {
   }
   reconcileNoteOrders(nextIndex, changedPath = null) {
     const nextOrders = {};
+    const changedPaths = Array.isArray(changedPath) ? changedPath.filter(Boolean) : changedPath ? [changedPath] : [];
     for (const tag of this.getStableNoteOrderTags(nextIndex)) {
       const files = nextIndex.get(tag) || [];
       const currentPaths = files.map((file) => file.path);
       const currentPathSet = new Set(currentPaths);
       const savedOrder = Array.isArray(this.settings.noteOrderByTag[tag]) ? this.settings.noteOrderByTag[tag] : [];
-      const retainedPaths = savedOrder.filter((path) => currentPathSet.has(path));
       const savedPathSet = new Set(savedOrder);
-      const addedPaths = currentPaths.filter((path) => !savedPathSet.has(path));
-      if (changedPath && addedPaths.includes(changedPath)) {
-        addedPaths.splice(addedPaths.indexOf(changedPath), 1);
-        addedPaths.push(changedPath);
+      const rawAddedPaths = currentPaths.filter((path) => !savedPathSet.has(path));
+      const missingPaths = savedOrder.filter((path) => !currentPathSet.has(path));
+      const movedPaths = resolveMovedPaths(missingPaths, rawAddedPaths);
+      const retainedPaths = savedOrder.map((path) => currentPathSet.has(path) ? path : movedPaths.get(path)).filter(Boolean);
+      const movedTargets = new Set(movedPaths.values());
+      const addedPaths = rawAddedPaths.filter((path) => !movedTargets.has(path));
+      for (const path of changedPaths) {
+        const index = addedPaths.indexOf(path);
+        if (index < 0) continue;
+        addedPaths.splice(index, 1);
+        addedPaths.push(path);
       }
       const order = this.settings.newNotePosition === "start" ? addedPaths.reverse().concat(retainedPaths) : retainedPaths.concat(addedPaths);
       if (order.length > 0) nextOrders[tag] = order;
     }
     const changed = JSON.stringify(nextOrders) !== JSON.stringify(this.settings.noteOrderByTag);
-    if (changed) this.settings.noteOrderByTag = nextOrders;
-    return changed;
+    if (!changed) {
+      this.blockedReconcileSignature = null;
+      return false;
+    }
+    const verdict = evaluateReconcileSafety(
+      countOrderedPaths(this.settings.noteOrderByTag),
+      countOrderedPaths(nextOrders)
+    );
+    if (!verdict.safe) {
+      const signature = JSON.stringify(nextOrders);
+      if (this.blockedReconcileSignature !== signature) {
+        this.blockedReconcileSignature = signature;
+        console.warn(`[Puffs Tag Enhance] \u987A\u5E8F\u5BF9\u8D26\u5B89\u5168\u9600\u5DF2\u62E6\u4E0B\u672C\u6B21\u5199\u5165\uFF1A${verdict.reason}`);
+        return false;
+      }
+      console.warn(`[Puffs Tag Enhance] \u987A\u5E8F\u5BF9\u8D26\u5B89\u5168\u9600\u4E8C\u6B21\u786E\u8BA4\uFF0C\u653E\u884C\u672C\u6B21\u6E05\u7406\uFF1A${verdict.reason}`);
+    }
+    this.blockedReconcileSignature = null;
+    this.settings.noteOrderByTag = nextOrders;
+    return true;
   }
   getExactTagsForFile(file) {
     const cache = this.app.metadataCache.getFileCache(file);
@@ -7451,10 +7626,12 @@ var RelationsBehavior = class {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, "selected");
       const paths = freeCandidates.filter((candidate) => currentVisible.has(candidate.path)).map((candidate) => candidate.path);
       this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : void 0);
+      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, void 0);
     } else {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, void 0);
       const paths = freeCandidates.filter((candidate) => !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
       this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.length ? paths : void 0);
+      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, void 0);
     }
     this.propagateNewlyAllowedPathsToAncestors(
       parent,
@@ -7766,7 +7943,18 @@ var RelationsBehavior = class {
     this.refreshTagViews();
     this.refreshTagShelfViews();
   }
+  /**
+   * 标签浏览数据。计算涉及继承分支遍历与继承树构建，开销不小，而一次渲染中
+   * 同一标签会被 renderListMode、updateListModeExpandAllButton、toggleAllListModeTags
+   * 各自问一遍（150 标签实测 450–600 次）。这里走批次缓存，失效点见 data/tag-store.ts。
+   */
   getTagBrowseData(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag) return this.computeTagBrowseData(tagValue);
+    if (!this.tagBrowseCache) return this.computeTagBrowseData(tagValue);
+    return this.tagBrowseCache.resolve(tag, () => this.computeTagBrowseData(tagValue));
+  }
+  computeTagBrowseData(tagValue) {
     var _a;
     const tag = normalizeTag(tagValue);
     if (!tag) return { tag: null, files: [], exactFiles: [], inheritedFiles: [], sourcesByPath: /* @__PURE__ */ new Map(), inheritanceTree: null };
@@ -8095,6 +8283,10 @@ var PuffsTagEnhancePlugin = class extends import_obsidian12.Plugin {
     super(app, manifest);
     this.settings = { ...DEFAULT_SETTINGS };
     this.tagFileIndex = /* @__PURE__ */ new Map();
+    this.tagBrowseCache = new TagBrowseCache();
+    this.metadataRefreshScheduler = new MetadataRefreshScheduler(
+      (changedPaths) => this.runScheduledMetadataRefresh(changedPaths)
+    );
     this.expandedTags = /* @__PURE__ */ new Set();
     this.collapsedInlineHierarchyBranches = /* @__PURE__ */ new Set();
     this.inlineHierarchyExpansionVersion = 0;
@@ -8156,6 +8348,8 @@ var PuffsTagEnhancePlugin = class extends import_obsidian12.Plugin {
   }
   onunload() {
     this.isUnloaded = true;
+    this.metadataRefreshScheduler.cancel();
+    this.tagBrowseCache.invalidate();
     this.deactivateNoteOrderHotkeyScope();
     if (this.tagOrderModeVisibilityTimer) {
       globalThis.clearTimeout(this.tagOrderModeVisibilityTimer);

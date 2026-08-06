@@ -1,5 +1,6 @@
 import { App, Plugin } from "obsidian";
 import { DEFAULT_SETTINGS, TAG_SHELF_VIEW_TYPE, TAG_SYSTEM_ICON } from "./models";
+import { MetadataRefreshScheduler, TagBrowseCache } from "./data/tag-store";
 import { PuffsTagShelfView } from "./views";
 import { PuffsTagEnhanceSettingTab } from "./settings";
 import { PersistenceBehavior } from "./persistence";
@@ -16,6 +17,11 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     this.settings = { ...DEFAULT_SETTINGS };
     this.tagFileIndex = new Map();
+    // 数据层：标签浏览数据的批次缓存，失效点见 data/tag-store.ts 的说明
+    this.tagBrowseCache = new TagBrowseCache();
+    this.metadataRefreshScheduler = new MetadataRefreshScheduler(
+      (changedPaths) => this.runScheduledMetadataRefresh(changedPaths)
+    );
     this.expandedTags = new Set();
     this.collapsedInlineHierarchyBranches = new Set();
     this.inlineHierarchyExpansionVersion = 0;
@@ -82,6 +88,8 @@ class PuffsTagEnhancePlugin extends Plugin {
 
   onunload() {
     this.isUnloaded = true;
+    this.metadataRefreshScheduler.cancel();
+    this.tagBrowseCache.invalidate();
     this.deactivateNoteOrderHotkeyScope();
     if (this.tagOrderModeVisibilityTimer) {
       globalThis.clearTimeout(this.tagOrderModeVisibilityTimer);

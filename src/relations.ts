@@ -1687,6 +1687,9 @@ export class RelationsBehavior {
         const freePaths = new Set(this.getInheritanceCandidates(parent, child)
           .filter((candidate) => !candidate.fixed)
           .map((candidate) => candidate.path));
+        // 这里只按"路径是否仍是自由候选"过滤，不按当前模式丢弃另一侧名单：
+        // v4 数据迁移会有意同时搬迁两侧（见 relations-behavior.test.ts 的 v4 迁移用例），
+        // 按模式清理会破坏那条契约。真正的死数据来源已在 setTagInheritanceMode 处堵住。
         for (const key of ['excludedPathsByParentChild', 'includedPathsByParentChild']) {
           const nextPaths = (inheritance[key][parent]?.[child] || []).filter((path) => freePaths.has(path));
           this.setParentChildValue(inheritance[key], parent, child, nextPaths.length ? nextPaths : undefined);
@@ -1765,14 +1768,19 @@ export class RelationsBehavior {
     inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
+    // 切换模式时按"保持当前可见集合"重算目标侧名单，并清掉另一侧 ——
+    // 另一侧在新模式下不再被读取（见 isInheritanceEdgePathVisible），留着就是死数据，
+    // 且会在日后切回时冒出陈旧的放行/排除记录。
     if (mode === 'selected') {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, 'selected');
       const paths = freeCandidates.filter((candidate) => currentVisible.has(candidate.path)).map((candidate) => candidate.path);
       this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : undefined);
+      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, undefined);
     } else {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, undefined);
       const paths = freeCandidates.filter((candidate) => !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
       this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.length ? paths : undefined);
+      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, undefined);
     }
     this.propagateNewlyAllowedPathsToAncestors(
       parent,
@@ -2108,7 +2116,19 @@ export class RelationsBehavior {
     this.refreshTagShelfViews();
   }
 
+  /**
+   * 标签浏览数据。计算涉及继承分支遍历与继承树构建，开销不小，而一次渲染中
+   * 同一标签会被 renderListMode、updateListModeExpandAllButton、toggleAllListModeTags
+   * 各自问一遍（150 标签实测 450–600 次）。这里走批次缓存，失效点见 data/tag-store.ts。
+   */
   getTagBrowseData(tagValue) {
+    const tag = normalizeTag(tagValue);
+    if (!tag) return this.computeTagBrowseData(tagValue);
+    if (!this.tagBrowseCache) return this.computeTagBrowseData(tagValue);
+    return this.tagBrowseCache.resolve(tag, () => this.computeTagBrowseData(tagValue));
+  }
+
+  computeTagBrowseData(tagValue) {
     const tag = normalizeTag(tagValue);
     if (!tag) return { tag: null, files: [], exactFiles: [], inheritedFiles: [], sourcesByPath: new Map(), inheritanceTree: null };
     const branchData = this.getInheritanceBranchData(tag);

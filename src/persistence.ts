@@ -81,6 +81,8 @@ export class PersistenceBehavior {
   }
 
   async saveSettings() {
+    // 关系、笔记顺序等都经由这里落盘，因此这是标签浏览数据缓存的完备失效点之一
+    this.tagBrowseCache?.invalidate();
     this.settingsSavePromise = this.settingsSavePromise
       .catch(() => {})
       .then(() => this.saveData(this.settings));

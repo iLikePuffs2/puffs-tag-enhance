@@ -5,6 +5,22 @@ import {
   DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   normalizeHierarchySearchKeyword,
 } from "./relation-utils";
+// 搜索语法与标签名工具已迁入 core/，这里转发以保持既有 import 可用（阶段 5 清理）
+import { getTagDisplayName, isNestedTag, normalizeTag } from "./core/tag-name";
+import {
+  createMultiTagSearchQuery,
+  createNoteCardSearchState,
+  createTagFilterSearchQuery,
+  fileMatchesNoteSearch,
+  getTagFilterQuery,
+  normalizeSearchTerm,
+  parseCurrentNoteTagSearch,
+  parseNoteCardSearch,
+  splitIntersectionSearchTerms,
+  splitUnionSearchTerms,
+  tagMatchesAnySearchTerm,
+  tagMatchesSearchText,
+} from "./core/syntax";
 
 const TAG_VIEW_TYPE = 'tag';
 const TAG_SHELF_VIEW_TYPE = 'puffs-tag-shelf-view';
@@ -54,15 +70,6 @@ const DEFAULT_SETTINGS = {
     },
   },
 };
-
-function normalizeTag(rawTag) {
-  if (!rawTag) return null;
-
-  const tag = String(rawTag).trim();
-  if (!tag) return null;
-
-  return tag.startsWith('#') ? tag : `#${tag}`;
-}
 
 function normalizeNewNotePosition(value) {
   return value === 'start' ? 'start' : 'end';
@@ -120,136 +127,6 @@ function getBackupPathParts(value) {
   return {
     folderPath: normalizedPath,
     fileName: BACKUP_FILE_NAME,
-  };
-}
-
-function isNestedTag(tag) {
-  return String(tag || '').includes('/');
-}
-
-function getTagDisplayName(tag) {
-  return String(tag || '').replace(/^#/, '');
-}
-
-function normalizeSearchTerm(value) {
-  return String(value || '').trim().replace(/^#/, '').toLowerCase();
-}
-
-function parseNoteCardSearch(value) {
-  const text = String(value || '');
-  const firstDelimiter = text.indexOf('*');
-  if (firstDelimiter < 0) return null;
-
-  const tagQuery = text.slice(0, firstDelimiter).trim();
-  const noteQuery = text.slice(firstDelimiter + 1).trim();
-  const hasSingleDelimiter = firstDelimiter === text.lastIndexOf('*');
-  const mixesTagOperators = tagQuery.includes('|') && tagQuery.includes('&');
-
-  return {
-    tagQuery,
-    noteQuery,
-    isValid: !!tagQuery && !!noteQuery && hasSingleDelimiter && !mixesTagOperators,
-    isTagOnly: !!tagQuery && !noteQuery && hasSingleDelimiter && !mixesTagOperators,
-  };
-}
-
-function getTagFilterQuery(value) {
-  const noteCardSearch = parseNoteCardSearch(value);
-  return noteCardSearch ? noteCardSearch.tagQuery : String(value || '');
-}
-
-function parseCurrentNoteTagSearch(value) {
-  const text = String(value || '').trim();
-  return { matched: text === '：：' || text === '::' };
-}
-
-function fileMatchesNoteSearch(file, value, displayName = '') {
-  const term = String(value || '').trim().toLowerCase();
-  if (!term) return false;
-
-  const fileName = String((file && file.basename) || '').toLowerCase();
-  const visibleName = String(displayName || '').toLowerCase();
-  return fileName.includes(term) || (!!visibleName && visibleName.includes(term));
-}
-
-function splitUnionSearchTerms(value) {
-  const text = String(value || '');
-  if (!text.includes('|') || text.includes('&')) return null;
-
-  const terms = text
-    .split('|')
-    .map(normalizeSearchTerm)
-    .filter(Boolean);
-
-  return terms.length > 0 ? Array.from(new Set(terms)) : null;
-}
-
-function splitIntersectionSearchTerms(value) {
-  const text = String(value || '');
-  if (!text.includes('&') || text.includes('|')) return null;
-
-  const parts = text.split('&').map(normalizeSearchTerm);
-  const isTrailingSuggestionSearch = parts.length === 2 && parts[0] && !parts[1];
-  if (isTrailingSuggestionSearch) return [parts[0]];
-
-  const terms = parts.filter(Boolean);
-  return terms.length >= 2 ? terms : null;
-}
-
-function tagMatchesAnySearchTerm(tag, terms) {
-  if (!terms) return true;
-
-  const tagName = getTagDisplayName(tag).toLowerCase();
-  const tagText = String(tag || '').toLowerCase();
-  return terms.some((term) => tagName.includes(term) || tagText.includes(term));
-}
-
-function tagMatchesSearchText(tag, value) {
-  const term = String(value || '').trim().replace(/^#/, '').toLowerCase();
-  if (!term) return true;
-
-  const tagName = getTagDisplayName(tag).toLowerCase();
-  const tagText = String(tag || '').toLowerCase();
-  return tagName.includes(term) || tagText.includes(term);
-}
-
-function createMultiTagSearchQuery(query, terms) {
-  return {
-    query,
-    matcher: true,
-    matchContent: (content) => tagMatchesAnySearchTerm(content, terms),
-  };
-}
-
-function createTagFilterSearchQuery(query, tagQuery) {
-  const unionTerms = splitUnionSearchTerms(tagQuery);
-  const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
-  const mixesTagOperators = tagQuery.includes('|') && tagQuery.includes('&');
-
-  return {
-    query,
-    matcher: true,
-    matchContent: (content) => {
-      if (mixesTagOperators) return false;
-      if (unionTerms || intersectionTerms) {
-        return tagMatchesAnySearchTerm(content, unionTerms || intersectionTerms);
-      }
-      return tagMatchesSearchText(content, tagQuery);
-    },
-  };
-}
-
-function createNoteCardSearchState() {
-  return {
-    query: '',
-    matches: [],
-    activeIndex: -1,
-    target: null,
-    autoExpandedTag: null,
-    autoExpandedWasAlreadyExpanded: false,
-    lastScrolledKey: '',
-    pendingScrollKey: '',
-    effectTimer: null,
   };
 }
 

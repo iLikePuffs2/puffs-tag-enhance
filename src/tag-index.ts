@@ -12,6 +12,7 @@ import {
   replaceInlineTagsByCache,
   replaceInlineTagsByText
 } from "./models";
+import { countOrderedPaths, evaluateReconcileSafety, resolveMovedPaths } from "./data/tag-store";
 
 export class TagIndexBehavior {
   [key: string]: any;
@@ -74,15 +75,27 @@ export class TagIndexBehavior {
     });
   }
 
+  /**
+   * 元数据变更入口。原实现每收到一个 changed 事件就全量重建索引（遍历 2191 个文件），
+   * 批量保存或仓库同步时会连续触发数十次。现在交给调度器按 150ms 窗口合并，
+   * 窗口内累积的路径一并交给顺序对账。
+   */
   scheduleMetadataRefresh(file) {
     const changedPath = file instanceof TFile && file.extension === 'md' ? file.path : null;
-    this.refreshTagIndexAndViews(changedPath);
+    this.metadataRefreshScheduler.schedule(changedPath);
+  }
+
+  runScheduledMetadataRefresh(changedPaths = []) {
+    if (this.isUnloaded) return;
+    this.refreshTagIndexAndViews(changedPaths);
     this.finishTagRenameProtectionIfSettled();
   }
 
   refreshTagIndexAndViews(changedPath = null) {
     if (this.isUnloaded) return;
 
+    // 索引即将变化，标签浏览数据的缓存全部作废
+    this.tagBrowseCache?.invalidate();
     const noteOrderChanged = this.rebuildTagFileIndex(changedPath);
     if (noteOrderChanged) {
       this.saveSettings().catch((error) => {
@@ -280,6 +293,10 @@ export class TagIndexBehavior {
 
   reconcileNoteOrders(nextIndex, changedPath = null) {
     const nextOrders = {};
+    // 防抖后一个窗口内可能有多个文件变更，统一按数组处理（仍兼容单个字符串）
+    const changedPaths = Array.isArray(changedPath)
+      ? changedPath.filter(Boolean)
+      : (changedPath ? [changedPath] : []);
 
     for (const tag of this.getStableNoteOrderTags(nextIndex)) {
       const files = nextIndex.get(tag) || [];
@@ -288,13 +305,25 @@ export class TagIndexBehavior {
       const savedOrder = Array.isArray(this.settings.noteOrderByTag[tag])
         ? this.settings.noteOrderByTag[tag]
         : [];
-      const retainedPaths = savedOrder.filter((path) => currentPathSet.has(path));
       const savedPathSet = new Set(savedOrder);
-      const addedPaths = currentPaths.filter((path) => !savedPathSet.has(path));
+      const rawAddedPaths = currentPaths.filter((path) => !savedPathSet.has(path));
 
-      if (changedPath && addedPaths.includes(changedPath)) {
-        addedPaths.splice(addedPaths.indexOf(changedPath), 1);
-        addedPaths.push(changedPath);
+      // 插件关闭期间移动过的笔记，旧路径已失效、新路径看起来像新增。
+      // 按文件名唯一匹配把顺序迁移过去，保住原有排序位置。
+      const missingPaths = savedOrder.filter((path) => !currentPathSet.has(path));
+      const movedPaths = resolveMovedPaths(missingPaths, rawAddedPaths);
+      const retainedPaths = savedOrder
+        .map((path) => (currentPathSet.has(path) ? path : movedPaths.get(path)))
+        .filter(Boolean);
+      const movedTargets = new Set(movedPaths.values());
+      const addedPaths = rawAddedPaths.filter((path) => !movedTargets.has(path));
+
+      // 刚变更的笔记排在其他新增之后
+      for (const path of changedPaths) {
+        const index = addedPaths.indexOf(path);
+        if (index < 0) continue;
+        addedPaths.splice(index, 1);
+        addedPaths.push(path);
       }
 
       const order = this.settings.newNotePosition === 'start'
@@ -304,8 +333,32 @@ export class TagIndexBehavior {
     }
 
     const changed = JSON.stringify(nextOrders) !== JSON.stringify(this.settings.noteOrderByTag);
-    if (changed) this.settings.noteOrderByTag = nextOrders;
-    return changed;
+    if (!changed) {
+      this.blockedReconcileSignature = null;
+      return false;
+    }
+
+    // 安全阀：元数据缓存未就绪时会短暂查不到大量文件，照常对账会把它们当作已删除、
+    // 连带丢弃手工排序。清理比例过高就先拦下，等下一轮再看。
+    const verdict = evaluateReconcileSafety(
+      countOrderedPaths(this.settings.noteOrderByTag),
+      countOrderedPaths(nextOrders)
+    );
+    if (!verdict.safe) {
+      const signature = JSON.stringify(nextOrders);
+      if (this.blockedReconcileSignature !== signature) {
+        // 首次拦下并记住结果；若下一轮得到完全相同的结果，说明不是瞬时异常而是
+        // 用户真的批量删除了笔记，那时再放行，避免安全阀永久阻塞对账。
+        this.blockedReconcileSignature = signature;
+        console.warn(`[Puffs Tag Enhance] 顺序对账安全阀已拦下本次写入：${verdict.reason}`);
+        return false;
+      }
+      console.warn(`[Puffs Tag Enhance] 顺序对账安全阀二次确认，放行本次清理：${verdict.reason}`);
+    }
+
+    this.blockedReconcileSignature = null;
+    this.settings.noteOrderByTag = nextOrders;
+    return true;
   }
 
   getExactTagsForFile(file) {
