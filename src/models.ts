@@ -24,6 +24,8 @@ import {
 
 const TAG_VIEW_TYPE = 'tag';
 const TAG_SHELF_VIEW_TYPE = 'puffs-tag-shelf-view';
+/** 自绘的标签侧边栏。取代寄生在核心插件 tag-pane 上的旧实现。 */
+const TAG_SIDEBAR_VIEW_TYPE = 'puffs-tag-sidebar';
 const OUTLINE_VIEW_TYPE = 'outline';
 const MARKDOWN_VIEW_TYPE = 'markdown';
 const VIEW_SYNC_DELAY_MS = 30;
@@ -54,6 +56,8 @@ const DEFAULT_SETTINGS = {
   scrollTopButtonThreshold: DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD,
   noteHierarchySearchKeyword: DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   sidebarToolbarButtons: createDefaultSidebarToolbarButtons(),
+  // 一次性布局迁移标记：把核心插件的标签页换成自绘视图后置位
+  sidebarLayoutMigrated: false,
   relations: {
     version: 6,
     tagInheritance: {
@@ -319,6 +323,7 @@ function normalizeHotkeyText(value, fallback = DEFAULT_QUICK_SEARCH_HOTKEY) {
 export {
   TAG_VIEW_TYPE,
   TAG_SHELF_VIEW_TYPE,
+  TAG_SIDEBAR_VIEW_TYPE,
   OUTLINE_VIEW_TYPE,
   MARKDOWN_VIEW_TYPE,
   VIEW_SYNC_DELAY_MS,

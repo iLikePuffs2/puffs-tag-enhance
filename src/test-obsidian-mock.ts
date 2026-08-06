@@ -181,6 +181,46 @@ export const getAllTags = (cache: unknown): string[] | null => {
   return result;
 };
 
+export class Component {
+  registerEvent(): void {}
+  register(): void {}
+  registerDomEvent(): void {}
+  addChild<T>(child: T): T {
+    return child;
+  }
+}
+
+/**
+ * 视图基类的最小替身。
+ *
+ * 只提供 class extends 所需的骨架与 containerEl/contentEl/scope，不模拟 Obsidian
+ * 的生命周期（onOpen/onClose 由被测代码自己定义）。无 DOM 环境下退化为空对象，
+ * 这样纯逻辑测试用 Object.create(prototype) 时不受影响。
+ */
+export class View extends Component {
+  containerEl: HTMLElement;
+  contentEl: HTMLElement;
+  scope = new Scope();
+  app: unknown;
+  leaf: unknown;
+
+  constructor(leaf?: unknown) {
+    super();
+    this.leaf = leaf;
+    this.app = (leaf as { app?: unknown })?.app;
+    if (typeof document === 'undefined') {
+      this.containerEl = {} as HTMLElement;
+      this.contentEl = {} as HTMLElement;
+      return;
+    }
+    this.containerEl = document.createElement('div');
+    this.contentEl = document.createElement('div');
+    this.containerEl.appendChild(this.contentEl);
+  }
+}
+
+export class ItemView extends View {}
+
 export class SearchComponent {
   containerEl: HTMLElement;
   inputEl: HTMLInputElement;

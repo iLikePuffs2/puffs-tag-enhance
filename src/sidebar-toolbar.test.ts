@@ -18,25 +18,21 @@ describe('侧边栏顶栏按钮配置', () => {
       { id: 'unknown', visible: true },
       { id: 'note-hierarchy', visible: true },
       { id: 'scroll-top', visible: true },
-      { id: 'sort', visible: 'no' },
     ]);
     expect(result.find((item) => item.id === 'scroll-top')).toEqual({ id: 'scroll-top', visible: false });
-    expect(result.find((item) => item.id === 'sort')).toEqual({ id: 'sort', visible: true });
     expect(result.some((item) => String(item.id) === 'unknown')).toBe(false);
     expect(result.some((item) => String(item.id) === 'note-hierarchy')).toBe(false);
-    expect(result).toHaveLength(6);
+    // 顶栏现有 4 个按钮：原生的「排序」与已移除的「打开标签系统」不再计入
+    expect(result).toHaveLength(4);
   });
 
   it('旧配置缺少按钮时按默认相对位置补齐', () => {
     const result = normalizeSidebarToolbarButtons([
-      { id: 'sort', visible: true },
       { id: 'scroll-bottom', visible: false },
       { id: 'filter', visible: true },
     ]);
     expect(result.map((item) => item.id)).toEqual([
-      'sort',
       'expand-collapse',
-      'open-tag-system',
       'scroll-bottom',
       'scroll-top',
       'filter',
@@ -44,16 +40,27 @@ describe('侧边栏顶栏按钮配置', () => {
     expect(result.find((item) => item.id === 'scroll-bottom')?.visible).toBe(false);
   });
 
-  it('上移和下移只改变顺序并保留隐藏状态', () => {
-    const initial = createDefaultSidebarToolbarButtons();
-    const moved = moveSidebarToolbarButton(initial, 'open-tag-system', 1);
-    expect(moved.map((item) => item.id).slice(1, 4)).toEqual([
-      'expand-collapse',
-      'scroll-bottom',
-      'open-tag-system',
+  it('上移和下移只改变顺序并保留可见状态', () => {
+    const initial = normalizeSidebarToolbarButtons([
+      { id: 'expand-collapse', visible: true },
+      { id: 'scroll-bottom', visible: false },
+      { id: 'scroll-top', visible: true },
+      { id: 'filter', visible: true },
     ]);
-    expect(moved.find((item) => item.id === 'open-tag-system')?.visible).toBe(false);
-    expect(moveSidebarToolbarButton(moved, 'sort', -1)).toEqual(moved);
+
+    const moved = moveSidebarToolbarButton(initial, 'expand-collapse', 1);
+    expect(moved.map((item) => item.id)).toEqual([
+      'scroll-bottom',
+      'expand-collapse',
+      'scroll-top',
+      'filter',
+    ]);
+    // 顺序变了但显隐不变
+    expect(moved.find((item) => item.id === 'scroll-bottom')?.visible).toBe(false);
+
+    // 首项再上移、末项再下移都是空操作
+    expect(moveSidebarToolbarButton(moved, 'scroll-bottom', -1)).toEqual(moved);
+    expect(moveSidebarToolbarButton(moved, 'filter', 1)).toEqual(moved);
   });
 
   it('渲染时按配置顺序跳过暂时缺失的原生按钮', () => {
@@ -63,13 +70,11 @@ describe('侧边栏顶栏按钮配置', () => {
       -1
     );
     const available = getAvailableSidebarToolbarButtons(configured, [
-      'sort',
       'scroll-bottom',
       'scroll-top',
       'filter',
     ]);
     expect(available.map((item) => item.id)).toEqual([
-      'sort',
       'scroll-bottom',
       'filter',
       'scroll-top',

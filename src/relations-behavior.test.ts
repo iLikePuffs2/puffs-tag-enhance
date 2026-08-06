@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TFile } from "obsidian";
 import { RelationsBehavior } from "./relations";
 import { TagPaneBehavior } from "./tag-pane";
+import { PuffsTagSidebarView } from "./view/tag-sidebar-view";
 
 function createBehavior(noteHierarchy: any, exclusions: Record<string, string[]> = {}) {
   const behavior = Object.create(RelationsBehavior.prototype);
@@ -359,28 +360,31 @@ describe('批量父子关系', () => {
   });
 
   it('唯一搜索或固定标签首次自动展开后允许手动收起顶层标签', () => {
-    const behavior = Object.create(TagPaneBehavior.prototype) as any;
-    behavior.expandedTags = new Set<string>();
-    behavior.isPinnedOnlyTagResult = vi.fn(() => true);
-    behavior.clearInlineHierarchyBranchState = vi.fn();
-    const patch = {
-      autoExpandedTag: null,
-      autoExpandedWasAlreadyExpanded: false,
+    // 该逻辑已随渲染层迁入 PuffsTagSidebarView（自动展开是视图会话状态，不属于关系层）
+    const view = Object.create(PuffsTagSidebarView.prototype) as any;
+    const expandedTags = new Set<string>();
+    view.autoExpandedTag = null;
+    view.autoExpandedWasAlreadyExpanded = false;
+    view.plugin = {
+      expandedTags,
+      isPinnedOnlyTagResult: vi.fn(() => true),
+      clearInlineHierarchyBranchState: vi.fn(),
     };
 
-    behavior.syncAutoSingleSearchResult({}, patch, [{ tag: '#唯一' }], '唯一');
-    expect(behavior.expandedTags.has('#唯一')).toBe(true);
+    view.syncAutoSingleSearchResult('唯一', [{ tag: '#唯一' }]);
+    expect(expandedTags.has('#唯一')).toBe(true);
 
-    behavior.expandedTags.delete('#唯一');
-    behavior.syncAutoSingleSearchResult({}, patch, [{ tag: '#唯一' }], '唯一');
-    expect(behavior.expandedTags.has('#唯一')).toBe(false);
+    // 用户手动收起后不应被再次自动展开
+    expandedTags.delete('#唯一');
+    view.syncAutoSingleSearchResult('唯一', [{ tag: '#唯一' }]);
+    expect(expandedTags.has('#唯一')).toBe(false);
 
-    patch.autoExpandedTag = null;
-    behavior.syncAutoSingleSearchResult({}, patch, [{ tag: '#固定' }], '');
-    expect(behavior.expandedTags.has('#固定')).toBe(true);
-    behavior.expandedTags.delete('#固定');
-    behavior.syncAutoSingleSearchResult({}, patch, [{ tag: '#固定' }], '');
-    expect(behavior.expandedTags.has('#固定')).toBe(false);
+    view.autoExpandedTag = null;
+    view.syncAutoSingleSearchResult('', [{ tag: '#固定' }]);
+    expect(expandedTags.has('#固定')).toBe(true);
+    expandedTags.delete('#固定');
+    view.syncAutoSingleSearchResult('', [{ tag: '#固定' }]);
+    expect(expandedTags.has('#固定')).toBe(false);
   });
 
   it('原子更新父标签并在保存失败时完整回滚', async () => {

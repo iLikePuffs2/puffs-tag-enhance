@@ -138,8 +138,7 @@ export class InteractionsBehavior {
 
     this.refreshNoteDisplayNameCards(tag, file);
     await this.saveSettings();
-    this.refreshTagViews();
-    this.refreshTagShelfViews();
+    this.refreshAllTagViews();
   }
 
   showNoteDisplayNameMenuForCard(event, cardEl) {
@@ -255,8 +254,7 @@ export class InteractionsBehavior {
 
     this.settings.pinnedTag = this.settings.pinnedTag === tag ? null : tag;
     await this.saveSettings();
-    this.refreshTagViews();
-    this.refreshTagShelfViews();
+    this.refreshAllTagViews();
   }
 
   getTagShelfItems(query = '', includePinned = true) {
@@ -1145,8 +1143,7 @@ export class InteractionsBehavior {
 
     this.settings.noteOrderByTag[tag] = order;
     await this.saveSettings();
-    this.refreshTagViews();
-    this.refreshTagShelfViews();
+    this.refreshAllTagViews();
   }
 
 }

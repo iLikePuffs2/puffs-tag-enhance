@@ -140,7 +140,7 @@ export class PersistenceBehavior {
     ) {
       this.restartBackupTimer();
     }
-    this.refreshTagViewHotkeys();
+    this.refreshSidebarHotkeys();
     if (
       newSettings &&
       (
@@ -155,15 +155,13 @@ export class PersistenceBehavior {
       this.applySidebarPreferenceForCurrentFile();
     }
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'scrollTopButtonThreshold')) {
-      this.refreshTagViews();
-      this.refreshTagShelfViews();
+      this.refreshAllTagViews();
     }
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'sidebarToolbarButtons')) {
-      this.refreshTagViews();
+      this.refreshAllTagViews();
     }
     if (newSettings && Object.prototype.hasOwnProperty.call(newSettings, 'noteHierarchySearchKeyword')) {
-      this.refreshTagViews();
-      this.refreshTagShelfViews();
+      this.refreshAllTagViews();
     }
   }
 

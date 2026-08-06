@@ -6,8 +6,7 @@ import {
   DEFAULT_MOVE_NOTE_UP_HOTKEY,
   MARKDOWN_VIEW_TYPE,
   OUTLINE_VIEW_TYPE,
-  TAG_SHELF_VIEW_TYPE,
-  TAG_VIEW_TYPE,
+  TAG_SIDEBAR_VIEW_TYPE,
   formatHotkey,
   getLeafFilePath,
   normalizeTag,
@@ -15,21 +14,11 @@ import {
   parseHotkeyText
 } from "./models";
 
-const TAG_PLUGIN_ID = 'tag-pane';
-const OPEN_TAG_COMMAND_ID = 'tag-pane:open';
-const TOGGLE_RIGHT_SIDEBAR_COMMAND_ID = 'app:toggle-right-sidebar';
 const LEGACY_TAG_SIDEBAR_COMMAND_ID = 'puffs-immersive-mode:toggle-tag-sidebar';
 
 export class WorkspaceBehavior {
   [key: string]: any;
 
-  refreshTagShelfViews() {
-    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)) {
-      if (leaf.view && typeof leaf.view.refresh === 'function') {
-        leaf.view.refresh();
-      }
-    }
-  }
 
   followsCurrentNote(searchValue) {
     return this.getHierarchySearchContext(searchValue).mode === 'current-note'
@@ -37,16 +26,9 @@ export class WorkspaceBehavior {
   }
 
   refreshCurrentNoteSearchViews() {
-    for (const leaf of this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []) {
-      const view = leaf.view;
-      if (!view || !this.followsCurrentNote(this.getTagSearchValue(view))) continue;
-      this.scheduleSyncView(view, 0);
-    }
-    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE) || []) {
-      const view = leaf.view;
-      if (!view || !this.followsCurrentNote(view.searchQuery)) continue;
-      if (typeof view.renderTagList === 'function') view.renderTagList();
-      else if (typeof view.refresh === 'function') view.refresh();
+    for (const view of this.getSidebarViews()) {
+      if (!this.followsCurrentNote(this.getTagSearchValue(view))) continue;
+      view.requestRender();
     }
   }
 
@@ -67,55 +49,8 @@ export class WorkspaceBehavior {
     if (this.updateCurrentMainFilePath(filePath)) this.applySidebarPreferenceForCurrentFile();
   }
 
-  getVisibleTagLeaf() {
-    return (this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE) || []).find((leaf) => {
-      if (typeof leaf.isVisible === 'function') return leaf.isVisible();
-      return Boolean(leaf.view && leaf.view.containerEl && leaf.view.containerEl.isShown());
-    }) || null;
-  }
 
-  isLeafFocused(leaf) {
-    if (!leaf) return false;
-    const activeEl = document.activeElement;
-    const containerEl = leaf.view && leaf.view.containerEl || leaf.containerEl;
-    return this.app.workspace.activeLeaf === leaf || Boolean(activeEl && containerEl && containerEl.contains(activeEl));
-  }
 
-  async focusLeaf(leaf) {
-    if (!leaf) return;
-    if (this.app.workspace.revealLeaf) await this.app.workspace.revealLeaf(leaf);
-    if (this.app.workspace.setActiveLeaf) this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    const containerEl = leaf.view && leaf.view.containerEl || leaf.containerEl;
-    const focusTarget = containerEl && containerEl.querySelector('input, button, [tabindex]:not([tabindex="-1"])');
-    if (focusTarget && focusTarget.focus) focusTarget.focus();
-    else if (containerEl && containerEl.focus) containerEl.focus();
-  }
-
-  async toggleTagSidebar() {
-    const tagPlugin = this.app.internalPlugins && this.app.internalPlugins.getPluginById &&
-      this.app.internalPlugins.getPluginById(TAG_PLUGIN_ID);
-    if (tagPlugin && !tagPlugin.enabled) {
-      new Notice('请先启用 Obsidian 核心插件 标签列表。');
-      return;
-    }
-    const leaf = this.getVisibleTagLeaf();
-    if (leaf) {
-      const patch = this.viewPatches.get(leaf.view);
-      if (patch && patch.hierarchySearchActive) {
-        this.exitSidebarHierarchySearch(leaf.view, patch);
-        await this.focusLeaf(leaf);
-        return;
-      }
-      if (!this.isLeafFocused(leaf)) {
-        await this.focusLeaf(leaf);
-        return;
-      }
-      await this.app.commands.executeCommandById(TOGGLE_RIGHT_SIDEBAR_COMMAND_ID);
-      return;
-    }
-    const opened = await this.app.commands.executeCommandById(OPEN_TAG_COMMAND_ID);
-    if (opened === false) new Notice('无法打开标签列表，请确认核心插件 标签列表 已启用。');
-  }
 
   async migrateTagSidebarHotkeys() {
     const manager = this.app.hotkeyManager;
@@ -131,41 +66,18 @@ export class WorkspaceBehavior {
     if (manager.save) await manager.save();
   }
 
-  async openTagShelf() {
-    this.rememberCurrentMainLeaf();
-
-    const existing = this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)[0];
-    const leaf = existing || this.app.workspace.getLeaf('tab');
-    if (!existing) {
-      await leaf.setViewState({ type: TAG_SHELF_VIEW_TYPE, state: {} });
-    }
-
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    if (leaf.view && typeof leaf.view.refresh === 'function') {
-      leaf.view.refresh();
-    }
-  }
 
 
   isNoteOrderSearchControl(target) {
     if (!(target instanceof Element)) return false;
-    if (target.closest('.puffs-tag-shelf-search-host')) return true;
-
-    return this.app.workspace.getLeavesOfType(TAG_VIEW_TYPE).some((leaf) => {
-      const view = leaf && leaf.view;
-      const inputEl = view && view.searchComponent && view.searchComponent.inputEl;
-      if (!inputEl || !inputEl.isConnected) return false;
-
-      const searchContainerEl = inputEl.closest('.search-input-container') || inputEl;
-      return searchContainerEl.contains(target);
-    });
+    return !!target.closest('.puffs-tag-sidebar-search-host');
   }
 
   isTagSidebarScrollbarPointer(evt, target) {
     if (!(target instanceof Element)) return false;
 
     const scrollEl = target.closest(
-      '.workspace-leaf-content[data-type="tag"] .tag-container'
+      '.workspace-leaf-content[data-type="puffs-tag-sidebar"] .tag-container'
     );
     if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight) return false;
 
@@ -183,19 +95,13 @@ export class WorkspaceBehavior {
 
   registerKeyboardHandler() {
     this.keydownHandler = (evt) => {
-      if (this.handleHierarchyNavigationHotkey(evt)) return;
-      if (!this.isQuickSearchHotkey(evt)) return;
-
-      const view = this.getFocusedTagView();
-      if (!view) return;
-
-      evt.preventDefault();
-      evt.stopPropagation();
-      evt.stopImmediatePropagation();
-      this.toggleTagSearch(view);
+      // 快速搜索快捷键已改由视图自己的 scope 处理（见 view/tag-sidebar-view.ts），
+      // 这里只留父子关系定位历史的 Alt + ←/→
+      this.handleHierarchyNavigationHotkey(evt);
     };
 
-    window.addEventListener('keydown', this.keydownHandler, true);
+    // 只注册一处。旧实现在 window 和 document 上挂了同一个处理器，
+    // 捕获阶段会依次执行两次，快捷键被处理两遍（打开后立刻关闭）。
     document.addEventListener('keydown', this.keydownHandler, true);
     this.pointerdownHandler = (evt) => {
       if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
@@ -284,7 +190,6 @@ export class WorkspaceBehavior {
     document.addEventListener('contextmenu', this.noteOrderContextMenuHandler, true);
 
     this.register(() => {
-      window.removeEventListener('keydown', this.keydownHandler, true);
       document.removeEventListener('keydown', this.keydownHandler, true);
       document.removeEventListener('pointerdown', this.pointerdownHandler, true);
       document.removeEventListener('contextmenu', this.noteOrderContextMenuHandler, true);
@@ -295,14 +200,10 @@ export class WorkspaceBehavior {
   }
 
   getActiveHierarchyNavigationSurface() {
-    const tagView = this.getFocusedTagView();
-    if (tagView) return { view: tagView, surface: 'sidebar' };
-    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE) || []) {
-      const view = leaf.view;
-      if (view && typeof view.isActiveView === 'function' && view.isActiveView()) {
-        return { view, surface: 'shelf' };
-      }
-    }
+    // 自绘侧边栏优先
+    const sidebarView = this.getFocusedSidebarView();
+    if (sidebarView) return { view: sidebarView, surface: 'sidebar' };
+
     return null;
   }
 
@@ -427,9 +328,9 @@ export class WorkspaceBehavior {
 
     if (!this.settings.autoSwitchToOutlineEnabled) return;
 
-    if (viewType === TAG_VIEW_TYPE) {
+    if (viewType === TAG_SIDEBAR_VIEW_TYPE) {
       this.setTagSidebarPreference(this.currentMainFilePath, true);
-    } else if (previousViewType === TAG_VIEW_TYPE) {
+    } else if (previousViewType === TAG_SIDEBAR_VIEW_TYPE) {
       this.setTagSidebarPreference(this.currentMainFilePath, false);
     }
   }
@@ -461,7 +362,7 @@ export class WorkspaceBehavior {
     if (!this.settings.autoSwitchToOutlineEnabled || !filePath) return;
 
     const targetViewType = this.hasTagSidebarPreference(filePath)
-      ? TAG_VIEW_TYPE
+      ? TAG_SIDEBAR_VIEW_TYPE
       : OUTLINE_VIEW_TYPE;
     this.switchManagedSidebarTo(requestId, filePath, targetViewType).catch((error) => {
       console.error('[Puffs Tag Enhance] Failed to switch sidebar for current file:', error);
@@ -476,7 +377,7 @@ export class WorkspaceBehavior {
     if (!this.settings.autoSwitchToOutlineEnabled) return;
 
     const currentTargetViewType = this.hasTagSidebarPreference(filePath)
-      ? TAG_VIEW_TYPE
+      ? TAG_SIDEBAR_VIEW_TYPE
       : OUTLINE_VIEW_TYPE;
     if (currentTargetViewType !== viewType) return;
     if (!leaf || !leaf.parent || typeof leaf.parent.selectTab !== 'function') return;
@@ -549,7 +450,7 @@ export class WorkspaceBehavior {
   }
 
   findManagedSidebarTabGroup() {
-    const tagLeaf = this.findManagedSidebarLeaf(TAG_VIEW_TYPE);
+    const tagLeaf = this.findManagedSidebarLeaf(TAG_SIDEBAR_VIEW_TYPE);
     if (tagLeaf && tagLeaf.parent) return tagLeaf.parent;
 
     const outlineLeaf = this.findManagedSidebarLeaf(OUTLINE_VIEW_TYPE);
@@ -751,7 +652,7 @@ export class WorkspaceBehavior {
 
   isUsableMainLeaf(leaf) {
     if (!this.isMainWorkspaceLeaf(leaf)) return false;
-    return !leaf.view || leaf.view.getViewType() !== TAG_SHELF_VIEW_TYPE;
+    return true;
   }
 
   isMainWorkspaceLeaf(leaf) {

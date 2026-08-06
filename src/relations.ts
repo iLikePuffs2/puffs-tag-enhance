@@ -2,7 +2,6 @@
 import { Menu, Notice, TFile, setIcon } from "obsidian";
 import {
   DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
-  TAG_SHELF_VIEW_TYPE,
   getTagDisplayName,
   isNestedTag,
   normalizeTag,
@@ -713,7 +712,6 @@ export class RelationsBehavior {
           () => {
             this.toggleInlineHierarchyBranch(key);
             options.rerender?.();
-            if (options.surface === 'shelf') this.refreshTagViews();
           }
         );
         this.syncTagOrderButtonSelection(toggleEl);
@@ -725,7 +723,6 @@ export class RelationsBehavior {
         if (tagValue && this.isTagOrderModeActive(tagValue)) this.exitTagOrderMode(false);
         this.toggleInlineHierarchyBranch(key);
         options.rerender?.();
-        if (options.surface === 'shelf') this.refreshTagViews();
       });
       if (tagValue) {
         rowEl.addEventListener('contextmenu', (event) => {
@@ -850,7 +847,6 @@ export class RelationsBehavior {
         this.bindNoteParentControlButton(orderButtonEl, () => {
           this.toggleInlineHierarchyBranch(branchKey);
           options.rerender?.();
-          if (surface === 'shelf') this.refreshTagViews();
         }, toggleOrder);
       } else if (hasOrderButton) {
         setIcon(orderButtonEl, 'grip-vertical');
@@ -872,7 +868,6 @@ export class RelationsBehavior {
           event.stopPropagation();
           this.toggleInlineHierarchyBranch(branchKey);
           options.rerender?.();
-          if (surface === 'shelf') this.refreshTagViews();
         });
       }
 
@@ -1189,57 +1184,39 @@ export class RelationsBehavior {
 
   refreshHierarchyViews() {
     this.relationStructureVersion = (this.relationStructureVersion || 0) + 1;
-    this.refreshTagViews();
-    this.refreshTagShelfViews();
+    this.refreshAllTagViews();
   }
 
   getHierarchyNavigationHistory(view, surface) {
-    if (surface === 'shelf') {
-      if (!view.hierarchyNavigationHistory) {
-        view.hierarchyNavigationHistory = createHierarchyNavigationHistory();
-      }
-      return view.hierarchyNavigationHistory;
+    // 现在只有自绘侧边栏一种界面，历史直接挂在视图上
+    if (!view.hierarchyNavigationHistory) {
+      view.hierarchyNavigationHistory = createHierarchyNavigationHistory();
     }
-    const patch = this.viewPatches.get(view) || this.patchTagView(view);
-    if (!patch.hierarchyNavigationHistory) {
-      patch.hierarchyNavigationHistory = createHierarchyNavigationHistory();
-    }
-    return patch.hierarchyNavigationHistory;
+    return view.hierarchyNavigationHistory;
   }
 
-  getHierarchyNavigationScrollEl(view, surface) {
-    if (surface === 'shelf') return view.contentEl || null;
-    return view.containerEl?.querySelector('.tag-container') || view.tagPaneEl || null;
+  getHierarchyNavigationScrollEl(view) {
+    return view.tagContainerEl || view.containerEl?.querySelector('.tag-container') || null;
   }
 
   captureHierarchyNavigationSnapshot(view, surface) {
-    const query = surface === 'shelf' ? view.searchQuery : this.getTagSearchValue(view);
-    const scrollEl = this.getHierarchyNavigationScrollEl(view, surface);
+    const query = this.getTagSearchValue(view);
+    const scrollEl = this.getHierarchyNavigationScrollEl(view);
     return { query: String(query || ''), scrollTop: scrollEl?.scrollTop || 0 };
   }
 
   applyHierarchyNavigationSnapshot(view, surface, snapshot) {
     const history = this.getHierarchyNavigationHistory(view, surface);
     const restoreRequestId = history.restoreRequestId;
-    if (surface === 'shelf') {
-      view.searchQuery = snapshot.query;
-      view.hierarchyState.activeMatchIndex = -1;
-      view.searchComponent?.setValue(snapshot.query);
-      view.renderTagList();
-    } else {
-      const patch = this.viewPatches.get(view) || this.patchTagView(view);
-      patch.hierarchyState.activeMatchIndex = -1;
-      if (!view.isShowingSearch && typeof view.setShowSearch === 'function') view.setShowSearch(true);
-      const searchComponent = view.searchComponent;
-      if (searchComponent && typeof searchComponent.setValue === 'function') searchComponent.setValue(snapshot.query);
-      const inputEl = searchComponent && searchComponent.inputEl;
-      if (inputEl) inputEl.value = snapshot.query;
-      if (typeof view.updateSearch === 'function') view.updateSearch();
-      this.scheduleSyncView(view, 0);
-    }
+    view.searchQuery = snapshot.query;
+    view.hierarchyState.activeMatchIndex = -1;
+    view.isShowingSearch = true;
+    view.searchComponent?.setValue(snapshot.query);
+    view.syncSearchVisibility?.();
+    view.render();
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
       if (history.restoreRequestId !== restoreRequestId) return;
-      const scrollEl = this.getHierarchyNavigationScrollEl(view, surface);
+      const scrollEl = this.getHierarchyNavigationScrollEl(view);
       if (scrollEl?.isConnected) scrollEl.scrollTop = snapshot.scrollTop;
       const inputEl = view.searchComponent?.inputEl;
       if (inputEl?.isConnected) inputEl.focus({ preventScroll: true });
@@ -1279,12 +1256,6 @@ export class RelationsBehavior {
       : this.getHierarchyParents(path).length > 0
         ? `${keyword}${keyword}${file.basename}`
         : `${keyword}${file.basename}`;
-    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SHELF_VIEW_TYPE)) {
-      const view = leaf.view;
-      if (!view || !view.contentEl || !view.contentEl.contains(sourceEl)) continue;
-      this.pushHierarchyNavigationForView(view, 'shelf', query);
-      return;
-    }
     for (const leaf of this.app.workspace.getLeavesOfType('tag')) {
       const view = leaf.view;
       if (!view || !view.containerEl || !view.containerEl.contains(sourceEl)) continue;
@@ -2112,8 +2083,7 @@ export class RelationsBehavior {
       ? inheritance.enabledParents.filter((item) => item !== tag)
       : [...inheritance.enabledParents, tag];
     await this.saveSettings();
-    this.refreshTagViews();
-    this.refreshTagShelfViews();
+    this.refreshAllTagViews();
   }
 
   /**

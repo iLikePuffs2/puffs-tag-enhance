@@ -1,7 +1,5 @@
 export const SIDEBAR_TOOLBAR_BUTTON_DEFINITIONS = [
-  { id: 'sort', label: '排序', visible: true },
   { id: 'expand-collapse', label: '全部展开/收起', visible: true },
-  { id: 'open-tag-system', label: '打开标签系统', visible: false },
   { id: 'scroll-bottom', label: '回底', visible: true },
   { id: 'scroll-top', label: '回顶', visible: true },
   { id: 'filter', label: '筛选', visible: true },

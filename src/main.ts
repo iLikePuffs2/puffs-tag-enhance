@@ -1,7 +1,8 @@
 import { App, Plugin } from "obsidian";
-import { DEFAULT_SETTINGS, TAG_SHELF_VIEW_TYPE, TAG_SYSTEM_ICON } from "./models";
+import { DEFAULT_SETTINGS, TAG_SIDEBAR_VIEW_TYPE } from "./models";
 import { MetadataRefreshScheduler, TagBrowseCache } from "./data/tag-store";
-import { PuffsTagShelfView } from "./views";
+import { PuffsTagSidebarView } from "./view/tag-sidebar-view";
+import { SidebarRegistryBehavior } from "./view/sidebar-registry";
 import { PuffsTagEnhanceSettingTab } from "./settings";
 import { PersistenceBehavior } from "./persistence";
 import { InteractionsBehavior } from "./interactions";
@@ -32,7 +33,6 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.selectedTagOrderTarget = null;
     this.tagOrderModeVisibilityTimer = null;
     this.noteOrderHotkeyScope = null;
-    this.viewPatches = new WeakMap();
     this.lastMainLeaf = null;
     this.currentMainFilePath = null;
     this.selectedSidebarViewType = null;
@@ -53,19 +53,13 @@ class PuffsTagEnhancePlugin extends Plugin {
 
     this.isUnloaded = false;
     this.restartBackupTimer();
-    this.registerView(TAG_SHELF_VIEW_TYPE, (leaf) => new PuffsTagShelfView(leaf, this));
-    this.addCommand({
-      id: 'open-tag-shelf',
-      name: '打开标签系统',
-      callback: () => this.openTagShelf(),
-    });
+    this.registerView(TAG_SIDEBAR_VIEW_TYPE, (leaf) => new PuffsTagSidebarView(leaf, this));
     this.addCommand({
       id: 'toggle-tag-sidebar',
       name: '打开或收起标签侧边栏',
       callback: () => this.toggleTagSidebar(),
     });
     await this.migrateTagSidebarHotkeys();
-    this.addRibbonIcon(TAG_SYSTEM_ICON, '打开标签系统', () => this.openTagShelf());
     this.refreshTagIndexAndViews();
     this.registerKeyboardHandler();
     this.registerWorkspaceHandlers();
@@ -73,12 +67,14 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.registerInitialMetadataRefresh();
     this.addSettingTab(new PuffsTagEnhanceSettingTab(this.app, this));
 
-    this.app.workspace.onLayoutReady(() => {
+    this.app.workspace.onLayoutReady(async () => {
+      if (this.isUnloaded) return;
+      // 先把核心插件的标签页换成自绘视图，再做其余初始化
+      await this.migrateSidebarLayout();
       if (this.isUnloaded) return;
       this.rememberCurrentMainLeaf();
       this.captureSelectedSidebarState();
       this.refreshTagIndexAndViews();
-      this.refreshTagViews();
       this.queueInitialTagIndexRefreshes();
       this.applySidebarPreferenceForCurrentFile();
     });
@@ -98,7 +94,6 @@ class PuffsTagEnhancePlugin extends Plugin {
     this.clearBackupTimer();
     this.clearInitialTagIndexRefreshTimers();
     this.clearTagRenameProtectionTimer();
-    this.restoreAllTagViews();
     console.log('Puffs 标签增强: 已卸载');
   }
 }
@@ -120,7 +115,8 @@ const applyBehavior = (behavior: Function): void => {
   WorkspaceBehavior,
   TagIndexBehavior,
   TagPaneBehavior,
-  RelationsBehavior
+  RelationsBehavior,
+  SidebarRegistryBehavior
 ].forEach(applyBehavior);
 
 export default PuffsTagEnhancePlugin;

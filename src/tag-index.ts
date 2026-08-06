@@ -2,7 +2,6 @@
 import { TFile, getAllTags } from "obsidian";
 import {
   INITIAL_TAG_INDEX_REFRESH_DELAYS_MS,
-  TAG_VIEW_TYPE,
   flattenFrontmatterTags,
   frontmatterTagValueHasTag,
   getTagDisplayName,
@@ -21,16 +20,13 @@ export class TagIndexBehavior {
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', (leaf) => {
         this.handleActiveLeafChange(leaf);
-        if (leaf && leaf.view && leaf.view.getViewType() === TAG_VIEW_TYPE) {
-          this.scheduleFocusTagSearch(leaf.view);
-        }
       })
     );
 
     this.registerEvent(
       this.app.workspace.on('layout-change', () => {
         this.syncSelectedSidebarState();
-        this.refreshTagViews();
+        this.refreshAllTagViews();
       })
     );
 
@@ -50,8 +46,7 @@ export class TagIndexBehavior {
       this.handleNoteDisplayNameFileRename(file, oldPath);
       this.handleTagBoundNoteFileRename(file, oldPath);
       this.handleRelationFileRename(file, oldPath);
-      this.refreshTagViews();
-      this.refreshTagShelfViews();
+      this.refreshAllTagViews();
     }));
     this.registerEvent(this.app.vault.on('delete', (file) => {
       this.handlePreferredFileDelete(file);
@@ -102,8 +97,7 @@ export class TagIndexBehavior {
         console.error('[Puffs Tag Enhance] Failed to persist note order:', error);
       });
     }
-    this.refreshTagViews();
-    this.refreshTagShelfViews();
+    this.refreshAllTagViews();
   }
 
   queueInitialTagIndexRefreshes() {
