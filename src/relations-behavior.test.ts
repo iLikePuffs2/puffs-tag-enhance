@@ -3,6 +3,7 @@ import { Notice, TFile } from "obsidian";
 import { RelationsBehavior } from "./relations";
 import { TagPaneBehavior } from "./tag-pane";
 import { PuffsTagSidebarView } from "./view/tag-sidebar-view";
+import { TagTreeRendererBehavior } from "./view/tag-tree-renderer";
 
 function createBehavior(noteHierarchy: any, exclusions: Record<string, string[]> = {}) {
   const behavior = Object.create(RelationsBehavior.prototype);
@@ -1257,6 +1258,36 @@ describe('定位父子关系', () => {
 
     expect(behavior.pushHierarchyNavigationForView).not.toHaveBeenCalled();
     expect((Notice as any).messages).toEqual(['未找到标签侧边栏，无法定位父子关系']);
+  });
+});
+
+describe('父子关系定位历史恢复', () => {
+  it('重绘完成后立即恢复搜索内容、滚动位置与输入焦点', () => {
+    const behavior = Object.create(TagTreeRendererBehavior.prototype) as any;
+    const history = { entries: [], index: 0, restoreRequestId: 3 };
+    const scrollEl = { isConnected: true, scrollTop: 0 };
+    const inputEl = { isConnected: true, focus: vi.fn() };
+    const view = {
+      searchQuery: '=旧条件',
+      hierarchyState: { activeMatchIndex: 2 },
+      isShowingSearch: false,
+      searchComponent: { inputEl, setValue: vi.fn() },
+      syncSearchVisibility: vi.fn(),
+      render: vi.fn(),
+    };
+    behavior.getHierarchyNavigationHistory = vi.fn(() => history);
+    behavior.getHierarchyNavigationScrollEl = vi.fn(() => scrollEl);
+
+    behavior.applyHierarchyNavigationSnapshot(view, 'sidebar', {
+      query: '原搜索',
+      scrollTop: 73,
+    });
+
+    expect(view.searchQuery).toBe('原搜索');
+    expect(view.searchComponent.setValue).toHaveBeenCalledWith('原搜索');
+    expect(view.render).toHaveBeenCalledOnce();
+    expect(scrollEl.scrollTop).toBe(73);
+    expect(inputEl.focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 });
 

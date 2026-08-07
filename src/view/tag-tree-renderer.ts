@@ -480,12 +480,18 @@ export class TagTreeRendererBehavior {
     view.searchComponent?.setValue(snapshot.query);
     view.syncSearchVisibility?.();
     view.render();
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+
+    const restoreViewState = () => {
       if (history.restoreRequestId !== restoreRequestId) return;
       const scrollEl = this.getHierarchyNavigationScrollEl(view);
       if (scrollEl?.isConnected) scrollEl.scrollTop = snapshot.scrollTop;
       const inputEl = view.searchComponent?.inputEl;
       if (inputEl?.isConnected) inputEl.focus({ preventScroll: true });
-    }));
+    };
+
+    // render() 已同步完成 DOM 对账，先立即恢复，避免窗口失焦时 requestAnimationFrame
+    // 被 Chromium 暂停；再用一个宏任务覆盖 Obsidian 同轮事件中可能发生的布局回写。
+    restoreViewState();
+    globalThis.setTimeout(restoreViewState, 0);
   }
 }

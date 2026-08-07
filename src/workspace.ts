@@ -95,14 +95,13 @@ export class WorkspaceBehavior {
 
   registerKeyboardHandler() {
     this.keydownHandler = (evt: any) => {
-      // 快速搜索快捷键已改由视图自己的 scope 处理（见 view/tag-sidebar-view.ts），
-      // 这里只留父子关系定位历史的 Alt + ←/→
+      if (this.handleSidebarQuickSearchHotkey(evt)) return;
       this.handleHierarchyNavigationHotkey(evt);
     };
 
-    // 只注册一处。旧实现在 window 和 document 上挂了同一个处理器，
-    // 捕获阶段会依次执行两次，快捷键被处理两遍（打开后立刻关闭）。
-    document.addEventListener('keydown', this.keydownHandler, true);
+    // 必须早于 Obsidian 在 document 上的快捷键与历史导航处理器执行；否则原生
+    // Ctrl+F / Alt+方向键会先消费事件。只在 window 注册一次，避免重复处理。
+    window.addEventListener('keydown', this.keydownHandler, true);
     this.pointerdownHandler = (evt: any) => {
       if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
@@ -190,7 +189,7 @@ export class WorkspaceBehavior {
     document.addEventListener('contextmenu', this.noteOrderContextMenuHandler, true);
 
     this.register(() => {
-      document.removeEventListener('keydown', this.keydownHandler, true);
+      window.removeEventListener('keydown', this.keydownHandler, true);
       document.removeEventListener('pointerdown', this.pointerdownHandler, true);
       document.removeEventListener('contextmenu', this.noteOrderContextMenuHandler, true);
       this.keydownHandler = null;
@@ -199,9 +198,27 @@ export class WorkspaceBehavior {
     });
   }
 
-  getActiveHierarchyNavigationSurface() {
-    // 自绘侧边栏优先
-    const sidebarView = this.getFocusedSidebarView();
+  getSidebarViewForKeyboardEvent(evt: any) {
+    const eventTarget = evt?.target;
+    const viewFromTarget = eventTarget && this.getSidebarViews().find((view: any) =>
+      view.containerEl?.contains?.(eventTarget)
+    );
+    return viewFromTarget || this.getFocusedSidebarView();
+  }
+
+  handleSidebarQuickSearchHotkey(evt: any) {
+    if (!this.isQuickSearchHotkey(evt)) return false;
+    const view = this.getSidebarViewForKeyboardEvent(evt);
+    if (!view) return false;
+    evt.preventDefault();
+    evt.stopPropagation();
+    evt.stopImmediatePropagation();
+    view.handleQuickSearchHotkey();
+    return true;
+  }
+
+  getActiveHierarchyNavigationSurface(evt?: any) {
+    const sidebarView = this.getSidebarViewForKeyboardEvent(evt);
     if (sidebarView) return { view: sidebarView, surface: 'sidebar' };
 
     return null;
@@ -212,14 +229,16 @@ export class WorkspaceBehavior {
       !evt.altKey || evt.ctrlKey || evt.metaKey || evt.shiftKey ||
       (evt.key !== 'ArrowLeft' && evt.key !== 'ArrowRight')
     ) return false;
-    const target = this.getActiveHierarchyNavigationSurface();
+    const target = this.getActiveHierarchyNavigationSurface(evt);
     if (!target) return false;
     const history = this.getHierarchyNavigationHistory(target.view, target.surface);
-    if (history.entries.length < 2) return false;
+    const direction = evt.key === 'ArrowLeft' ? -1 : 1;
+    const nextIndex = history.index + direction;
+    if (history.entries.length < 2 || nextIndex < 0 || nextIndex >= history.entries.length) return false;
     evt.preventDefault();
     evt.stopPropagation();
     evt.stopImmediatePropagation();
-    this.navigateHierarchyHistory(target.view, target.surface, evt.key === 'ArrowLeft' ? -1 : 1);
+    this.navigateHierarchyHistory(target.view, target.surface, direction);
     return true;
   }
 

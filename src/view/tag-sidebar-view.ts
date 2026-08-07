@@ -61,7 +61,6 @@ class PuffsTagSidebarView extends ItemView {
     this.tagContainerEl = null;
     this.toolbarButtonEls = new Map();
     this.renderHandle = null;
-    this.searchHotkeyRegistration = null;
     // 上一轮各标签行的签名，用于判断哪些行可以整棵复用
     this.lastRowSignatures = new Map();
     this.openRenderFallbackTimer = null;
@@ -128,7 +127,6 @@ class PuffsTagSidebarView extends ItemView {
     this.listEl = this.tagContainerEl.createDiv({ cls: 'puffs-tag-list-container' });
 
     this.registerDomEvents();
-    this.registerSearchHotkey();
     this.syncSearchVisibility();
   }
 
@@ -197,21 +195,6 @@ class PuffsTagSidebarView extends ItemView {
       event.preventDefault();
       event.stopPropagation();
       this.render();
-    });
-  }
-
-  registerSearchHotkey() {
-    // 用视图自带的 scope，不再往 window 和 document 各挂一份全局监听
-    // （旧实现两处都挂同一个处理器，捕获阶段会执行两次）
-    if (this.searchHotkeyRegistration) {
-      this.scope!.unregister(this.searchHotkeyRegistration);
-      this.searchHotkeyRegistration = null;
-    }
-    const hotkey = this.plugin.getQuickSearchHotkey();
-    this.searchHotkeyRegistration = this.scope!.register(hotkey.modifiers, hotkey.key, (event: any) => {
-      event.preventDefault();
-      this.handleQuickSearchHotkey();
-      return false;
     });
   }
 

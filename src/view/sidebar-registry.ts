@@ -36,10 +36,9 @@ export class SidebarRegistryBehavior {
     }
   }
 
-  /** 设置里改了快捷键或顶栏按钮后，让在场的视图重新装配。 */
+  /** 设置里改了快捷键或顶栏按钮后，让在场的视图重新装配。快捷键由窗口入口实时读取设置。 */
   refreshSidebarHotkeys() {
     for (const view of this.getSidebarViews()) {
-      view.registerSearchHotkey();
       view.rebuildToolbar();
     }
   }

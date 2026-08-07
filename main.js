@@ -995,7 +995,6 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     this.tagContainerEl = null;
     this.toolbarButtonEls = /* @__PURE__ */ new Map();
     this.renderHandle = null;
-    this.searchHotkeyRegistration = null;
     this.lastRowSignatures = /* @__PURE__ */ new Map();
     this.openRenderFallbackTimer = null;
   }
@@ -1042,7 +1041,6 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     this.tagContainerEl = this.contentEl.createDiv({ cls: "tag-container node-insert-event" });
     this.listEl = this.tagContainerEl.createDiv({ cls: "puffs-tag-list-container" });
     this.registerDomEvents();
-    this.registerSearchHotkey();
     this.syncSearchVisibility();
   }
   buildToolbar(hostEl) {
@@ -1103,18 +1101,6 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
       event.preventDefault();
       event.stopPropagation();
       this.render();
-    });
-  }
-  registerSearchHotkey() {
-    if (this.searchHotkeyRegistration) {
-      this.scope.unregister(this.searchHotkeyRegistration);
-      this.searchHotkeyRegistration = null;
-    }
-    const hotkey = this.plugin.getQuickSearchHotkey();
-    this.searchHotkeyRegistration = this.scope.register(hotkey.modifiers, hotkey.key, (event) => {
-      event.preventDefault();
-      this.handleQuickSearchHotkey();
-      return false;
     });
   }
   /**
@@ -1590,10 +1576,9 @@ var SidebarRegistryBehavior = class {
       view.requestRender();
     }
   }
-  /** 设置里改了快捷键或顶栏按钮后，让在场的视图重新装配。 */
+  /** 设置里改了快捷键或顶栏按钮后，让在场的视图重新装配。快捷键由窗口入口实时读取设置。 */
   refreshSidebarHotkeys() {
     for (const view of this.getSidebarViews()) {
-      view.registerSearchHotkey();
       view.rebuildToolbar();
     }
   }
@@ -3404,14 +3389,16 @@ var TagTreeRendererBehavior = class {
     (_a = view.searchComponent) == null ? void 0 : _a.setValue(snapshot.query);
     (_b = view.syncSearchVisibility) == null ? void 0 : _b.call(view);
     view.render();
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+    const restoreViewState = () => {
       var _a2;
       if (history.restoreRequestId !== restoreRequestId) return;
       const scrollEl = this.getHierarchyNavigationScrollEl(view);
       if (scrollEl == null ? void 0 : scrollEl.isConnected) scrollEl.scrollTop = snapshot.scrollTop;
       const inputEl = (_a2 = view.searchComponent) == null ? void 0 : _a2.inputEl;
       if (inputEl == null ? void 0 : inputEl.isConnected) inputEl.focus({ preventScroll: true });
-    }));
+    };
+    restoreViewState();
+    globalThis.setTimeout(restoreViewState, 0);
   }
 };
 
@@ -4825,9 +4812,10 @@ var WorkspaceBehavior = class {
   }
   registerKeyboardHandler() {
     this.keydownHandler = (evt) => {
+      if (this.handleSidebarQuickSearchHotkey(evt)) return;
       this.handleHierarchyNavigationHotkey(evt);
     };
-    document.addEventListener("keydown", this.keydownHandler, true);
+    window.addEventListener("keydown", this.keydownHandler, true);
     this.pointerdownHandler = (evt) => {
       if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
@@ -4907,7 +4895,7 @@ var WorkspaceBehavior = class {
     };
     document.addEventListener("contextmenu", this.noteOrderContextMenuHandler, true);
     this.register(() => {
-      document.removeEventListener("keydown", this.keydownHandler, true);
+      window.removeEventListener("keydown", this.keydownHandler, true);
       document.removeEventListener("pointerdown", this.pointerdownHandler, true);
       document.removeEventListener("contextmenu", this.noteOrderContextMenuHandler, true);
       this.keydownHandler = null;
@@ -4915,21 +4903,43 @@ var WorkspaceBehavior = class {
       this.noteOrderContextMenuHandler = null;
     });
   }
-  getActiveHierarchyNavigationSurface() {
-    const sidebarView = this.getFocusedSidebarView();
+  getSidebarViewForKeyboardEvent(evt) {
+    const eventTarget = evt == null ? void 0 : evt.target;
+    const viewFromTarget = eventTarget && this.getSidebarViews().find(
+      (view) => {
+        var _a, _b;
+        return (_b = (_a = view.containerEl) == null ? void 0 : _a.contains) == null ? void 0 : _b.call(_a, eventTarget);
+      }
+    );
+    return viewFromTarget || this.getFocusedSidebarView();
+  }
+  handleSidebarQuickSearchHotkey(evt) {
+    if (!this.isQuickSearchHotkey(evt)) return false;
+    const view = this.getSidebarViewForKeyboardEvent(evt);
+    if (!view) return false;
+    evt.preventDefault();
+    evt.stopPropagation();
+    evt.stopImmediatePropagation();
+    view.handleQuickSearchHotkey();
+    return true;
+  }
+  getActiveHierarchyNavigationSurface(evt) {
+    const sidebarView = this.getSidebarViewForKeyboardEvent(evt);
     if (sidebarView) return { view: sidebarView, surface: "sidebar" };
     return null;
   }
   handleHierarchyNavigationHotkey(evt) {
     if (!evt.altKey || evt.ctrlKey || evt.metaKey || evt.shiftKey || evt.key !== "ArrowLeft" && evt.key !== "ArrowRight") return false;
-    const target = this.getActiveHierarchyNavigationSurface();
+    const target = this.getActiveHierarchyNavigationSurface(evt);
     if (!target) return false;
     const history = this.getHierarchyNavigationHistory(target.view, target.surface);
-    if (history.entries.length < 2) return false;
+    const direction = evt.key === "ArrowLeft" ? -1 : 1;
+    const nextIndex = history.index + direction;
+    if (history.entries.length < 2 || nextIndex < 0 || nextIndex >= history.entries.length) return false;
     evt.preventDefault();
     evt.stopPropagation();
     evt.stopImmediatePropagation();
-    this.navigateHierarchyHistory(target.view, target.surface, evt.key === "ArrowLeft" ? -1 : 1);
+    this.navigateHierarchyHistory(target.view, target.surface, direction);
     return true;
   }
   eventMatchesHotkey(evt, hotkey) {
