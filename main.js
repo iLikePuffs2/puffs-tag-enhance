@@ -5508,13 +5508,17 @@ var TagIndexBehavior = class {
       return normalizeTag(tagEntry && tagEntry.tag) === tag;
     });
   }
-  async addTagToTaggedNotes(sourceTagValue, newTagValue) {
-    await this.updateTagPropertiesForTaggedNotes("add", sourceTagValue, newTagValue);
+  async addTagToTaggedNotes(sourceTagValue, newTagValue, selectedPaths = null) {
+    await this.updateTagPropertiesForTaggedNotes("add", sourceTagValue, newTagValue, selectedPaths);
   }
-  async deleteTagFromTaggedNotes(sourceTagValue, targetTagValue) {
-    await this.updateTagPropertiesForTaggedNotes("delete", sourceTagValue, targetTagValue);
+  async deleteTagFromTaggedNotes(sourceTagValue, targetTagValue, selectedPaths = null) {
+    await this.updateTagPropertiesForTaggedNotes("delete", sourceTagValue, targetTagValue, selectedPaths);
   }
-  async updateTagPropertiesForTaggedNotes(mode, sourceTagValue, targetTagValue) {
+  /**
+   * selectedPaths 为批量操作弹窗勾选的笔记路径白名单。
+   * 传 null/undefined 时保持历史的「标签下全部笔记」行为，供旧入口继续使用。
+   */
+  async updateTagPropertiesForTaggedNotes(mode, sourceTagValue, targetTagValue, selectedPaths = null) {
     const sourceTag = normalizeTag(sourceTagValue);
     const targetTag = normalizeTag(targetTagValue);
     if (!sourceTag) throw new Error("\u539F\u6807\u7B7E\u65E0\u6548");
@@ -5526,6 +5530,7 @@ var TagIndexBehavior = class {
     const sourceFiles = Array.from(new Set(this.tagFileIndex.get(sourceTag) || []));
     const orderedSourceFiles = this.getOrderedFilesForTag(sourceTag, sourceFiles);
     const files = orderedSourceFiles.filter((file) => {
+      if (selectedPaths && !selectedPaths.has(file.path)) return false;
       const hasTag = this.fileHasFrontmatterTag(file, targetTag);
       return mode === "add" ? !hasTag : hasTag;
     });
@@ -5583,6 +5588,71 @@ var TagIndexBehavior = class {
       throw error;
     }
   }
+  /**
+   * 只把选中笔记里的 sourceTag 换成 targetTag。
+   *
+   * 与全局的 renameTag 有意分开：这里改完之后源标签通常仍然存在（还有别的笔记挂着它），
+   * 所以绝不能迁移 expandedTags / pinnedTag / 标签关系 / 绑定笔记——那些是「标签本身改名」
+   * 才成立的动作，在部分改名场景下迁移会直接破坏数据。这里只做两件事：逐文件改写标签文本、
+   * 维护两个标签的笔记顺序记录。
+   *
+   * 选中但不持有 sourceTag 的笔记会被静默跳过。
+   */
+  async renameTagInSelectedNotes(sourceTagValue, targetTagValue, selectedPaths = null) {
+    const sourceTag = normalizeTag(sourceTagValue);
+    const targetTag = normalizeTag(targetTagValue);
+    if (!sourceTag) throw new Error("\u539F\u6807\u7B7E\u65E0\u6548");
+    if (!targetTag) throw new Error("\u6807\u7B7E\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A");
+    if (/\s/.test(getTagDisplayName(targetTag))) throw new Error("\u6807\u7B7E\u540D\u79F0\u4E0D\u80FD\u5305\u542B\u7A7A\u683C");
+    if (sourceTag === targetTag) return;
+    if (this.activeTagRename) throw new Error("\u4E0A\u4E00\u6B21\u6807\u7B7E\u4FEE\u6539\u4ECD\u5728\u540C\u6B65\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5");
+    this.rebuildTagFileIndex();
+    const sourceFiles = Array.from(new Set(this.tagFileIndex.get(sourceTag) || []));
+    const files = this.getOrderedFilesForTag(sourceTag, sourceFiles).filter((file) => !selectedPaths || selectedPaths.has(file.path));
+    if (files.length === 0) return;
+    const existingTargetFiles = Array.from(new Set(this.tagFileIndex.get(targetTag) || []));
+    const existingTargetOrder = this.getOrderedFilesForTag(targetTag, existingTargetFiles).map((file) => file.path);
+    const existingTargetPaths = new Set(existingTargetFiles.map((file) => file.path));
+    const affectedPaths = new Set(files.map((file) => file.path));
+    const migration = {
+      mode: "rename",
+      oldTag: sourceTag,
+      newTag: targetTag,
+      affectedPaths,
+      committed: false
+    };
+    this.activeTagRename = migration;
+    try {
+      for (const file of files) {
+        await this.renameTagInFile(file, sourceTag, targetTag);
+      }
+      const newlyAddedPaths = files.map((file) => file.path).filter((path) => !existingTargetPaths.has(path));
+      const nextTargetOrder = this.settings.newNotePosition === "start" ? newlyAddedPaths.concat(existingTargetOrder) : existingTargetOrder.concat(newlyAddedPaths);
+      if (nextTargetOrder.length > 0) {
+        this.settings.noteOrderByTag[targetTag] = Array.from(new Set(nextTargetOrder));
+      }
+      const sourceOrder = this.settings.noteOrderByTag[sourceTag];
+      if (Array.isArray(sourceOrder)) {
+        const nextSourceOrder = sourceOrder.filter((path) => !affectedPaths.has(path));
+        if (nextSourceOrder.length > 0) this.settings.noteOrderByTag[sourceTag] = nextSourceOrder;
+        else delete this.settings.noteOrderByTag[sourceTag];
+      }
+      this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+      await this.saveSettings();
+      migration.committed = true;
+      this.refreshTagIndexAndViews();
+      if (!this.finishTagRenameProtectionIfSettled()) {
+        this.scheduleTagRenameProtectionFallback(migration);
+      }
+    } catch (error) {
+      if (this.activeTagRename === migration) {
+        this.activeTagRename = null;
+        this.clearTagRenameProtectionTimer();
+        this.refreshTagIndexAndViews();
+      }
+      throw error;
+    }
+  }
   async renameTagInFile(file, oldTag, newTag) {
     const cache = this.app.metadataCache.getFileCache(file);
     if (!cache) return;
@@ -5609,6 +5679,14 @@ var import_obsidian14 = require("obsidian");
 
 // src/modals.ts
 var import_obsidian13 = require("obsidian");
+function filterNoteCandidates(candidates, query, getAliases = () => []) {
+  const term = String(query || "").trim().toLowerCase();
+  if (!term) return [...candidates || []];
+  return (candidates || []).filter((candidate) => {
+    const file = candidate.file;
+    return String(candidate.path || "").toLowerCase().includes(term) || String((file == null ? void 0 : file.basename) || "").toLowerCase().includes(term) || file instanceof import_obsidian13.TFile && (getAliases(file) || []).some((alias) => String(alias).toLowerCase().includes(term));
+  });
+}
 var PuffsTagRenameModal = class extends import_obsidian13.Modal {
   constructor(app, plugin, tag) {
     super(app);
@@ -5616,79 +5694,256 @@ var PuffsTagRenameModal = class extends import_obsidian13.Modal {
     this.tag = normalizeTag(tag);
     this.mode = "rename";
     this.isSubmitting = false;
+    this.isComposing = false;
+    this.selectedPaths = /* @__PURE__ */ new Set();
+    this.selectionQuery = "";
+    this.sourceTagValue = this.tag;
+    this.targetTagValue = "";
+    this.noteCandidates = [];
   }
   onOpen() {
     this.modalEl.classList.add("puffs-tag-rename-modal");
     this.contentEl.empty();
-    const headingEl = document.createElement("div");
-    headingEl.className = "puffs-tag-rename-heading";
-    const titleEl = document.createElement("div");
-    titleEl.className = "puffs-tag-rename-title";
-    const addButtonEl = document.createElement("button");
-    addButtonEl.className = "puffs-tag-rename-mode-button";
-    addButtonEl.type = "button";
-    const deleteButtonEl = document.createElement("button");
-    deleteButtonEl.className = "puffs-tag-rename-mode-button";
-    deleteButtonEl.type = "button";
-    const inputEl = document.createElement("input");
-    inputEl.className = "puffs-tag-rename-input";
-    inputEl.type = "text";
-    headingEl.appendChild(titleEl);
-    headingEl.appendChild(addButtonEl);
-    headingEl.appendChild(deleteButtonEl);
-    this.contentEl.appendChild(headingEl);
-    this.contentEl.appendChild(inputEl);
-    const focusInput = (select = false) => {
-      window.setTimeout(() => {
-        inputEl.focus();
-        if (select) inputEl.select();
-      }, 0);
-    };
-    const renderMode = (mode) => {
-      this.mode = mode;
-      titleEl.textContent = mode === "add" ? "\u6279\u91CF\u65B0\u589E\u6807\u7B7E" : mode === "delete" ? "\u6279\u91CF\u5220\u9664\u6807\u7B7E" : "\u4FEE\u6539\u6807\u7B7E\u540D\u79F0";
-      (0, import_obsidian13.setIcon)(addButtonEl, mode === "add" ? "pencil" : "plus");
-      (0, import_obsidian13.setIcon)(deleteButtonEl, mode === "delete" ? "pencil" : "minus");
-      inputEl.value = mode === "rename" ? getTagDisplayName(this.tag) : "";
-      focusInput(mode === "rename");
-    };
-    const keepInputFocused = (evt) => {
-      evt.preventDefault();
-    };
-    addButtonEl.addEventListener("mousedown", keepInputFocused);
-    deleteButtonEl.addEventListener("mousedown", keepInputFocused);
-    addButtonEl.addEventListener("click", () => {
-      renderMode(this.mode === "add" ? "rename" : "add");
-    });
-    deleteButtonEl.addEventListener("click", () => {
-      renderMode(this.mode === "delete" ? "rename" : "delete");
-    });
-    inputEl.addEventListener("keydown", async (evt) => {
-      if (evt.key !== "Enter" || this.isSubmitting) return;
-      evt.preventDefault();
-      evt.stopPropagation();
-      this.isSubmitting = true;
-      try {
-        if (this.mode === "add") {
-          await this.plugin.addTagToTaggedNotes(this.tag, inputEl.value);
-        } else if (this.mode === "delete") {
-          await this.plugin.deleteTagFromTaggedNotes(this.tag, inputEl.value);
-        } else {
-          await this.plugin.renameTag(this.tag, inputEl.value);
-        }
-        this.close();
-      } catch (error) {
-        this.isSubmitting = false;
-        const fallbackMessage = this.mode === "add" ? "\u6279\u91CF\u65B0\u589E\u6807\u7B7E\u5931\u8D25" : this.mode === "delete" ? "\u6279\u91CF\u5220\u9664\u6807\u7B7E\u5931\u8D25" : "\u4FEE\u6539\u6807\u7B7E\u540D\u79F0\u5931\u8D25";
-        new import_obsidian13.Notice(error && error.message ? error.message : fallbackMessage);
-        inputEl.focus();
-        inputEl.select();
+    this.noteCandidates = this.collectNoteCandidates();
+    this.buildLayout();
+    this.renderMode("rename");
+    this.renderNoteSelection();
+  }
+  /** 候选池固定为右键标签的直属笔记，顺序沿用侧边栏的笔记排序。 */
+  collectNoteCandidates() {
+    var _a;
+    const files = Array.from(new Set(((_a = this.plugin.tagFileIndex) == null ? void 0 : _a.get(this.tag)) || []));
+    return this.plugin.getOrderedFilesForTag(this.tag, files).map((file) => ({ path: file.path, file }));
+  }
+  buildLayout() {
+    const headingEl = this.contentEl.createDiv({ cls: "puffs-tag-rename-heading" });
+    this.titleEl = headingEl.createDiv({ cls: "puffs-tag-rename-title" });
+    const addButtonEl = headingEl.createEl("button", { cls: "puffs-tag-rename-mode-button", attr: { type: "button" } });
+    const deleteButtonEl = headingEl.createEl("button", { cls: "puffs-tag-rename-mode-button", attr: { type: "button" } });
+    addButtonEl.addEventListener("click", () => this.renderMode(this.mode === "add" ? "rename" : "add"));
+    deleteButtonEl.addEventListener("click", () => this.renderMode(this.mode === "delete" ? "rename" : "delete"));
+    this.modeButtons = { add: addButtonEl, delete: deleteButtonEl };
+    const fieldsEl = this.contentEl.createDiv({ cls: "puffs-tag-rename-fields" });
+    this.sourceFieldEl = fieldsEl.createDiv({ cls: "puffs-relation-tag-search" });
+    this.sourceInputEl = this.sourceFieldEl.createEl("input", { type: "text", cls: "puffs-tag-rename-input" });
+    this.sourceInputEl.value = getTagDisplayName(this.tag);
+    let sourcePicker = null;
+    sourcePicker = createTagCandidatePicker({
+      hostEl: this.sourceFieldEl,
+      inputEl: this.sourceInputEl,
+      getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query),
+      onInput: (value) => {
+        this.sourceTagValue = value;
+      },
+      onSelect: (tag) => {
+        var _a;
+        this.sourceTagValue = tag;
+        this.sourceInputEl.value = getTagDisplayName(tag);
+        (_a = this.targetInputEl) == null ? void 0 : _a.focus();
+        window.setTimeout(() => sourcePicker == null ? void 0 : sourcePicker.resultsEl.classList.add("is-hidden"), 0);
+      },
+      setComposing: (value) => {
+        this.isComposing = value;
       }
     });
-    inputEl.addEventListener("blur", () => {
-      if (!this.isSubmitting) this.close();
+    sourcePicker.resultsEl.classList.add("is-hidden");
+    this.targetInputEl = fieldsEl.createEl("input", { type: "text", cls: "puffs-tag-rename-input" });
+    this.targetInputEl.addEventListener("input", () => {
+      this.targetTagValue = this.targetInputEl.value;
     });
-    renderMode("rename");
+    this.targetInputEl.addEventListener("compositionstart", () => {
+      this.isComposing = true;
+    });
+    this.targetInputEl.addEventListener("compositionend", () => {
+      this.isComposing = false;
+      this.targetTagValue = this.targetInputEl.value;
+    });
+    this.buildNoteSelectionSection();
+    this.registerSubmitHotkey();
+    this.registerSearchHotkey();
+    window.setTimeout(() => {
+      var _a;
+      return (_a = this.targetInputEl) == null ? void 0 : _a.focus();
+    }, 0);
+  }
+  buildNoteSelectionSection() {
+    const sectionEl = this.contentEl.createDiv({ cls: "puffs-note-selection" });
+    const headingEl = sectionEl.createDiv({ cls: "puffs-note-selection-heading" });
+    headingEl.createEl("h4", { text: "\u9009\u62E9\u7B14\u8BB0" });
+    this.selectionSummaryEl = headingEl.createSpan({ cls: "puffs-note-selection-summary" });
+    const toolbarEl = sectionEl.createDiv({ cls: "puffs-note-selection-toolbar" });
+    this.selectionInputEl = toolbarEl.createEl("input", { type: "search", cls: "puffs-relation-input" });
+    this.selectionInputEl.addEventListener("input", () => {
+      this.selectionQuery = this.selectionInputEl.value;
+      this.renderNoteSelection();
+    });
+    const selectAllButton = toolbarEl.createEl("button", { text: "\u5168\u9009\u7ED3\u679C", attr: { type: "button" } });
+    selectAllButton.dataset.puffsSelectionAction = "select";
+    selectAllButton.addEventListener("click", () => {
+      this.applyNoteSelectionBatch(true);
+      this.renderNoteSelection();
+    });
+    const clearButton = toolbarEl.createEl("button", { text: "\u6E05\u7A7A\u7ED3\u679C", attr: { type: "button" } });
+    clearButton.dataset.puffsSelectionAction = "clear";
+    clearButton.addEventListener("click", () => {
+      this.applyNoteSelectionBatch(false);
+      this.renderNoteSelection();
+    });
+    this.selectionListEl = sectionEl.createDiv({ cls: "puffs-note-selection-list" });
+  }
+  /**
+   * 回车提交：焦点在弹窗内的任意位置都生效，中文组词期间不响应。
+   *
+   * 监听挂在 document 上而非 modalEl：点击复选框、按钮或弹窗空白处之后，
+   * 焦点可能落到 document.body（在 modalEl 之外），此时 keydown 根本不会
+   * 冒泡到 modalEl，回车就没反应。改为在 document 捕获、再判断事件是否
+   * 发生在本弹窗范围内，才能覆盖「焦点在弹窗内任意位置」这个要求。
+   */
+  registerSubmitHotkey() {
+    this.submitHotkeyHandler = (event) => {
+      var _a, _b;
+      if (event.key !== "Enter") return;
+      if (this.isComposing || event.isComposing || event.keyCode === 229) return;
+      if (!((_a = this.modalEl) == null ? void 0 : _a.isConnected)) return;
+      const target = event.target;
+      const insideModal = target instanceof Node && this.modalEl.contains(target);
+      const focusOutside = !(document.activeElement instanceof Node) || !this.modalEl.contains(document.activeElement);
+      if (!insideModal && !focusOutside) return;
+      if (document.activeElement === this.sourceInputEl && !((_b = this.sourceFieldEl) == null ? void 0 : _b.classList.contains("is-hidden"))) {
+        const resultsEl = this.sourceFieldEl.querySelector(".puffs-relation-tag-results");
+        if (resultsEl && !resultsEl.classList.contains("is-hidden")) return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      void this.submit();
+    };
+    document.addEventListener("keydown", this.submitHotkeyHandler, true);
+  }
+  onClose() {
+    var _a;
+    if (this.submitHotkeyHandler) {
+      document.removeEventListener("keydown", this.submitHotkeyHandler, true);
+      this.submitHotkeyHandler = null;
+    }
+    (_a = this.contentEl) == null ? void 0 : _a.empty();
+  }
+  registerSearchHotkey() {
+    this.modalEl.addEventListener("keydown", (event) => {
+      var _a;
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (document.activeElement === this.selectionInputEl && this.selectionInputEl.value) {
+        this.selectionInputEl.value = "";
+        this.selectionQuery = "";
+        this.renderNoteSelection();
+      }
+      (_a = this.selectionInputEl) == null ? void 0 : _a.focus();
+    }, true);
+  }
+  renderMode(mode) {
+    this.mode = mode;
+    this.titleEl.textContent = mode === "add" ? "\u6279\u91CF\u65B0\u589E\u6807\u7B7E" : mode === "delete" ? "\u6279\u91CF\u5220\u9664\u6807\u7B7E" : "\u6279\u91CF\u4FEE\u6539\u6807\u7B7E\u540D\u79F0";
+    (0, import_obsidian13.setIcon)(this.modeButtons.add, mode === "add" ? "pencil" : "plus");
+    (0, import_obsidian13.setIcon)(this.modeButtons.delete, mode === "delete" ? "pencil" : "minus");
+    this.targetInputEl.value = "";
+    this.targetTagValue = "";
+    this.syncSourceFieldVisibility();
+    window.setTimeout(() => {
+      var _a;
+      return (_a = this.targetInputEl) == null ? void 0 : _a.focus();
+    }, 0);
+  }
+  syncSourceFieldVisibility() {
+    var _a;
+    (_a = this.sourceFieldEl) == null ? void 0 : _a.classList.toggle("is-hidden", this.mode !== "rename");
+  }
+  getFilteredNoteCandidates() {
+    return filterNoteCandidates(
+      this.noteCandidates,
+      this.selectionQuery,
+      (file) => this.plugin.getNoteAliases(file)
+    );
+  }
+  toggleNoteCandidate(path, selected) {
+    if (selected) this.selectedPaths.add(path);
+    else this.selectedPaths.delete(path);
+  }
+  /** 全选/清空只作用于当前筛选结果，不影响筛选之外的已选笔记。 */
+  applyNoteSelectionBatch(selected) {
+    for (const candidate of this.getFilteredNoteCandidates()) {
+      this.toggleNoteCandidate(candidate.path, selected);
+    }
+  }
+  /** 增量对账：复用未变化的行，保留滚动位置，避免打断用户操作。 */
+  renderNoteSelection() {
+    var _a, _b;
+    if (!this.selectionListEl || !this.selectionSummaryEl) return;
+    this.selectionSummaryEl.textContent = `\u5DF2\u9009 ${this.selectedPaths.size} / ${this.noteCandidates.length}`;
+    const filtered = this.getFilteredNoteCandidates();
+    const scrollTop = this.selectionListEl.scrollTop;
+    const existingRows = new Map(
+      Array.from(this.selectionListEl.querySelectorAll(".puffs-note-selection-row")).map((rowEl) => [rowEl.dataset.puffsPath || "", rowEl])
+    );
+    if (!filtered.length) {
+      for (const rowEl of existingRows.values()) rowEl.remove();
+      let emptyEl = this.selectionListEl.querySelector(".puffs-relation-empty");
+      if (!emptyEl) emptyEl = this.selectionListEl.createDiv({ cls: "puffs-relation-empty" });
+      emptyEl.textContent = this.noteCandidates.length ? "\u6CA1\u6709\u5339\u914D\u7684\u7B14\u8BB0" : "\u8BE5\u6807\u7B7E\u4E0B\u6682\u65E0\u7B14\u8BB0";
+      return;
+    }
+    (_a = this.selectionListEl.querySelector(".puffs-relation-empty")) == null ? void 0 : _a.remove();
+    for (const candidate of filtered) {
+      let rowEl = existingRows.get(candidate.path);
+      if (!rowEl) {
+        rowEl = this.selectionListEl.createEl("label", { cls: "puffs-note-selection-row" });
+        const checkbox2 = rowEl.createEl("input", { type: "checkbox" });
+        checkbox2.addEventListener("change", () => {
+          this.toggleNoteCandidate(rowEl.dataset.puffsPath, checkbox2.checked);
+          this.selectionSummaryEl.textContent = `\u5DF2\u9009 ${this.selectedPaths.size} / ${this.noteCandidates.length}`;
+        });
+        rowEl.createSpan({ cls: "puffs-note-selection-name" });
+      }
+      rowEl.dataset.puffsPath = candidate.path;
+      const checkbox = rowEl.querySelector('input[type="checkbox"]');
+      checkbox.checked = this.selectedPaths.has(candidate.path);
+      checkbox.disabled = !!this.isSubmitting;
+      const nameEl = rowEl.querySelector(".puffs-note-selection-name");
+      nameEl.textContent = ((_b = candidate.file) == null ? void 0 : _b.basename) || candidate.path;
+      nameEl.setAttribute("title", candidate.path);
+      this.selectionListEl.appendChild(rowEl);
+      existingRows.delete(candidate.path);
+    }
+    for (const rowEl of existingRows.values()) rowEl.remove();
+    this.selectionListEl.scrollTop = scrollTop;
+  }
+  async submit() {
+    var _a, _b;
+    if (this.isSubmitting) return;
+    if (this.selectedPaths.size === 0) {
+      new import_obsidian13.Notice("\u8BF7\u5148\u9009\u62E9\u7B14\u8BB0");
+      return;
+    }
+    this.isSubmitting = true;
+    this.renderNoteSelection();
+    try {
+      if (this.mode === "add") {
+        await this.plugin.addTagToTaggedNotes(this.tag, this.targetTagValue, this.selectedPaths);
+      } else if (this.mode === "delete") {
+        await this.plugin.deleteTagFromTaggedNotes(this.tag, this.targetTagValue, this.selectedPaths);
+      } else {
+        await this.plugin.renameTagInSelectedNotes(this.sourceTagValue, this.targetTagValue, this.selectedPaths);
+      }
+      this.close();
+    } catch (error) {
+      const fallbackMessage = this.mode === "add" ? "\u6279\u91CF\u65B0\u589E\u6807\u7B7E\u5931\u8D25" : this.mode === "delete" ? "\u6279\u91CF\u5220\u9664\u6807\u7B7E\u5931\u8D25" : "\u6279\u91CF\u4FEE\u6539\u6807\u7B7E\u540D\u79F0\u5931\u8D25";
+      new import_obsidian13.Notice(error && error.message ? error.message : fallbackMessage);
+      (_a = this.targetInputEl) == null ? void 0 : _a.focus();
+      (_b = this.targetInputEl) == null ? void 0 : _b.select();
+    } finally {
+      this.isSubmitting = false;
+      this.renderNoteSelection();
+    }
   }
 };
 

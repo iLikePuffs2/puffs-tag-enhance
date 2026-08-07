@@ -506,15 +506,24 @@ export class TagIndexBehavior {
     });
   }
 
-  async addTagToTaggedNotes(sourceTagValue: any, newTagValue: any) {
-    await this.updateTagPropertiesForTaggedNotes('add', sourceTagValue, newTagValue);
+  async addTagToTaggedNotes(sourceTagValue: any, newTagValue: any, selectedPaths: any = null) {
+    await this.updateTagPropertiesForTaggedNotes('add', sourceTagValue, newTagValue, selectedPaths);
   }
 
-  async deleteTagFromTaggedNotes(sourceTagValue: any, targetTagValue: any) {
-    await this.updateTagPropertiesForTaggedNotes('delete', sourceTagValue, targetTagValue);
+  async deleteTagFromTaggedNotes(sourceTagValue: any, targetTagValue: any, selectedPaths: any = null) {
+    await this.updateTagPropertiesForTaggedNotes('delete', sourceTagValue, targetTagValue, selectedPaths);
   }
 
-  async updateTagPropertiesForTaggedNotes(mode: any, sourceTagValue: any, targetTagValue: any) {
+  /**
+   * selectedPaths 为批量操作弹窗勾选的笔记路径白名单。
+   * 传 null/undefined 时保持历史的「标签下全部笔记」行为，供旧入口继续使用。
+   */
+  async updateTagPropertiesForTaggedNotes(
+    mode: any,
+    sourceTagValue: any,
+    targetTagValue: any,
+    selectedPaths: any = null
+  ) {
     const sourceTag = normalizeTag(sourceTagValue);
     const targetTag = normalizeTag(targetTagValue);
 
@@ -528,6 +537,7 @@ export class TagIndexBehavior {
     const sourceFiles = Array.from(new Set(this.tagFileIndex.get(sourceTag) || []));
     const orderedSourceFiles = this.getOrderedFilesForTag(sourceTag, sourceFiles);
     const files = orderedSourceFiles.filter((file: any) => {
+      if (selectedPaths && !selectedPaths.has(file.path)) return false;
       const hasTag = this.fileHasFrontmatterTag(file, targetTag);
       return mode === 'add' ? !hasTag : hasTag;
     });
@@ -581,6 +591,89 @@ export class TagIndexBehavior {
         const nextOrder = existingTargetOrder.filter((path: any) => !removedPaths.has(path));
         if (nextOrder.length > 0) this.settings.noteOrderByTag[targetTag] = nextOrder;
         else delete this.settings.noteOrderByTag[targetTag];
+      }
+
+      this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
+      await this.saveSettings();
+
+      migration.committed = true;
+      this.refreshTagIndexAndViews();
+      if (!this.finishTagRenameProtectionIfSettled()) {
+        this.scheduleTagRenameProtectionFallback(migration);
+      }
+    } catch (error) {
+      if (this.activeTagRename === migration) {
+        this.activeTagRename = null;
+        this.clearTagRenameProtectionTimer();
+        this.refreshTagIndexAndViews();
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * 只把选中笔记里的 sourceTag 换成 targetTag。
+   *
+   * 与全局的 renameTag 有意分开：这里改完之后源标签通常仍然存在（还有别的笔记挂着它），
+   * 所以绝不能迁移 expandedTags / pinnedTag / 标签关系 / 绑定笔记——那些是「标签本身改名」
+   * 才成立的动作，在部分改名场景下迁移会直接破坏数据。这里只做两件事：逐文件改写标签文本、
+   * 维护两个标签的笔记顺序记录。
+   *
+   * 选中但不持有 sourceTag 的笔记会被静默跳过。
+   */
+  async renameTagInSelectedNotes(sourceTagValue: any, targetTagValue: any, selectedPaths: any = null) {
+    const sourceTag = normalizeTag(sourceTagValue);
+    const targetTag = normalizeTag(targetTagValue);
+
+    if (!sourceTag) throw new Error('原标签无效');
+    if (!targetTag) throw new Error('标签名称不能为空');
+    if (/\s/.test(getTagDisplayName(targetTag))) throw new Error('标签名称不能包含空格');
+    if (sourceTag === targetTag) return;
+    if (this.activeTagRename) throw new Error('上一次标签修改仍在同步，请稍后再试');
+
+    this.rebuildTagFileIndex();
+    const sourceFiles = Array.from(new Set(this.tagFileIndex.get(sourceTag) || []));
+    const files = this.getOrderedFilesForTag(sourceTag, sourceFiles)
+      .filter((file: any) => !selectedPaths || selectedPaths.has(file.path));
+    if (files.length === 0) return;
+
+    const existingTargetFiles = Array.from(new Set(this.tagFileIndex.get(targetTag) || []));
+    const existingTargetOrder = this.getOrderedFilesForTag(targetTag, existingTargetFiles)
+      .map((file: any) => file.path);
+    const existingTargetPaths = new Set(existingTargetFiles.map((file: any) => file.path));
+    const affectedPaths = new Set(files.map((file: any) => file.path));
+    const migration = {
+      mode: 'rename',
+      oldTag: sourceTag,
+      newTag: targetTag,
+      affectedPaths,
+      committed: false,
+    };
+
+    this.activeTagRename = migration;
+
+    try {
+      for (const file of files) {
+        await this.renameTagInFile(file, sourceTag, targetTag);
+      }
+
+      // 改动的笔记并入目标标签顺序；已在目标标签下的不重复插入
+      const newlyAddedPaths = files
+        .map((file: any) => file.path)
+        .filter((path: any) => !existingTargetPaths.has(path));
+      const nextTargetOrder = this.settings.newNotePosition === 'start'
+        ? newlyAddedPaths.concat(existingTargetOrder)
+        : existingTargetOrder.concat(newlyAddedPaths);
+      if (nextTargetOrder.length > 0) {
+        this.settings.noteOrderByTag[targetTag] = Array.from(new Set(nextTargetOrder));
+      }
+
+      // 源标签顺序里移除那些已经不再持有它的笔记（行内标签可能仍在，判据与增删路径一致）
+      const sourceOrder = this.settings.noteOrderByTag[sourceTag];
+      if (Array.isArray(sourceOrder)) {
+        const nextSourceOrder = sourceOrder.filter((path: any) => !affectedPaths.has(path));
+        if (nextSourceOrder.length > 0) this.settings.noteOrderByTag[sourceTag] = nextSourceOrder;
+        else delete this.settings.noteOrderByTag[sourceTag];
       }
 
       this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);

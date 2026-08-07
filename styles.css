@@ -761,6 +761,90 @@
   border-color: var(--interactive-accent);
 }
 
+/* 批量操作标签弹窗的输入区与笔记勾选区，视觉规范对齐继承管理弹窗的勾选区 */
+.puffs-tag-rename-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.puffs-tag-rename-fields .puffs-relation-tag-search {
+  position: relative;
+}
+
+.puffs-tag-rename-fields .puffs-relation-tag-search.is-hidden {
+  display: none;
+}
+
+.puffs-note-selection {
+  margin-top: 20px;
+}
+
+.puffs-note-selection-heading,
+.puffs-note-selection-toolbar,
+.puffs-note-selection-row {
+  display: flex;
+  align-items: center;
+}
+
+.puffs-note-selection-heading {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.puffs-note-selection-heading h4 {
+  margin: 0;
+}
+
+.puffs-note-selection-summary {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.puffs-note-selection-toolbar {
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.puffs-note-selection-toolbar .puffs-relation-input {
+  flex: 1 1 auto;
+}
+
+.puffs-note-selection-toolbar button {
+  flex: 0 0 auto;
+}
+
+.puffs-note-selection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.puffs-note-selection-row {
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  cursor: pointer;
+}
+
+.puffs-note-selection-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.puffs-note-selection-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .puffs-inline-hierarchy-children,
 .puffs-hierarchy-search-content {
   display: block;

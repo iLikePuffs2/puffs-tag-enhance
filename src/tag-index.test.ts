@@ -5,7 +5,7 @@
 // 真实的数据风险（详见方案「数据安全」一节）—— 阶段 1 加安全阀后，该用例需按新
 // 预期更新，届时它正好是安全阀生效的证据。
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TFile } from './test-obsidian-mock';
 import { TagIndexBehavior } from './tag-index';
 
@@ -254,5 +254,223 @@ describe('展开态对账', () => {
 
     expect(Array.from(behavior.expandedTags as Set<string>).sort())
       .toEqual(['#读书', 'intersection:#a&#b']);
+  });
+});
+
+// 批量操作标签的写盘路径。
+//
+// 这批用例锁定「作用域」这一核心语义：过去批量增删改一律作用于标签下的全部笔记，
+// 现在弹窗允许用户勾选子集，因此业务层必须接受一份路径白名单并严格遵守它。
+// 传 null 的用例是回归保护——右键菜单等旧入口仍依赖全量行为。
+function makeWriteBehavior(options: {
+  files?: string[];
+  cacheByPath?: Record<string, unknown>;
+  noteOrderByTag?: Record<string, string[]>;
+  newNotePosition?: 'start' | 'end';
+} = {}) {
+  const behavior = makeBehavior(options) as unknown as AnyRecord & {
+    app: AnyRecord;
+    updateTagPropertiesForTaggedNotes: (
+      mode: string, source: string, target: string, selectedPaths?: Set<string> | null,
+    ) => Promise<void>;
+    renameTagInSelectedNotes: (
+      source: string, target: string, selectedPaths?: Set<string> | null,
+    ) => Promise<void>;
+  };
+
+  // 记录每次 processFrontMatter 命中的文件，断言作用域是否被正确收窄
+  const frontMatterCalls: string[] = [];
+  const frontMatterByPath = options.cacheByPath || {};
+  behavior.app.fileManager = {
+    processFrontMatter: async (file: { path: string }, fn: (fm: AnyRecord) => void) => {
+      frontMatterCalls.push(file.path);
+      const cache = (frontMatterByPath[file.path] || {}) as AnyRecord;
+      const frontmatter = (cache.frontmatter || {}) as AnyRecord;
+      fn(frontmatter);
+      cache.frontmatter = frontmatter;
+    },
+  };
+  behavior.frontMatterCalls = frontMatterCalls;
+
+  behavior.renameCalls = [] as Array<{ path: string; oldTag: string; newTag: string }>;
+  behavior.renameTagInFile = async (file: { path: string }, oldTag: string, newTag: string) => {
+    (behavior.renameCalls as AnyRecord[]).push({ path: file.path, oldTag, newTag });
+  };
+
+  // getOrderedFilesForTag 由 InteractionsBehavior 提供，运行时经 mixin 挂到同一实例上；
+  // 这里按保存顺序做最小实现，未记录顺序的笔记保持索引原序。
+  behavior.getOrderedFilesForTag = (tag: string, files: Array<{ path: string }>) => {
+    const savedOrder = (options.noteOrderByTag || {})[tag];
+    if (!Array.isArray(savedOrder) || savedOrder.length === 0) return files;
+    return [...files].sort((left, right) => {
+      const leftRank = savedOrder.indexOf(left.path);
+      const rightRank = savedOrder.indexOf(right.path);
+      return (leftRank < 0 ? Number.MAX_SAFE_INTEGER : leftRank)
+        - (rightRank < 0 ? Number.MAX_SAFE_INTEGER : rightRank);
+    });
+  };
+
+  behavior.saveSettings = vi.fn(async () => undefined);
+  behavior.refreshTagIndexAndViews = () => undefined;
+  behavior.finishTagRenameProtectionIfSettled = () => true;
+  behavior.scheduleTagRenameProtectionFallback = () => undefined;
+  behavior.clearTagRenameProtectionTimer = () => undefined;
+  behavior.migrateTagRelations = vi.fn();
+  behavior.migrateTagBoundNote = vi.fn();
+  behavior.normalizeNoteOrderByTag = (value: unknown) => value;
+  behavior.normalizeNoteDisplayNameByTag = (value: unknown) => value;
+
+  return behavior;
+}
+
+describe('批量增删标签的作用域', () => {
+  const cacheOf = (tagsByPath: Record<string, string[]>) =>
+    Object.fromEntries(Object.entries(tagsByPath).map(([path, tags]) => [path, { frontmatter: { tags } }]));
+
+  it('传入 selectedPaths 时只处理白名单内的笔记', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md', 'b.md', 'c.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'], 'b.md': ['读书'], 'c.md': ['读书'] }),
+    });
+
+    await behavior.updateTagPropertiesForTaggedNotes(
+      'add', '#读书', '#科幻', new Set(['a.md', 'c.md']),
+    );
+
+    expect(behavior.frontMatterCalls).toEqual(['a.md', 'c.md']);
+  });
+
+  it('不传 selectedPaths 时保持全量行为', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md', 'b.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'], 'b.md': ['读书'] }),
+    });
+
+    await behavior.updateTagPropertiesForTaggedNotes('add', '#读书', '#科幻');
+
+    expect(behavior.frontMatterCalls).toEqual(['a.md', 'b.md']);
+  });
+
+  it('白名单与标签下的笔记无交集时不写盘', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'] }),
+    });
+
+    await behavior.updateTagPropertiesForTaggedNotes(
+      'add', '#读书', '#科幻', new Set(['不存在.md']),
+    );
+
+    expect(behavior.frontMatterCalls).toEqual([]);
+    expect(behavior.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('删除同样受白名单约束', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md', 'b.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书', '科幻'], 'b.md': ['读书', '科幻'] }),
+    });
+
+    await behavior.updateTagPropertiesForTaggedNotes(
+      'delete', '#读书', '#科幻', new Set(['b.md']),
+    );
+
+    expect(behavior.frontMatterCalls).toEqual(['b.md']);
+  });
+});
+
+describe('选中笔记范围内的标签改名', () => {
+  const cacheOf = (tagsByPath: Record<string, string[]>) =>
+    Object.fromEntries(Object.entries(tagsByPath).map(([path, tags]) => [path, { frontmatter: { tags } }]));
+
+  it('只改选中且真正持有源标签的笔记', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md', 'b.md', 'c.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'], 'b.md': ['读书'], 'c.md': ['科幻'] }),
+    });
+
+    // c.md 被选中但没有源标签 #读书，应被静默跳过
+    await behavior.renameTagInSelectedNotes('#读书', '#新书', new Set(['a.md', 'c.md']));
+
+    expect((behavior.renameCalls as Array<{ path: string }>).map((call) => call.path)).toEqual(['a.md']);
+  });
+
+  it('选中的笔记全都没有源标签时直接返回，不写盘', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md', 'c.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'], 'c.md': ['科幻'] }),
+    });
+
+    await behavior.renameTagInSelectedNotes('#读书', '#新书', new Set(['c.md']));
+
+    expect(behavior.renameCalls).toEqual([]);
+    expect(behavior.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('不迁移置顶标签、展开态与标签关系（源标签仍然存在）', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md', 'b.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'], 'b.md': ['读书'] }),
+    });
+    (behavior.settings as AnyRecord).pinnedTag = '#读书';
+    behavior.expandedTags = new Set(['#读书']);
+
+    await behavior.renameTagInSelectedNotes('#读书', '#新书', new Set(['a.md']));
+
+    expect((behavior.settings as AnyRecord).pinnedTag).toBe('#读书');
+    expect(Array.from(behavior.expandedTags as Set<string>)).toEqual(['#读书']);
+    expect(behavior.migrateTagRelations).not.toHaveBeenCalled();
+    expect(behavior.migrateTagBoundNote).not.toHaveBeenCalled();
+  });
+
+  it('把改动的笔记并入目标标签的顺序记录', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md', 'b.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'], 'b.md': ['新书'] }),
+      noteOrderByTag: { '#新书': ['b.md'] },
+      newNotePosition: 'end',
+    });
+
+    await behavior.renameTagInSelectedNotes('#读书', '#新书', new Set(['a.md']));
+
+    const orders = (behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> }).noteOrderByTag;
+    expect(orders['#新书']).toEqual(['b.md', 'a.md']);
+  });
+
+  it('把改动的笔记从源标签的顺序记录中移除', async () => {
+    // 手工序必须不同于默认序，否则 reconcileNoteOrders 会因「等于默认序」而不落盘（见 tag-index.ts 的 isDefaultNoteOrder）
+    const behavior = makeWriteBehavior({
+      files: ['a.md', 'b.md', 'c.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'], 'b.md': ['读书'], 'c.md': ['读书'] }),
+      noteOrderByTag: { '#读书': ['c.md', 'a.md', 'b.md'] },
+    });
+
+    await behavior.renameTagInSelectedNotes('#读书', '#新书', new Set(['a.md']));
+
+    const orders = (behavior.settings as AnyRecord & { noteOrderByTag: Record<string, string[]> }).noteOrderByTag;
+    expect(orders['#读书']).toEqual(['c.md', 'b.md']);
+  });
+
+  it('校验标签名：空名与含空格都拒绝', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'] }),
+    });
+
+    await expect(behavior.renameTagInSelectedNotes('#读书', '', new Set(['a.md'])))
+      .rejects.toThrow('标签名称不能为空');
+    await expect(behavior.renameTagInSelectedNotes('#读书', '新 书', new Set(['a.md'])))
+      .rejects.toThrow('标签名称不能包含空格');
+  });
+
+  it('源标签与目标标签相同时不做任何事', async () => {
+    const behavior = makeWriteBehavior({
+      files: ['a.md'],
+      cacheByPath: cacheOf({ 'a.md': ['读书'] }),
+    });
+
+    await behavior.renameTagInSelectedNotes('#读书', '#读书', new Set(['a.md']));
+
+    expect(behavior.renameCalls).toEqual([]);
   });
 });

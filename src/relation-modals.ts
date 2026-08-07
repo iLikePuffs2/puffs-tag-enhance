@@ -1423,6 +1423,7 @@ export {
   getNoteBindingCandidates,
   getNoteRelationSubmitError,
   getTagRelationCandidates,
+  createTagCandidatePicker,
   filterInheritanceCandidates,
   groupInheritanceCandidates,
 };
