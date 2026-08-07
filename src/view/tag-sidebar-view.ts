@@ -210,9 +210,27 @@ class PuffsTagSidebarView extends ItemView {
     const hotkey = this.plugin.getQuickSearchHotkey();
     this.searchHotkeyRegistration = this.scope!.register(hotkey.modifiers, hotkey.key, (event: any) => {
       event.preventDefault();
-      this.toggleSearch();
+      this.handleQuickSearchHotkey();
       return false;
     });
+  }
+
+  /**
+   * 快捷键（默认 Ctrl+F）是聚焦优先，不是开关。
+   *
+   * 搜索框在样式上常驻可见（styles.css 里特异性高于 .puffs-tag-hidden），
+   * 原先绑 toggleSearch 会让「焦点在列表里按一下」变成清空内容却不聚焦。
+   * 收起搜索框仍由 Esc 和工具栏按钮负责。
+   */
+  handleQuickSearchHotkey() {
+    const inputEl = this.searchComponent?.inputEl;
+    if (inputEl && inputEl.isConnected && inputEl.ownerDocument?.activeElement === inputEl) {
+      // 焦点已在框内：再按一次清空条件，焦点留在原地
+      this.searchComponent?.setValue('');
+      this.applySearchValue('');
+      return;
+    }
+    this.focusSearch();
   }
 
   registerDomEvents() {

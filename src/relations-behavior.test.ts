@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { TFile } from "obsidian";
+import { Notice, TFile } from "obsidian";
 import { RelationsBehavior } from "./relations";
 import { TagPaneBehavior } from "./tag-pane";
 import { PuffsTagSidebarView } from "./view/tag-sidebar-view";
@@ -660,7 +660,7 @@ describe('批量父子关系', () => {
     expect(behavior.saveSettings).toHaveBeenCalledOnce();
   });
 
-  it('下游选择限制上层候选并同步清除祖先名单，重新放行时自动补录祖先', async () => {
+  it('深层笔记由下游放行决定，祖先白名单不再记录它们', async () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), ['孙.md']) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子'], '#子': ['#孙'] };
     behavior.settings.relations.tagInheritance.enabledParents = ['#父', '#子'];
@@ -681,13 +681,15 @@ describe('批量父子关系', () => {
     expect(behavior.getInheritanceCandidates('#父', '#子')).toEqual([]);
     expect(behavior.getTagBrowseData('#父').inheritedFiles).toEqual([]);
 
+    // 孙.md 不是 #子 的直接笔记，祖先白名单对它不起作用，reconcile 也会把这条死数据清掉；
+    // 下游一放行，祖先下立刻恢复可见，不需要回到祖先边二次勾选
     await behavior.setIncludedInheritedPaths('#子', '#孙', ['孙.md']);
     expect(behavior.getInheritanceCandidates('#父', '#子').map((candidate: any) => candidate.path)).toEqual(['孙.md']);
-    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual(['孙.md']);
+    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual([]);
     expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['孙.md']);
   });
 
-  it('三层选择继承下，下游新放行的笔记自动补录到祖先边并立即可见', async () => {
+  it('三层选择继承下，下游新放行的笔记在祖先下立即可见，祖先只能逐篇排除', async () => {
     const paths = ['甲.md', '乙.md', '丙.md', '丁.md'];
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), paths) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = { '#爱情': ['#亲昵'], '#亲昵': ['#言语'] };
@@ -706,14 +708,16 @@ describe('批量父子关系', () => {
 
     expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path)).toEqual(['甲.md']);
 
-    // 在「亲昵」为「言语」新勾选三张，无需回到「爱情」二次勾选
+    // 在「亲昵」为「言语」新勾选三张，无需回到「爱情」二次勾选。
+    // 「爱情→亲昵」的白名单只管 #亲昵 自己的笔记，这些孙笔记不进也不该进这份名单。
     await behavior.setIncludedInheritedPaths('#亲昵', '#言语', paths);
-    expect(behavior.getIncludedInheritedPaths('#爱情', '#亲昵').sort()).toEqual([...paths].sort());
+    expect(behavior.getIncludedInheritedPaths('#爱情', '#亲昵')).toEqual([]);
     expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path)).toEqual(paths);
     expect(behavior.getTagBrowseData('#亲昵').inheritedFiles.map((file: any) => file.path)).toEqual(paths);
 
-    // 事后在「爱情」单独取消一张，只影响爱情，不影响亲昵
+    // 事后在「爱情」单独取消一张：写进「爱情→亲昵」的黑名单，只影响爱情，不影响亲昵
     await behavior.setInheritedFileVisibleForEdge('#爱情', '#亲昵', '丙.md', false);
+    expect(behavior.getExcludedInheritedPaths('#爱情', '#亲昵')).toEqual(['丙.md']);
     expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path))
       .toEqual(['甲.md', '乙.md', '丁.md']);
     expect(behavior.getTagBrowseData('#亲昵').inheritedFiles.map((file: any) => file.path)).toEqual(paths);
@@ -750,8 +754,8 @@ describe('批量父子关系', () => {
     ]);
 
     await behavior.setIncludedInheritedPaths('#子', '#孙', ['甲.md']);
-    // 乙.md 在下游被取消，祖先名单由 reconcile 收缩，而非被传播写入
-    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual(['甲.md']);
+    // 乙.md 在下游被取消，祖先下随之消失；祖先白名单里的孙笔记是死数据，被 reconcile 清空
+    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual([]);
     expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['甲.md']);
   });
 
@@ -775,7 +779,8 @@ describe('批量父子关系', () => {
 
     expect(behavior.initializeTagInheritanceOrder()).toBe(true);
     expect(behavior.settings.relations.version).toBe(6);
-    expect(behavior.getIncludedInheritedPaths('#爱情', '#亲昵')).toEqual(['保留.md']);
+    // 三条都是 #言语 的笔记、不是 #亲昵 的直接笔记，整份跨层白名单都是死数据
+    expect(behavior.getIncludedInheritedPaths('#爱情', '#亲昵')).toEqual([]);
     expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path)).toEqual(['保留.md']);
   });
 
@@ -813,13 +818,14 @@ describe('批量父子关系', () => {
     const candidate = behavior.getInheritanceCandidates('#根', '#自由')[0];
     expect(candidate.path).toBe('固定后代.md');
     expect(candidate.fixed).toBe(false);
-    expect(behavior.getTagBrowseData('#根').inheritedFiles).toEqual([]);
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = { '#根': { '#自由': ['固定后代.md'] } };
+    // 上层的白名单不拦深层笔记，但上层的黑名单仍然拦得住 —— 固定边只豁免它自己那一段
     expect(behavior.getTagBrowseData('#根').inheritedFiles.map((file: any) => file.path)).toEqual(['固定后代.md']);
     expect(behavior.isFixedInheritedFileForTag('#根', '固定后代.md')).toBe(false);
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = { '#根': { '#自由': ['固定后代.md'] } };
+    expect(behavior.getTagBrowseData('#根').inheritedFiles).toEqual([]);
 
     behavior.settings.relations.tagInheritance.fixedParentByChild['#自由'] = '#根';
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = {};
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = {};
     expect(behavior.getTagBrowseData('#根').inheritedFiles.map((file: any) => file.path)).toEqual(['固定后代.md']);
     expect(behavior.isFixedInheritedFileForTag('#根', '固定后代.md')).toBe(true);
   });
@@ -1158,6 +1164,99 @@ describe('固定子标签', () => {
     expect(items[0].tag).toBe('#秘境');
     expect(items[0].fixedSearchTags).toEqual(['#秘境-开始']);
     expect(items[0].files).toEqual([{ path: '子.md' }]);
+  });
+});
+
+describe('侧边栏快捷搜索键', () => {
+  function createView(focused: boolean, value = '已输入') {
+    const view = Object.create(PuffsTagSidebarView.prototype) as any;
+    const inputEl: any = { value, isConnected: true, focus: vi.fn() };
+    inputEl.ownerDocument = { activeElement: focused ? inputEl : { tag: '别处' } };
+    view.searchComponent = { inputEl, setValue: vi.fn((next: string) => { inputEl.value = next; }) };
+    view.searchQuery = value;
+    view.isShowingSearch = true;
+    view.syncSearchVisibility = vi.fn();
+    view.render = vi.fn();
+    return { view, inputEl };
+  }
+
+  it('焦点不在搜索框时移入焦点并保留已输入内容', () => {
+    const { view, inputEl } = createView(false);
+
+    view.handleQuickSearchHotkey();
+
+    expect(inputEl.focus).toHaveBeenCalled();
+    expect(view.searchQuery).toBe('已输入');
+    expect(view.searchComponent.setValue).not.toHaveBeenCalled();
+  });
+
+  it('搜索框未展开时先展开再聚焦', () => {
+    const { view, inputEl } = createView(false, '');
+    view.isShowingSearch = false;
+
+    view.handleQuickSearchHotkey();
+
+    expect(view.isShowingSearch).toBe(true);
+    expect(view.syncSearchVisibility).toHaveBeenCalled();
+    expect(inputEl.focus).toHaveBeenCalled();
+  });
+
+  it('焦点已在搜索框时清空内容，焦点留在原地', () => {
+    const { view, inputEl } = createView(true);
+
+    view.handleQuickSearchHotkey();
+
+    expect(view.searchComponent.setValue).toHaveBeenCalledWith('');
+    expect(view.searchQuery).toBe('');
+    expect(view.render).toHaveBeenCalled();
+    expect(inputEl.focus).not.toHaveBeenCalled();
+  });
+});
+
+describe('定位父子关系', () => {
+  function createLocateBehavior(hierarchyParents: string[]) {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    const file = new (TFile as any)('笔记.md');
+    const cardEl = {};
+    const sidebarView = { containerEl: { contains: (el: any) => el === cardEl } };
+    behavior.app = {
+      vault: { getAbstractFileByPath: (path: string) => (path === '笔记.md' ? file : null) },
+      workspace: {
+        getLeavesOfType: (type: string) => (type === 'puffs-tag-sidebar' ? [{ view: sidebarView }] : []),
+      },
+    };
+    behavior.getHierarchyParents = () => hierarchyParents;
+    behavior.pushHierarchyNavigationForView = vi.fn();
+    return { behavior, cardEl, sidebarView };
+  }
+
+  it('在自绘侧边栏里定位，而不是已经不存在的核心标签面板', () => {
+    const { behavior, cardEl, sidebarView } = createLocateBehavior(['父.md']);
+
+    behavior.openHierarchyForNote('笔记.md', cardEl);
+
+    // 有父级时用「==子名」直接落到该笔记所在的父子分支
+    expect(behavior.pushHierarchyNavigationForView)
+      .toHaveBeenCalledWith(sidebarView, 'sidebar', '==笔记');
+  });
+
+  it('没有父级时用「=笔记名」把它当作父节点展开', () => {
+    const { behavior, cardEl, sidebarView } = createLocateBehavior([]);
+
+    behavior.openHierarchyForNote('笔记.md', cardEl);
+
+    expect(behavior.pushHierarchyNavigationForView)
+      .toHaveBeenCalledWith(sidebarView, 'sidebar', '=笔记');
+  });
+
+  it('找不到承载该卡片的侧边栏时提示而非静默失败', () => {
+    const { behavior } = createLocateBehavior(['父.md']);
+    (Notice as any).messages = [];
+
+    behavior.openHierarchyForNote('笔记.md', {});
+
+    expect(behavior.pushHierarchyNavigationForView).not.toHaveBeenCalled();
+    expect((Notice as any).messages).toEqual(['未找到标签侧边栏，无法定位父子关系']);
   });
 });
 

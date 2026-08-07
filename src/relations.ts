@@ -1,8 +1,9 @@
-import { TFile } from "obsidian";
+import { Notice, TFile } from "obsidian";
 // 继承规则的纯计算已迁入 core/inheritance.ts，这里保留同名方法作为薄委托
 import * as core from "./core/inheritance";
 import {
   DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
+  TAG_SIDEBAR_VIEW_TYPE,
   getTagDisplayName,
   isNestedTag,
   normalizeTag,
@@ -629,9 +630,9 @@ export class RelationsBehavior {
     }
     return false;
   }
-
-
-
+
+
+
 
   resetHierarchyExpansionState(state: any) {
     if (!state) return;
@@ -682,12 +683,12 @@ export class RelationsBehavior {
     else expandedSet.add(key);
     return expandedSet.has(key);
   }
-
-
-
-
-
-
+
+
+
+
+
+
 
   refreshHierarchyViews() {
     this.relationStructureVersion = (this.relationStructureVersion || 0) + 1;
@@ -701,8 +702,8 @@ export class RelationsBehavior {
     }
     return view.hierarchyNavigationHistory;
   }
-
-
+
+
 
   navigateHierarchyHistory(view: any, surface: any, direction: any) {
     const history = this.getHierarchyNavigationHistory(view, surface);
@@ -737,14 +738,16 @@ export class RelationsBehavior {
       : this.getHierarchyParents(path).length > 0
         ? `${keyword}${keyword}${file.basename}`
         : `${keyword}${file.basename}`;
-    for (const leaf of this.app.workspace.getLeavesOfType('tag')) {
+    // 自绘侧边栏解耦后视图类型已不是核心标签面板的 'tag'，用 'tag' 找永远匹配不到、静默失败
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SIDEBAR_VIEW_TYPE)) {
       const view = leaf.view;
       if (!view || !view.containerEl || !view.containerEl.contains(sourceEl)) continue;
       this.pushHierarchyNavigationForView(view, 'sidebar', query);
       return;
     }
+    new Notice('未找到标签侧边栏，无法定位父子关系');
   }
-
+
 
   getInheritanceChildren(tagValue: any) {
     return core.getInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
@@ -1041,7 +1044,11 @@ export class RelationsBehavior {
         // v4 数据迁移会有意同时搬迁两侧（见 relations-behavior.test.ts 的 v4 迁移用例），
         // 按模式清理会破坏那条契约。真正的死数据来源已在 setTagInheritanceMode 处堵住。
         for (const key of ['excludedPathsByParentChild', 'includedPathsByParentChild']) {
-          const nextPaths = (inheritance[key][parent]?.[child] || []).filter((path: any) => freePaths.has(path));
+          const nextPaths = (inheritance[key][parent]?.[child] || []).filter((path: any) => (
+            freePaths.has(path) &&
+            // 白名单额外收窄到直接笔记：跨层条目在新规则下不再被读取，留着就是死数据
+            (key === 'excludedPathsByParentChild' || this.isDirectInheritedPath(child, path))
+          ));
           this.setParentChildValue(inheritance[key], parent, child, nextPaths.length ? nextPaths : undefined);
         }
       }
@@ -1051,15 +1058,29 @@ export class RelationsBehavior {
       beforeExcluded !== JSON.stringify(inheritance.excludedPathsByParentChild);
   }
 
+  /**
+   * 这篇笔记是不是直接挂在该子标签上的。
+   *
+   * 「选择继承」的白名单只管直接笔记；更深层冒上来的笔记由更深的边决定，本边只能排除
+   * （见 core/inheritance.ts 的 isInheritanceEdgePathVisible）。写入侧要按同一口径分流，
+   * 否则勾选面板会把深层笔记写进永远不被读取的白名单里。
+   */
+  isDirectInheritedPath(childValue: any, path: any) {
+    const child = normalizeTag(childValue);
+    if (!child || !path) return false;
+    return (this.tagFileIndex?.get(child) || []).some((file: any) => file.path === path);
+  }
+
   collectVisiblePathsForEdge(parent: any, child: any) {
-    const mode = this.getTagInheritanceMode(parent, child);
-    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
-    if (mode === 'selected') {
-      const included = new Set(this.getIncludedInheritedPaths(parent, child));
-      return new Set(freeCandidates.filter((candidate) => included.has(candidate.path)).map((candidate) => candidate.path));
-    }
+    const selectedMode = this.getTagInheritanceMode(parent, child) === 'selected';
+    const included = new Set(this.getIncludedInheritedPaths(parent, child));
     const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
-    return new Set(freeCandidates.filter((candidate) => !excluded.has(candidate.path)).map((candidate) => candidate.path));
+    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
+    return new Set(freeCandidates
+      .filter((candidate) => (selectedMode && this.isDirectInheritedPath(child, candidate.path)
+        ? included.has(candidate.path)
+        : !excluded.has(candidate.path)))
+      .map((candidate) => candidate.path));
   }
 
   propagateNewlyAllowedPathsToAncestors(childTagValue: any, newlyAllowedPaths: any) {
@@ -1068,27 +1089,14 @@ export class RelationsBehavior {
       .map((path: any) => typeof path === 'string' ? path.trim() : '')
       .filter(Boolean)));
     if (!startTag || !paths.length) return;
-    const inheritance = this.getTagInheritanceSettings();
     const visited = new Set([startTag]);
     const queue = [startTag];
     while (queue.length) {
       const child = queue.shift();
       for (const parent of this.getInheritanceParents(child)) {
+        // 走同一个分流器：直接笔记进白名单，深层笔记则是把它从黑名单里摘掉
         if (!this.isFixedTagEdge(parent, child)) {
-          if (this.getTagInheritanceMode(parent, child) === 'selected') {
-            const included = new Set(this.getIncludedInheritedPaths(parent, child));
-            for (const path of paths) included.add(path);
-            this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, Array.from(included));
-          } else {
-            const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
-            for (const path of paths) excluded.delete(path);
-            this.setParentChildValue(
-              inheritance.excludedPathsByParentChild,
-              parent,
-              child,
-              excluded.size ? Array.from(excluded) : undefined
-            );
-          }
+          for (const path of paths) this.applyInheritedFileVisibilityToEdge(parent, child, path, true);
         }
         if (visited.has(parent)) continue;
         visited.add(parent);
@@ -1110,22 +1118,28 @@ export class RelationsBehavior {
     const currentMode = this.getTagInheritanceMode(parent, child);
     if (currentMode === mode) return;
     const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
-    const currentVisible = new Set(currentMode === 'selected'
-      ? this.getIncludedInheritedPaths(parent, child)
-      : freeCandidates
-        .filter((candidate) => !this.getExcludedInheritedPaths(parent, child).includes(candidate.path))
-        .map((candidate) => candidate.path));
+    const currentVisible = this.collectVisiblePathsForEdge(parent, child);
     inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
-    // 切换模式时按"保持当前可见集合"重算目标侧名单，并清掉另一侧 ——
-    // 另一侧在新模式下不再被读取（见 isInheritanceEdgePathVisible），留着就是死数据，
-    // 且会在日后切回时冒出陈旧的放行/排除记录。
+    // 切换模式时按"保持当前可见集合"重算名单。
+    // 「选择继承」下白名单只管直接笔记，深层笔记仍由黑名单承接，所以这里两侧都要写；
+    // 「全部继承」下白名单不再被读取（见 isInheritanceEdgePathVisible），留着就是死数据，直接清掉。
     if (mode === 'selected') {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, 'selected');
-      const paths = freeCandidates.filter((candidate) => currentVisible.has(candidate.path)).map((candidate) => candidate.path);
+      const paths = freeCandidates
+        .filter((candidate) => this.isDirectInheritedPath(child, candidate.path) && currentVisible.has(candidate.path))
+        .map((candidate) => candidate.path);
+      const hiddenDeepPaths = freeCandidates
+        .filter((candidate) => !this.isDirectInheritedPath(child, candidate.path) && !currentVisible.has(candidate.path))
+        .map((candidate) => candidate.path);
       this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : undefined);
-      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, undefined);
+      this.setParentChildValue(
+        inheritance.excludedPathsByParentChild,
+        parent,
+        child,
+        hiddenDeepPaths.length ? hiddenDeepPaths : undefined
+      );
     } else {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, undefined);
       const paths = freeCandidates.filter((candidate) => !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
@@ -1155,8 +1169,9 @@ export class RelationsBehavior {
     const inheritance = this.getTagInheritanceSettings();
     const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
+    // 白名单只收直接笔记；深层笔记要在这条边上藏起来得走黑名单
     const allowed = new Set(this.getInheritanceCandidates(parent, child)
-      .filter((candidate) => !candidate.fixed)
+      .filter((candidate) => !candidate.fixed && this.isDirectInheritedPath(child, candidate.path))
       .map((candidate) => candidate.path));
     const paths = Array.from(new Set((pathValues || [])
       .map((path: any) => typeof path === 'string' ? path.trim() : '')
@@ -1179,7 +1194,8 @@ export class RelationsBehavior {
 
   applyInheritedFileVisibilityToEdge(parent: any, child: any, path: any, visible: any) {
     const inheritance = this.getTagInheritanceSettings();
-    if (this.getTagInheritanceMode(parent, child) === 'selected') {
+    // 深层笔记即使在「选择继承」模式下也只写黑名单 —— 白名单对它们不生效
+    if (this.getTagInheritanceMode(parent, child) === 'selected' && this.isDirectInheritedPath(child, path)) {
       const paths = new Set(this.getIncludedInheritedPaths(parent, child));
       if (visible) paths.add(path);
       else paths.delete(path);
@@ -1192,20 +1208,32 @@ export class RelationsBehavior {
     }
   }
 
-  async setInheritedFileVisibleForEdge(parentValue: any, childValue: any, path: any, visible: any) {
+  /**
+   * 批量设置一条边上若干笔记的可见性。
+   *
+   * 勾选面板的「全选/全不选」一次能改几十行，逐条走单篇版本会重复落盘、重复刷视图，
+   * 这里合成一次保存。每条写进白名单还是黑名单由 applyInheritedFileVisibilityToEdge 分流。
+   */
+  async setEdgePathsVisible(parentValue: any, childValue: any, entries: any) {
     const parent = normalizeTag(parentValue);
     const child = normalizeTag(childValue);
-    if (!parent || !child || !path) return;
-    const candidate = this.getInheritanceCandidates(parent, child).find((item) => item.path === path);
-    if (!candidate || candidate.fixed) return;
+    if (!parent || !child) return;
+    const candidates = new Map(this.getInheritanceCandidates(parent, child).map((item) => [item.path, item]));
+    const changes = Array.from<any>(entries || [])
+      .map((entry: any) => ({ path: entry && entry.path, visible: !!(entry && entry.visible) }))
+      .filter((entry) => entry.path && candidates.has(entry.path) && !candidates.get(entry.path).fixed);
+    if (!changes.length) return;
     const inheritance = this.getTagInheritanceSettings();
     const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
-    const wasVisible = this.collectVisiblePathsForEdge(parent, child).has(path);
+    const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
-    this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
-    if (visible && !wasVisible) this.propagateNewlyAllowedPathsToAncestors(parent, [path]);
+    for (const { path, visible } of changes) this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
+    this.propagateNewlyAllowedPathsToAncestors(
+      parent,
+      changes.filter((entry) => entry.visible && !previouslyVisible.has(entry.path)).map((entry) => entry.path)
+    );
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
@@ -1215,6 +1243,10 @@ export class RelationsBehavior {
       throw error;
     }
     this.refreshHierarchyViews();
+  }
+
+  async setInheritedFileVisibleForEdge(parentValue: any, childValue: any, path: any, visible: any) {
+    await this.setEdgePathsVisible(parentValue, childValue, [{ path, visible }]);
   }
 
   async setInheritedFileVisible(parentValue: any, path: any, visible: any) {
@@ -1783,6 +1815,6 @@ export class RelationsBehavior {
     }
     if (changed) this.saveSettings();
   }
-
-
+
+
 }

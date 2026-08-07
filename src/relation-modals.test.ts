@@ -258,19 +258,19 @@ describe('选择继承弹窗操作', () => {
     modal.isSubmitting = false;
     modal.parentTag = '#父';
     modal.activeChild = '#子';
-    modal.plugin = { getIncludedInheritedPaths: vi.fn(() => ['原有.md']) };
+    modal.plugin = {};
     modal.getFilteredInheritanceCandidates = vi.fn(() => [
       { path: '筛选.md', fixed: false },
       { path: '固定.md', fixed: true },
     ]);
     modal.persistInheritanceSelection = vi.fn(async () => true);
 
+    // 只提交筛选结果里的自由路径，未被筛出的行原样不动（不再整份重写白名单）
     await modal.applyInheritanceSelectionBatch(true);
-    expect(modal.persistInheritanceSelection).toHaveBeenCalledWith(['原有.md', '筛选.md']);
+    expect(modal.persistInheritanceSelection).toHaveBeenCalledWith([{ path: '筛选.md', visible: true }]);
 
-    modal.plugin.getIncludedInheritedPaths.mockReturnValue(['原有.md', '筛选.md', '其他.md']);
     await modal.applyInheritanceSelectionBatch(false);
-    expect(modal.persistInheritanceSelection).toHaveBeenLastCalledWith(['原有.md', '其他.md']);
+    expect(modal.persistInheritanceSelection).toHaveBeenLastCalledWith([{ path: '筛选.md', visible: false }]);
   });
 });
 
@@ -314,18 +314,14 @@ describe('父标签弹窗的选择继承', () => {
     expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#爱情', '#亲昵', 'selected');
   });
 
-  it('勾选继承笔记写入 父→子 的白名单', async () => {
+  it('勾选继承笔记按 父→子 方向写入，落白名单还是黑名单交给存储层分流', async () => {
     const modal = createParentsModal();
-    modal.plugin = {
-      getIncludedInheritedPaths: vi.fn(() => ['已选.md']),
-      setIncludedInheritedPaths: vi.fn(async () => undefined),
-    };
+    modal.plugin = { setEdgePathsVisible: vi.fn(async () => undefined) };
 
     await modal.toggleInheritanceCandidate('新增.md', true);
 
-    expect(modal.plugin.getIncludedInheritedPaths).toHaveBeenCalledWith('#爱情', '#亲昵');
-    expect(modal.plugin.setIncludedInheritedPaths)
-      .toHaveBeenCalledWith('#爱情', '#亲昵', ['已选.md', '新增.md']);
+    expect(modal.plugin.setEdgePathsVisible)
+      .toHaveBeenCalledWith('#爱情', '#亲昵', [{ path: '新增.md', visible: true }]);
   });
 });
 

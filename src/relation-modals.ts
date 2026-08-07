@@ -618,13 +618,13 @@ class TagInheritanceModal extends Modal {
     );
   }
 
-  async persistInheritanceSelection(nextPaths: any) {
+  async persistInheritanceSelection(entries: any) {
     if (this.isSubmitting || !this.activeChild) return false;
     this.isSubmitting = true;
     this.syncMutationState();
     try {
       const { parent, child } = this.getActiveEdge();
-      await this.plugin.setIncludedInheritedPaths(parent, child, nextPaths);
+      await this.plugin.setEdgePathsVisible(parent, child, entries);
       this.renderInheritanceSelection();
       return true;
     } catch (error) {
@@ -637,24 +637,17 @@ class TagInheritanceModal extends Modal {
     }
   }
 
+  // 复选框的含义统一为「这篇笔记在这条边上可见吗」，至于落到白名单还是黑名单由存储层分流
   async toggleInheritanceCandidate(path: any, visible: any) {
-    const { parent, child } = this.getActiveEdge();
-    const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
-    if (visible) paths.add(path);
-    else paths.delete(path);
-    await this.persistInheritanceSelection(Array.from(paths));
+    await this.persistInheritanceSelection([{ path, visible: !!visible }]);
   }
 
   async applyInheritanceSelectionBatch(visible: any) {
     if (this.isSubmitting) return;
-    const { parent, child } = this.getActiveEdge();
-    const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
-    for (const candidate of this.getFilteredInheritanceCandidates()) {
-      if (candidate.fixed) continue;
-      if (visible) paths.add(candidate.path);
-      else paths.delete(candidate.path);
-    }
-    await this.persistInheritanceSelection(Array.from(paths));
+    const entries = this.getFilteredInheritanceCandidates()
+      .filter((candidate: any) => !candidate.fixed)
+      .map((candidate: any) => ({ path: candidate.path, visible: !!visible }));
+    await this.persistInheritanceSelection(entries);
   }
 
   renderInheritanceSelection() {
@@ -668,7 +661,8 @@ class TagInheritanceModal extends Modal {
     }
     const candidates = this.plugin.getInheritanceCandidates(parent, child);
     const freeCandidates = candidates.filter((candidate: any) => !candidate.fixed);
-    const selectedPaths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
+    // 勾选态按「这条边上是否可见」算，深层笔记的可见性来自黑名单而非白名单
+    const selectedPaths = this.plugin.collectVisiblePathsForEdge(parent, child);
     const selectedCount = freeCandidates.filter((candidate: any) => selectedPaths.has(candidate.path)).length;
     this.selectionSummaryEl.textContent = `已选 ${selectedCount} / ${freeCandidates.length}`;
     const filtered = filterInheritanceCandidates(

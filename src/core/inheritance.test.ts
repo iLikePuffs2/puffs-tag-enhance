@@ -210,6 +210,19 @@ describe('单条边的可见性', () => {
   it('路径为空时不可见', () => {
     expect(isInheritanceEdgePathVisible(makeInheritance(), '#父', '#子', '')).toBe(false);
   });
+
+  it('非直接笔记：白名单不参与，只看黑名单', () => {
+    const inh = makeInheritance({
+      modeByParentChild: { '#父': { '#子': 'selected' } },
+      includedPathsByParentChild: { '#父': { '#子': ['a.md'] } },
+      excludedPathsByParentChild: { '#父': { '#子': ['c.md'] } },
+    });
+    // b.md 不在白名单里，但它是从更深层冒上来的 —— 这条边管不着，放行
+    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'b.md', false)).toBe(true);
+    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'a.md', false)).toBe(true);
+    // 黑名单对深层笔记照样生效
+    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'c.md', false)).toBe(false);
+  });
 });
 
 describe('整条路径的可见性', () => {
@@ -234,6 +247,32 @@ describe('整条路径的可见性', () => {
   it('空路径视为可见', () => {
     expect(isInheritancePathVisible(inh, [], 'any.md')).toBe(true);
     expect(isInheritancePathVisible(inh, null, 'any.md')).toBe(true);
+  });
+
+  // 下面三条钉住「下级决定继承、上层只做排除」：
+  // 上游边的白名单一旦参与判定，给子标签新加一个孙标签就会让整棵子树在祖先下凭空消失。
+  it('上游边的白名单不拦深层笔记，只有最深那条边按模式判定', () => {
+    const selected = makeInheritance({
+      modeByParentChild: { '#祖': { '#父': 'selected' }, '#父': { '#子': 'selected' } },
+      includedPathsByParentChild: { '#祖': { '#父': [] }, '#父': { '#子': ['孙.md'] } },
+    });
+    expect(isInheritancePathVisible(selected, edges, '孙.md')).toBe(true);
+  });
+
+  it('最深那条边的白名单照常生效', () => {
+    const selected = makeInheritance({
+      modeByParentChild: { '#父': { '#子': 'selected' } },
+      includedPathsByParentChild: { '#父': { '#子': ['孙.md'] } },
+    });
+    expect(isInheritancePathVisible(selected, edges, '别的.md')).toBe(false);
+  });
+
+  it('上游边的黑名单仍然拦得住深层笔记', () => {
+    const blocked = makeInheritance({
+      modeByParentChild: { '#祖': { '#父': 'selected' } },
+      excludedPathsByParentChild: { '#祖': { '#父': ['孙.md'] } },
+    });
+    expect(isInheritancePathVisible(blocked, edges, '孙.md')).toBe(false);
   });
 
   it('血缘展开成逐段的边，并标出固定段', () => {

@@ -1113,9 +1113,26 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     const hotkey = this.plugin.getQuickSearchHotkey();
     this.searchHotkeyRegistration = this.scope.register(hotkey.modifiers, hotkey.key, (event) => {
       event.preventDefault();
-      this.toggleSearch();
+      this.handleQuickSearchHotkey();
       return false;
     });
+  }
+  /**
+   * 快捷键（默认 Ctrl+F）是聚焦优先，不是开关。
+   *
+   * 搜索框在样式上常驻可见（styles.css 里特异性高于 .puffs-tag-hidden），
+   * 原先绑 toggleSearch 会让「焦点在列表里按一下」变成清空内容却不聚焦。
+   * 收起搜索框仍由 Esc 和工具栏按钮负责。
+   */
+  handleQuickSearchHotkey() {
+    var _a, _b, _c;
+    const inputEl = (_a = this.searchComponent) == null ? void 0 : _a.inputEl;
+    if (inputEl && inputEl.isConnected && ((_b = inputEl.ownerDocument) == null ? void 0 : _b.activeElement) === inputEl) {
+      (_c = this.searchComponent) == null ? void 0 : _c.setValue("");
+      this.applySearchValue("");
+      return;
+    }
+    this.focusSearch();
   }
   registerDomEvents() {
     this.contentEl.addEventListener("click", (event) => this.handleClick(event), true);
@@ -2209,13 +2226,13 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
       (file) => this.plugin.getNoteAliases(file)
     );
   }
-  async persistInheritanceSelection(nextPaths) {
+  async persistInheritanceSelection(entries) {
     if (this.isSubmitting || !this.activeChild) return false;
     this.isSubmitting = true;
     this.syncMutationState();
     try {
       const { parent, child } = this.getActiveEdge();
-      await this.plugin.setIncludedInheritedPaths(parent, child, nextPaths);
+      await this.plugin.setEdgePathsVisible(parent, child, entries);
       this.renderInheritanceSelection();
       return true;
     } catch (error) {
@@ -2227,23 +2244,14 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
       this.syncMutationState();
     }
   }
+  // 复选框的含义统一为「这篇笔记在这条边上可见吗」，至于落到白名单还是黑名单由存储层分流
   async toggleInheritanceCandidate(path, visible) {
-    const { parent, child } = this.getActiveEdge();
-    const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
-    if (visible) paths.add(path);
-    else paths.delete(path);
-    await this.persistInheritanceSelection(Array.from(paths));
+    await this.persistInheritanceSelection([{ path, visible: !!visible }]);
   }
   async applyInheritanceSelectionBatch(visible) {
     if (this.isSubmitting) return;
-    const { parent, child } = this.getActiveEdge();
-    const paths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
-    for (const candidate of this.getFilteredInheritanceCandidates()) {
-      if (candidate.fixed) continue;
-      if (visible) paths.add(candidate.path);
-      else paths.delete(candidate.path);
-    }
-    await this.persistInheritanceSelection(Array.from(paths));
+    const entries = this.getFilteredInheritanceCandidates().filter((candidate) => !candidate.fixed).map((candidate) => ({ path: candidate.path, visible: !!visible }));
+    await this.persistInheritanceSelection(entries);
   }
   renderInheritanceSelection() {
     var _a, _b;
@@ -2257,7 +2265,7 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     }
     const candidates = this.plugin.getInheritanceCandidates(parent, child);
     const freeCandidates = candidates.filter((candidate) => !candidate.fixed);
-    const selectedPaths = new Set(this.plugin.getIncludedInheritedPaths(parent, child));
+    const selectedPaths = this.plugin.collectVisiblePathsForEdge(parent, child);
     const selectedCount = freeCandidates.filter((candidate) => selectedPaths.has(candidate.path)).length;
     this.selectionSummaryEl.textContent = `\u5DF2\u9009 ${selectedCount} / ${freeCandidates.length}`;
     const filtered = filterInheritanceCandidates(
@@ -6298,15 +6306,17 @@ function getExcludedInheritedPaths(inheritance, parentValue, childValue) {
   if (!parent || !child) return [];
   return [...((_a = inheritance.excludedPathsByParentChild[parent]) == null ? void 0 : _a[child]) || []];
 }
-function isInheritanceEdgePathVisible(inheritance, parentValue, childValue, path) {
+function isInheritanceEdgePathVisible(inheritance, parentValue, childValue, path, isDirect = true) {
   const parent = normalizeTag(parentValue);
   const child = normalizeTag(childValue);
   if (!parent || !child || !path) return false;
   if (isFixedTagEdge(inheritance, parent, child)) return true;
+  if (!isDirect) return !getExcludedInheritedPaths(inheritance, parent, child).includes(path);
   return getTagInheritanceMode(inheritance, parent, child) === "selected" ? getIncludedInheritedPaths(inheritance, parent, child).includes(path) : !getExcludedInheritedPaths(inheritance, parent, child).includes(path);
 }
 function isInheritancePathVisible(inheritance, edges, path, ignoredEdge = null) {
-  return (edges || []).every((edge) => ignoredEdge && edge.parent === ignoredEdge.parent && edge.child === ignoredEdge.child ? true : isInheritanceEdgePathVisible(inheritance, edge.parent, edge.child, path));
+  const list = edges || [];
+  return list.every((edge, index) => ignoredEdge && edge.parent === ignoredEdge.parent && edge.child === ignoredEdge.child ? true : isInheritanceEdgePathVisible(inheritance, edge.parent, edge.child, path, index === list.length - 1));
 }
 function createInheritanceEdgesFromLineage(inheritance, lineage) {
   const edges = [];
@@ -6961,12 +6971,13 @@ var RelationsBehavior = class {
     const relationParentPath = sourceEl && sourceEl.dataset && sourceEl.dataset.puffsHierarchyParent;
     const relationParent = relationParentPath && this.app.vault.getAbstractFileByPath(relationParentPath);
     const query = relationParent instanceof import_obsidian15.TFile && relationParent.extension === "md" ? `${keyword}${relationParent.basename}*${file.basename}` : this.getHierarchyParents(path).length > 0 ? `${keyword}${keyword}${file.basename}` : `${keyword}${file.basename}`;
-    for (const leaf of this.app.workspace.getLeavesOfType("tag")) {
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_SIDEBAR_VIEW_TYPE)) {
       const view = leaf.view;
       if (!view || !view.containerEl || !view.containerEl.contains(sourceEl)) continue;
       this.pushHierarchyNavigationForView(view, "sidebar", query);
       return;
     }
+    new import_obsidian15.Notice("\u672A\u627E\u5230\u6807\u7B7E\u4FA7\u8FB9\u680F\uFF0C\u65E0\u6CD5\u5B9A\u4F4D\u7236\u5B50\u5173\u7CFB");
   }
   getInheritanceChildren(tagValue) {
     return getInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
@@ -7213,7 +7224,8 @@ var RelationsBehavior = class {
       for (const child of children) {
         const freePaths = new Set(this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed).map((candidate) => candidate.path));
         for (const key of ["excludedPathsByParentChild", "includedPathsByParentChild"]) {
-          const nextPaths = (((_a = inheritance[key][parent]) == null ? void 0 : _a[child]) || []).filter((path) => freePaths.has(path));
+          const nextPaths = (((_a = inheritance[key][parent]) == null ? void 0 : _a[child]) || []).filter((path) => freePaths.has(path) && // 白名单额外收窄到直接笔记：跨层条目在新规则下不再被读取，留着就是死数据
+          (key === "excludedPathsByParentChild" || this.isDirectInheritedPath(child, path)));
           this.setParentChildValue(inheritance[key], parent, child, nextPaths.length ? nextPaths : void 0);
         }
       }
@@ -7221,41 +7233,37 @@ var RelationsBehavior = class {
     for (const parent of parents) reconcileParent(parent);
     return beforeIncluded !== JSON.stringify(inheritance.includedPathsByParentChild) || beforeExcluded !== JSON.stringify(inheritance.excludedPathsByParentChild);
   }
+  /**
+   * 这篇笔记是不是直接挂在该子标签上的。
+   *
+   * 「选择继承」的白名单只管直接笔记；更深层冒上来的笔记由更深的边决定，本边只能排除
+   * （见 core/inheritance.ts 的 isInheritanceEdgePathVisible）。写入侧要按同一口径分流，
+   * 否则勾选面板会把深层笔记写进永远不被读取的白名单里。
+   */
+  isDirectInheritedPath(childValue, path) {
+    var _a;
+    const child = normalizeTag(childValue);
+    if (!child || !path) return false;
+    return (((_a = this.tagFileIndex) == null ? void 0 : _a.get(child)) || []).some((file) => file.path === path);
+  }
   collectVisiblePathsForEdge(parent, child) {
-    const mode = this.getTagInheritanceMode(parent, child);
-    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
-    if (mode === "selected") {
-      const included = new Set(this.getIncludedInheritedPaths(parent, child));
-      return new Set(freeCandidates.filter((candidate) => included.has(candidate.path)).map((candidate) => candidate.path));
-    }
+    const selectedMode = this.getTagInheritanceMode(parent, child) === "selected";
+    const included = new Set(this.getIncludedInheritedPaths(parent, child));
     const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
-    return new Set(freeCandidates.filter((candidate) => !excluded.has(candidate.path)).map((candidate) => candidate.path));
+    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
+    return new Set(freeCandidates.filter((candidate) => selectedMode && this.isDirectInheritedPath(child, candidate.path) ? included.has(candidate.path) : !excluded.has(candidate.path)).map((candidate) => candidate.path));
   }
   propagateNewlyAllowedPathsToAncestors(childTagValue, newlyAllowedPaths) {
     const startTag = normalizeTag(childTagValue);
     const paths = Array.from(new Set((newlyAllowedPaths || []).map((path) => typeof path === "string" ? path.trim() : "").filter(Boolean)));
     if (!startTag || !paths.length) return;
-    const inheritance = this.getTagInheritanceSettings();
     const visited = /* @__PURE__ */ new Set([startTag]);
     const queue = [startTag];
     while (queue.length) {
       const child = queue.shift();
       for (const parent of this.getInheritanceParents(child)) {
         if (!this.isFixedTagEdge(parent, child)) {
-          if (this.getTagInheritanceMode(parent, child) === "selected") {
-            const included = new Set(this.getIncludedInheritedPaths(parent, child));
-            for (const path of paths) included.add(path);
-            this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, Array.from(included));
-          } else {
-            const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
-            for (const path of paths) excluded.delete(path);
-            this.setParentChildValue(
-              inheritance.excludedPathsByParentChild,
-              parent,
-              child,
-              excluded.size ? Array.from(excluded) : void 0
-            );
-          }
+          for (const path of paths) this.applyInheritedFileVisibilityToEdge(parent, child, path, true);
         }
         if (visited.has(parent)) continue;
         visited.add(parent);
@@ -7276,15 +7284,21 @@ var RelationsBehavior = class {
     const currentMode = this.getTagInheritanceMode(parent, child);
     if (currentMode === mode) return;
     const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
-    const currentVisible = new Set(currentMode === "selected" ? this.getIncludedInheritedPaths(parent, child) : freeCandidates.filter((candidate) => !this.getExcludedInheritedPaths(parent, child).includes(candidate.path)).map((candidate) => candidate.path));
+    const currentVisible = this.collectVisiblePathsForEdge(parent, child);
     inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     if (mode === "selected") {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, "selected");
-      const paths = freeCandidates.filter((candidate) => currentVisible.has(candidate.path)).map((candidate) => candidate.path);
+      const paths = freeCandidates.filter((candidate) => this.isDirectInheritedPath(child, candidate.path) && currentVisible.has(candidate.path)).map((candidate) => candidate.path);
+      const hiddenDeepPaths = freeCandidates.filter((candidate) => !this.isDirectInheritedPath(child, candidate.path) && !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
       this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : void 0);
-      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, void 0);
+      this.setParentChildValue(
+        inheritance.excludedPathsByParentChild,
+        parent,
+        child,
+        hiddenDeepPaths.length ? hiddenDeepPaths : void 0
+      );
     } else {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, void 0);
       const paths = freeCandidates.filter((candidate) => !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
@@ -7313,7 +7327,7 @@ var RelationsBehavior = class {
     const inheritance = this.getTagInheritanceSettings();
     const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
-    const allowed = new Set(this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed).map((candidate) => candidate.path));
+    const allowed = new Set(this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed && this.isDirectInheritedPath(child, candidate.path)).map((candidate) => candidate.path));
     const paths = Array.from(new Set((pathValues || []).map((path) => typeof path === "string" ? path.trim() : "").filter((path) => path && allowed.has(path))));
     const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
@@ -7332,7 +7346,7 @@ var RelationsBehavior = class {
   }
   applyInheritedFileVisibilityToEdge(parent, child, path, visible) {
     const inheritance = this.getTagInheritanceSettings();
-    if (this.getTagInheritanceMode(parent, child) === "selected") {
+    if (this.getTagInheritanceMode(parent, child) === "selected" && this.isDirectInheritedPath(child, path)) {
       const paths = new Set(this.getIncludedInheritedPaths(parent, child));
       if (visible) paths.add(path);
       else paths.delete(path);
@@ -7344,20 +7358,30 @@ var RelationsBehavior = class {
       this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.size ? Array.from(paths) : void 0);
     }
   }
-  async setInheritedFileVisibleForEdge(parentValue, childValue, path, visible) {
+  /**
+   * 批量设置一条边上若干笔记的可见性。
+   *
+   * 勾选面板的「全选/全不选」一次能改几十行，逐条走单篇版本会重复落盘、重复刷视图，
+   * 这里合成一次保存。每条写进白名单还是黑名单由 applyInheritedFileVisibilityToEdge 分流。
+   */
+  async setEdgePathsVisible(parentValue, childValue, entries) {
     const parent = normalizeTag(parentValue);
     const child = normalizeTag(childValue);
-    if (!parent || !child || !path) return;
-    const candidate = this.getInheritanceCandidates(parent, child).find((item) => item.path === path);
-    if (!candidate || candidate.fixed) return;
+    if (!parent || !child) return;
+    const candidates = new Map(this.getInheritanceCandidates(parent, child).map((item) => [item.path, item]));
+    const changes = Array.from(entries || []).map((entry) => ({ path: entry && entry.path, visible: !!(entry && entry.visible) })).filter((entry) => entry.path && candidates.has(entry.path) && !candidates.get(entry.path).fixed);
+    if (!changes.length) return;
     const inheritance = this.getTagInheritanceSettings();
     const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
-    const wasVisible = this.collectVisiblePathsForEdge(parent, child).has(path);
+    const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
     inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
-    this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
-    if (visible && !wasVisible) this.propagateNewlyAllowedPathsToAncestors(parent, [path]);
+    for (const { path, visible } of changes) this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
+    this.propagateNewlyAllowedPathsToAncestors(
+      parent,
+      changes.filter((entry) => entry.visible && !previouslyVisible.has(entry.path)).map((entry) => entry.path)
+    );
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
@@ -7367,6 +7391,9 @@ var RelationsBehavior = class {
       throw error;
     }
     this.refreshHierarchyViews();
+  }
+  async setInheritedFileVisibleForEdge(parentValue, childValue, path, visible) {
+    await this.setEdgePathsVisible(parentValue, childValue, [{ path, visible }]);
   }
   async setInheritedFileVisible(parentValue, path, visible) {
     const parent = normalizeTag(parentValue);

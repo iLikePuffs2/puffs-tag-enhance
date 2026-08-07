@@ -192,17 +192,25 @@ export function getExcludedInheritedPaths(
  * 单条边上某篇笔记是否可见。
  *
  * 固定边直接放行 —— 固定关系只豁免自身，不影响路径上的其他边。
+ *
+ * isDirect 表示这篇笔记是不是直接挂在 child 标签上的：
+ * - 是：这条边就是把它引进继承链的那条边，按本边的模式判定（选择继承查白名单 / 全部继承查黑名单）。
+ * - 否：笔记是从更深层冒上来的，白名单不参与判定，只看本边有没有显式排除它。
+ *   否则每加一个孙标签、每给孙标签加一篇笔记，都得回头把路径补进所有祖先的白名单，
+ *   漏一次整个子标签就会因为「子树全被拦下」被剪掉、在祖先标签下彻底消失。
  */
 export function isInheritanceEdgePathVisible(
   inheritance: TagInheritance,
   parentValue: unknown,
   childValue: unknown,
-  path: string
+  path: string,
+  isDirect = true
 ): boolean {
   const parent = normalizeTag(parentValue);
   const child = normalizeTag(childValue);
   if (!parent || !child || !path) return false;
   if (isFixedTagEdge(inheritance, parent, child)) return true;
+  if (!isDirect) return !getExcludedInheritedPaths(inheritance, parent, child).includes(path);
   return getTagInheritanceMode(inheritance, parent, child) === 'selected'
     ? getIncludedInheritedPaths(inheritance, parent, child).includes(path)
     : !getExcludedInheritedPaths(inheritance, parent, child).includes(path);
@@ -210,6 +218,11 @@ export function isInheritanceEdgePathVisible(
 
 /**
  * 整条继承路径是否放行：必须通过路径上的每一条边。
+ *
+ * 末尾那条边的 child 就是这篇笔记的直接持有标签 —— 两个调用点都满足这个不变量
+ * （getInheritanceBranchData 的 edges 末段 child 恒等于 source；
+ * buildTagInheritanceGroupTree 的 lineage 末位恒等于 orderedPathsByTag 的 key）。
+ * 所以只有它按模式判定，上游各边一律只做排除。
  *
  * ignoredEdge 用于「假设某条边放行」的推演，供恢复笔记时计算候选。
  */
@@ -219,10 +232,11 @@ export function isInheritancePathVisible(
   path: string,
   ignoredEdge: InheritanceEdge | null = null
 ): boolean {
-  return (edges || []).every((edge) => (
+  const list = edges || [];
+  return list.every((edge, index) => (
     ignoredEdge && edge.parent === ignoredEdge.parent && edge.child === ignoredEdge.child
       ? true
-      : isInheritanceEdgePathVisible(inheritance, edge.parent, edge.child, path)
+      : isInheritanceEdgePathVisible(inheritance, edge.parent, edge.child, path, index === list.length - 1)
   ));
 }
 
