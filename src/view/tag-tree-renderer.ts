@@ -7,7 +7,7 @@
 // 它们仍以 Behavior 的形式 mixin 到 plugin 上，调用关系与搬迁前完全一致。
 
 import { Menu, Notice, TFile, setIcon } from "obsidian";
-import { getTagDisplayName, isNestedTag, normalizeTag } from "../models";
+import { isNestedTag, normalizeTag } from "../models";
 import {
   buildVisibleHierarchyForest,
   compareHierarchyParentItems,
@@ -33,7 +33,9 @@ export class TagTreeRendererBehavior {
       const files = node.paths
         .map((path: any) => this.app.vault.getAbstractFileByPath(path))
         .filter((file: any) => file instanceof TFile && file.extension === 'md');
-      this.renderInlineTagNoteTree(containerEl, files, node.tag, false, {
+      // 交集组里的笔记归属根标签（node.noteTag），卡片的 dataset.puffsTag 必须跟着它 ——
+      // 写成对方标签的话，右键「从 X 中排除」、显示名、笔记排序会全部串到对方标签上。
+      this.renderInlineTagNoteTree(containerEl, files, node.noteTag || node.tag, false, {
         ...options,
         inheritanceRootTag: rootTag,
         isInheritedGroup,
@@ -47,9 +49,7 @@ export class TagTreeRendererBehavior {
       key: any,
       containsTarget: any,
       renderContent: any,
-      tagValue = null,
-      parentTagValue = null,
-      hasTagChildren = false
+      tagValue = null
     ) => {
       if (!count) return;
       const expanded = (!!targetPath && containsTarget) || !collapsed.has(key);
@@ -59,38 +59,15 @@ export class TagTreeRendererBehavior {
       });
       rowEl.dataset.puffsInheritanceGroup = key;
       if (tagValue) rowEl.dataset.puffsInheritanceTag = tagValue;
-      if (tagValue && parentTagValue) {
-        rowEl.dataset.puffsTagOrderParent = parentTagValue;
-        rowEl.dataset.puffsTagOrderTag = tagValue;
-      }
       rowEl.setAttribute('aria-expanded', String(expanded));
+      // 子标签排序已搬进管理子标签弹窗，这里只剩纯展开箭头
       const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-tag-list-toggle' });
       toggleEl.classList.toggle('is-collapsed', !expanded);
       setIcon(toggleEl, 'right-triangle');
-      if (tagValue && parentTagValue) {
-        toggleEl.classList.add('puffs-tag-order-button');
-        toggleEl.dataset.puffsTagOrderParent = parentTagValue;
-        toggleEl.dataset.puffsTagOrderTag = tagValue;
-        toggleEl.dataset.puffsSurface = options.surface || '';
-        toggleEl.dataset.puffsExpanded = String(expanded);
-        toggleEl.dataset.puffsHasChildren = String(hasTagChildren);
-        if (hasTagChildren) toggleEl.classList.add('puffs-tag-order-parent-button');
-        toggleEl.tabIndex = 0;
-        toggleEl.setAttribute('role', 'button');
-        this.bindTagHierarchyControlButton(
-          toggleEl,
-          () => {
-            this.toggleInlineHierarchyBranch(key);
-            options.rerender?.();
-          }
-        );
-        this.syncTagOrderButtonSelection(toggleEl);
-      }
       rowEl.createDiv({ text: label, cls: 'tree-item-inner' });
       const flairOuterEl = rowEl.createDiv({ cls: 'tree-item-flair-outer' });
       flairOuterEl.createSpan({ text: String(count), cls: 'tree-item-flair tag-pane-tag-count' });
       rowEl.addEventListener('click', () => {
-        if (tagValue && this.isTagOrderModeActive(tagValue)) this.exitTagOrderMode(false);
         this.toggleInlineHierarchyBranch(key);
         options.rerender?.();
       });
@@ -107,6 +84,19 @@ export class TagTreeRendererBehavior {
       }
     };
     const renderNode = (containerEl: any, node: any, lineage: any, directParentTag: any) => {
+      // 交集组是叶子：不再往下递归对方的子标签，笔记也不算继承来的
+      if (node.isIntersection) {
+        renderGroup(
+          containerEl,
+          this.getRelativeChildDisplayName(rootTag, node.tag),
+          node.paths.length,
+          `${rootTag}\u0000tag-intersection\u0000${node.tag}`,
+          node.paths.includes(targetPath),
+          (contentEl: any) => renderNotes(contentEl, node, false),
+          node.tag
+        );
+        return;
+      }
       const key = `${rootTag}\u0000tag-group\u0000${lineage.join('\u0001')}`;
       const renderNodeContent = (contentEl: any) => {
           if (!node.children.length) {
@@ -121,11 +111,10 @@ export class TagTreeRendererBehavior {
             renderNode(contentEl, child, [...lineage, child.tag], node.tag);
           }
         };
-      const label = this.isFixedTagEdge(directParentTag, node.tag)
-        ? this.getFixedChildDisplayName(node.tag)
-        : getTagDisplayName(node.tag);
+      // 名字符合「父标签-子名称」就只显示后缀，与是否锁定为固定子标签无关
+      const label = this.getRelativeChildDisplayName(directParentTag, node.tag);
       renderGroup(containerEl, label, node.subtreePaths.length, key,
-        node.subtreePaths.includes(targetPath), renderNodeContent, node.tag, directParentTag, node.children.length > 0);
+        node.subtreePaths.includes(targetPath), renderNodeContent, node.tag);
     };
 
     if (!tree.children.length) {
@@ -137,7 +126,6 @@ export class TagTreeRendererBehavior {
         tree.paths.includes(targetPath), (contentEl: any) => renderNotes(contentEl, tree, false));
     }
     for (const child of tree.children) renderNode(hostEl, child, [child.tag], tree.tag);
-    this.scheduleTagOrderModeVisibilityReconcile();
   }
 
   renderInlineTagNoteTree(hostEl: any, files: any, tagValue: any, isVirtual = false, options: any = {}) {

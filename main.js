@@ -97,44 +97,8 @@ function getSidebarToolbarButtonLabel(id) {
 var CURRENT_SCHEMA_VERSION = 1;
 var migrateToV1 = {
   version: 0,
-  description: "\u6E05\u7406\u7EE7\u627F\u540D\u5355\u6B7B\u6570\u636E\u3001\u4FA7\u8FB9\u680F\u504F\u597D\u6539\u6570\u7EC4",
+  description: "\u4FA7\u8FB9\u680F\u504F\u597D\u6539\u6570\u7EC4",
   migrate(data, { log }) {
-    var _a;
-    const inheritance = (_a = data == null ? void 0 : data.relations) == null ? void 0 : _a.tagInheritance;
-    if (inheritance) {
-      let removedEdges = 0;
-      let removedPaths = 0;
-      const isSelected = (parent, child) => {
-        var _a2, _b;
-        return ((_b = (_a2 = inheritance.modeByParentChild) == null ? void 0 : _a2[parent]) == null ? void 0 : _b[child]) === "selected";
-      };
-      const isFixed = (child) => {
-        var _a2;
-        return !!((_a2 = inheritance.fixedParentByChild) == null ? void 0 : _a2[child]);
-      };
-      for (const [key, keepWhenSelected] of [
-        ["includedPathsByParentChild", true],
-        ["excludedPathsByParentChild", false]
-      ]) {
-        const table = inheritance[key];
-        if (!table || typeof table !== "object") continue;
-        for (const [parent, children] of Object.entries(table)) {
-          if (!children || typeof children !== "object") continue;
-          for (const child of Object.keys(children)) {
-            const useful = !isFixed(child) && isSelected(parent, child) === keepWhenSelected;
-            if (useful) continue;
-            const paths = children[child];
-            removedPaths += Array.isArray(paths) ? paths.length : 0;
-            removedEdges += 1;
-            delete children[child];
-          }
-          if (Object.keys(children).length === 0) delete table[parent];
-        }
-      }
-      if (removedEdges > 0) {
-        log(`\u6E05\u7406\u7EE7\u627F\u540D\u5355\u6B7B\u6570\u636E\uFF1A${removedEdges} \u6761\u8FB9\u3001${removedPaths} \u6761\u8DEF\u5F84`);
-      }
-    }
     const preferred = data == null ? void 0 : data.tagSidebarPreferredFiles;
     if (preferred && !Array.isArray(preferred) && typeof preferred === "object") {
       const paths = Object.entries(preferred).filter(([, enabled]) => enabled === true).map(([path]) => path);
@@ -196,13 +160,24 @@ function collectDirectedDescendants(adjacency, root) {
 function wouldCreateDirectedCycle(adjacency, parent, child) {
   return !parent || !child || parent === child || collectDirectedDescendants(adjacency, child).includes(parent);
 }
-function sanitizeAcyclicAdjacency(value) {
+function sanitizeAcyclicAdjacency(value, isExemptEdge) {
   const result = {};
+  const cycleGraph = {};
+  const keep = (parent, child) => {
+    if (!result[parent]) result[parent] = [];
+    if (!result[parent].includes(child)) result[parent].push(child);
+  };
   for (const [parent, children] of Object.entries(value || {})) {
     for (const child of Array.isArray(children) ? children : []) {
-      if (!child || wouldCreateDirectedCycle(result, parent, child)) continue;
-      if (!result[parent]) result[parent] = [];
-      if (!result[parent].includes(child)) result[parent].push(child);
+      if (!child) continue;
+      if (isExemptEdge == null ? void 0 : isExemptEdge(parent, child)) {
+        keep(parent, child);
+        continue;
+      }
+      if (wouldCreateDirectedCycle(cycleGraph, parent, child)) continue;
+      if (!cycleGraph[parent]) cycleGraph[parent] = [];
+      if (!cycleGraph[parent].includes(child)) cycleGraph[parent].push(child);
+      keep(parent, child);
     }
   }
   return result;
@@ -266,15 +241,14 @@ function buildVisibleHierarchyForest(orderedPaths, adjacency) {
     parentsByChild
   };
 }
-function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByTag, excludedPaths = [], fixedTags = /* @__PURE__ */ new Set(), includedPaths = null, isPathVisible) {
+function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByTag, excludedPaths = [], fixedTags = /* @__PURE__ */ new Set(), isPathVisible, intersectionGroups = [], rootChildOrder = []) {
   if (!rootTag) return null;
   const excluded = new Set(excludedPaths || []);
-  const included = includedPaths === null ? null : new Set(includedPaths);
   const visit = (tag, branch, lineage, isRoot = false) => {
     if (!tag || branch.has(tag)) return null;
     const nextBranch = new Set(branch);
     nextBranch.add(tag);
-    const paths = Array.from(new Set(orderedPathsByTag[tag] || [])).filter((path) => path && (isRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || (included ? included.has(path) : !excluded.has(path)))));
+    const paths = Array.from(new Set(orderedPathsByTag[tag] || [])).filter((path) => path && (isRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || !excluded.has(path))));
     const children = (childrenByParent[tag] || []).map((child) => visit(child, nextBranch, [...lineage, child], false)).filter((child) => !!child && child.subtreePaths.length > 0);
     const subtreePaths = Array.from(/* @__PURE__ */ new Set([
       ...paths,
@@ -282,7 +256,33 @@ function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByT
     ]));
     return { tag, paths, children, subtreePaths };
   };
-  return visit(rootTag, /* @__PURE__ */ new Set(), [rootTag], true);
+  const root = visit(rootTag, /* @__PURE__ */ new Set(), [rootTag], true);
+  if (!root) return null;
+  const groups = (intersectionGroups || []).filter((group) => {
+    var _a;
+    return group.tag && ((_a = group.paths) == null ? void 0 : _a.length);
+  });
+  if (!groups.length) return root;
+  const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
+  root.paths = root.paths.filter((path) => !intersectionPaths.has(path));
+  const intersectionNodes = groups.map((group) => ({
+    tag: group.tag,
+    paths: [...group.paths],
+    children: [],
+    subtreePaths: [...group.paths],
+    isIntersection: true,
+    noteTag: rootTag
+  }));
+  const orderOf = (node) => {
+    const index = (rootChildOrder || []).indexOf(node.tag);
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  root.children = [...root.children, ...intersectionNodes].map((node, index) => ({ node, index })).sort((a, b) => orderOf(a.node) - orderOf(b.node) || a.index - b.index).map((entry) => entry.node);
+  root.subtreePaths = Array.from(/* @__PURE__ */ new Set([
+    ...root.paths,
+    ...root.children.flatMap((child) => child.subtreePaths)
+  ]));
+  return root;
 }
 function compareHierarchyParentItems(left, right) {
   return compareTagItemsByCount(
@@ -453,13 +453,12 @@ var DEFAULT_SETTINGS = {
   // 一次性布局迁移标记：把核心插件的标签页换成自绘视图后置位
   sidebarLayoutMigrated: false,
   relations: {
-    version: 6,
+    // 与 relations.ts 的 RELATIONS_VERSION 保持一致
+    version: 7,
     tagInheritance: {
       childrenByParent: {},
-      enabledParents: [],
       excludedPathsByParentChild: {},
       modeByParentChild: {},
-      includedPathsByParentChild: {},
       fixedParentByChild: {}
     },
     noteHierarchy: {
@@ -943,7 +942,7 @@ function restorePreservedState(scrollEl, root, state) {
   }
 }
 function tagRowSignature(item, context) {
-  var _a, _b, _c, _d;
+  var _a, _b, _c, _d, _e;
   const files = item.files || [];
   const parts = [
     String((_a = item.tag) != null ? _a : ""),
@@ -952,10 +951,11 @@ function tagRowSignature(item, context) {
     String(files.length),
     String((_c = item.exactCount) != null ? _c : ""),
     String((_d = item.inheritedCount) != null ? _d : ""),
-    item.inheritanceEnabled ? "1" : "0",
     item.hasInheritance ? "1" : "0",
-    item.hasFreeInheritance ? "1" : "0",
     item.hasActiveInheritance ? "1" : "0",
+    // 交集组的内容取决于对方标签的笔记集合，而那不改变本行的 files 与计数。
+    // 少了这一项，「某篇笔记新加了对方标签」时旧 DOM 会被复用、交集组显示陈旧内容。
+    String((_e = item.intersectionSignature) != null ? _e : ""),
     (item.fixedSearchTags || []).join(","),
     context.pinned ? "1" : "0",
     context.expanded ? "1" : "0",
@@ -1220,7 +1220,6 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
       this.noteCardSearchState
     );
     this.updateToolbarState(items.display, items.matching);
-    plugin.scheduleTagOrderModeVisibilityReconcile();
     const shouldResetScroll = this.searchQuery !== this.lastRenderedSearchQuery && this.searchQuery.trim() && !this.searchQuery.includes("*");
     this.lastRenderedSearchQuery = this.searchQuery;
     restorePreservedState(this.tagContainerEl, this.listEl, preserved);
@@ -1486,14 +1485,6 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
       });
       return;
     }
-    const inheritanceButtonEl = target.closest(".puffs-tag-inheritance-button");
-    if (inheritanceButtonEl) {
-      stop();
-      plugin.toggleTagInheritance(inheritanceButtonEl.dataset.puffsTag).catch((error) => {
-        console.error("[Puffs Tag Enhance] Failed to toggle tag inheritance:", error);
-      });
-      return;
-    }
     const scrollBottomEl = target.closest(".puffs-tag-scroll-bottom-button");
     if (scrollBottomEl) {
       stop();
@@ -1521,7 +1512,6 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
       }
       return;
     }
-    if (target.closest(".puffs-tag-order-parent-button")) return;
     const noteCardEl = target.closest(".puffs-tag-note-card");
     if (noteCardEl) {
       stop();
@@ -1531,7 +1521,6 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     const tagEl = target.closest(".tag-pane-tag[data-puffs-tag]");
     if (!tagEl) return;
     stop();
-    if (plugin.isTagOrderModeActive(tagEl.dataset.puffsTag)) plugin.exitTagOrderMode(false);
     plugin.toggleTagExpansion(tagEl.dataset.puffsTag, this);
   }
   handleContextMenu(event) {
@@ -1710,32 +1699,6 @@ function getTagRelationCandidates(tagValues, query, canUse = () => true) {
   if (!term) return [];
   return Array.from(new Set(Array.from(tagValues || []).map(normalizeTag).filter(Boolean))).filter((tag) => !isNestedTag(tag) && canUse(tag)).filter((tag) => getTagDisplayName(tag).toLowerCase().includes(term)).sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), "zh-Hans-CN"));
 }
-function groupExcludedPathsBySource(paths, sourcesByPath, orderedSources = []) {
-  const normalizedPaths = Array.from(new Set((paths || []).filter(Boolean)));
-  const discoveredSources = [];
-  const seenSources = /* @__PURE__ */ new Set();
-  for (const source of orderedSources || []) {
-    const tag = normalizeTag(source);
-    if (!tag || seenSources.has(tag)) continue;
-    seenSources.add(tag);
-    discoveredSources.push(tag);
-  }
-  for (const path of normalizedPaths) {
-    for (const source of sourcesByPath.get(path) || []) {
-      const tag = normalizeTag(source);
-      if (!tag || seenSources.has(tag)) continue;
-      seenSources.add(tag);
-      discoveredSources.push(tag);
-    }
-  }
-  const groups = discoveredSources.map((source) => ({
-    source,
-    paths: normalizedPaths.filter((path) => (sourcesByPath.get(path) || []).includes(source))
-  })).filter((group) => group.paths.length > 0);
-  const unknownPaths = normalizedPaths.filter((path) => !(sourcesByPath.get(path) || []).length);
-  if (unknownPaths.length) groups.push({ source: null, paths: unknownPaths });
-  return groups;
-}
 function filterInheritanceCandidates(candidates, query, getAliases = () => []) {
   const term = String(query || "").trim().toLowerCase();
   if (!term) return [...candidates || []];
@@ -1876,8 +1839,6 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     this.inputEl = null;
     this.picker = null;
     this.childrenListEl = null;
-    this.exclusionsSectionEl = null;
-    this.exclusionGroupsEl = null;
     this.selectionSectionEl = null;
     this.selectionTitleEl = null;
     this.selectionSummaryEl = null;
@@ -1902,7 +1863,7 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     this.picker = createTagCandidatePicker({
       hostEl: this.searchHostEl,
       inputEl: this.inputEl,
-      getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => tag !== this.parentTag && !this.children.includes(tag) && !(this.relationMode === "parents" && this.plugin.isFixedChild(this.parentTag)) && !(this.relationMode === "children" && this.plugin.isFixedChild(tag)) && !this.plugin.wouldCreateTagInheritanceCycle(
+      getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => tag !== this.parentTag && !this.children.includes(tag) && !this.plugin.areTagsRelated(this.parentTag, tag) && !(this.relationMode === "parents" && this.plugin.isFixedChild(this.parentTag)) && !(this.relationMode === "children" && this.plugin.isFixedChild(tag)) && !this.plugin.wouldCreateTagInheritanceCycle(
         this.relationMode === "parents" ? tag : this.parentTag,
         this.relationMode === "parents" ? this.parentTag : tag
       )),
@@ -1917,17 +1878,13 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
       }
     });
     this.childrenListEl = this.contentEl.createDiv({ cls: "puffs-relation-child-list" });
-    this.exclusionsSectionEl = this.contentEl.createDiv({ cls: "puffs-relation-exclusions" });
-    this.exclusionsSectionEl.createEl("h4", { text: "\u5DF2\u6392\u9664\u7B14\u8BB0" });
-    this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: "puffs-relation-exclusion-groups" });
     this.buildInheritanceSelectionSection();
     this.renderChildren();
-    this.renderExclusionGroups();
     this.renderInheritanceSelection();
     this.modalEl.addEventListener("keydown", (event) => {
-      var _a;
-      const { parent, child } = this.getActiveEdge();
-      if (!this.activeChild || this.plugin.getTagInheritanceMode(parent, child) !== "selected" || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") return;
+      var _a, _b;
+      if (this.handleChildOrderHotkey(event)) return;
+      if (((_a = this.selectionSectionEl) == null ? void 0 : _a.classList.contains("is-hidden")) !== false || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") return;
       event.preventDefault();
       event.stopPropagation();
       if (document.activeElement === this.selectionInputEl && this.selectionInputEl.value) {
@@ -1935,7 +1892,7 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
         this.selectionQuery = "";
         this.renderInheritanceSelection();
       }
-      (_a = this.selectionInputEl) == null ? void 0 : _a.focus();
+      (_b = this.selectionInputEl) == null ? void 0 : _b.focus();
     }, true);
     window.setTimeout(() => {
       if (this.inputEl) {
@@ -1960,11 +1917,14 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     this.syncMutationState();
     try {
       await this.plugin.setTagInheritanceMode(parent, child, mode);
+      if (this.relationMode === "parents" && mode === "intersection") {
+        this.children = this.children.filter((tag) => tag !== relatedTag);
+        if (this.activeChild === relatedTag) this.activeChild = this.children[0] || null;
+      }
       this.renderChildren();
-      this.renderExclusionGroups();
       this.renderInheritanceSelection();
     } catch (error) {
-      new import_obsidian4.Notice(error && error.message ? error.message : "\u5207\u6362\u7EE7\u627F\u6A21\u5F0F\u5931\u8D25");
+      new import_obsidian4.Notice(error && error.message ? error.message : "\u5207\u6362\u6A21\u5F0F\u5931\u8D25");
     } finally {
       this.isSubmitting = false;
       this.syncMutationState();
@@ -1974,8 +1934,53 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     if (!child || !this.children.includes(child)) return;
     this.activeChild = child;
     this.renderChildren();
-    this.renderExclusionGroups();
     this.renderInheritanceSelection();
+  }
+  /** 父标签方向按笔记数量自动排序，手动排序只在子标签方向成立。 */
+  canReorderChildren() {
+    return this.relationMode === "children";
+  }
+  /** 逐格上下移动选中的子标签。 */
+  async moveActiveChild(direction) {
+    if (!this.canReorderChildren() || !this.activeChild || this.isSubmitting) return false;
+    const next = [...this.children];
+    const index = next.indexOf(this.activeChild);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= next.length) return false;
+    [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+    return await this.persistChildren(next);
+  }
+  /** 把选中的子标签移到目标行下方。与 interactions.ts 的 reorderChildTag 同一算法。 */
+  async moveActiveChildAfter(targetTag) {
+    if (!this.canReorderChildren() || !this.activeChild || this.isSubmitting) return false;
+    if (!targetTag || targetTag === this.activeChild) return false;
+    const next = [...this.children];
+    const movingIndex = next.indexOf(this.activeChild);
+    const targetIndex = next.indexOf(targetTag);
+    if (movingIndex < 0 || targetIndex < 0 || movingIndex === targetIndex + 1) return false;
+    next.splice(movingIndex, 1);
+    next.splice(next.indexOf(targetTag) + 1, 0, this.activeChild);
+    return await this.persistChildren(next);
+  }
+  /** 复用笔记排序的上下移动快捷键配置。 */
+  handleChildOrderHotkey(event) {
+    var _a;
+    if (!this.canReorderChildren() || !this.activeChild || event.isComposing) return false;
+    const matches = (settingValue, fallback) => {
+      const hotkey = parseHotkeyText(settingValue, fallback);
+      if (normalizeHotkeyKey(event.key) !== hotkey.key) return false;
+      const wanted = new Set(hotkey.modifiers);
+      return (wanted.has("Ctrl") || wanted.has("Mod")) === (event.ctrlKey || event.metaKey) && wanted.has("Shift") === event.shiftKey && wanted.has("Alt") === event.altKey;
+    };
+    const settings = ((_a = this.plugin) == null ? void 0 : _a.settings) || {};
+    let direction = 0;
+    if (matches(settings.moveNoteUpHotkey, DEFAULT_MOVE_NOTE_UP_HOTKEY)) direction = -1;
+    else if (matches(settings.moveNoteDownHotkey, DEFAULT_MOVE_NOTE_DOWN_HOTKEY)) direction = 1;
+    if (!direction) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    void this.moveActiveChild(direction);
+    return true;
   }
   buildInheritanceSelectionSection() {
     this.selectionSectionEl = this.contentEl.createDiv({ cls: "puffs-inheritance-selection" });
@@ -2001,7 +2006,7 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     this.selectionGroupsEl = this.selectionSectionEl.createDiv({ cls: "puffs-inheritance-selection-groups" });
   }
   renderChildren() {
-    var _a;
+    var _a, _b;
     if (!this.childrenListEl) return;
     if (this.relationMode === "parents") {
       this.children = this.plugin.sortTagsByVisibleCount(this.children);
@@ -2015,8 +2020,20 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
       if (!rowEl) {
         rowEl = this.childrenListEl.createDiv({ cls: "puffs-relation-child-row" });
         rowEl.dataset.puffsTag = child;
-        const iconEl = rowEl.createSpan({ cls: "puffs-relation-child-icon" });
-        (0, import_obsidian4.setIcon)(iconEl, "tag");
+        if (this.canReorderChildren()) {
+          const orderButton = rowEl.createEl("button", {
+            cls: "puffs-relation-child-order-button",
+            attr: { "aria-label": "\u9009\u4E2D\u540E\u53EF\u8C03\u6574\u987A\u5E8F" }
+          });
+          (0, import_obsidian4.setIcon)(orderButton, "grip-vertical");
+          orderButton.addEventListener("click", (event) => {
+            event.stopPropagation();
+            this.selectActiveChild(rowEl.dataset.puffsTag);
+          });
+        } else {
+          const iconEl = rowEl.createSpan({ cls: "puffs-relation-child-icon" });
+          (0, import_obsidian4.setIcon)(iconEl, "tag");
+        }
         rowEl.createSpan({ cls: "puffs-relation-manage-name" });
         rowEl.createSpan({ cls: "puffs-relation-child-count" });
         const modeButton = rowEl.createEl("button", {
@@ -2029,11 +2046,10 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
           const edge = this.getEdge(relatedTag);
           if (this.plugin.isFixedTagEdge(edge.parent, edge.child)) {
             this.renderChildren();
-            this.renderExclusionGroups();
             this.renderInheritanceSelection();
             return;
           }
-          const nextMode = this.plugin.getTagInheritanceMode(edge.parent, edge.child) === "selected" ? "all" : "selected";
+          const nextMode = this.plugin.getTagInheritanceMode(edge.parent, edge.child) === "intersection" ? "all" : "intersection";
           void this.changeInheritanceMode(relatedTag, nextMode);
         });
         rowEl.addEventListener("click", (event) => {
@@ -2051,12 +2067,19 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
             void this.removeChild(child);
           }).open();
         });
+        rowEl.addEventListener("contextmenu", (event) => {
+          if (!this.canReorderChildren() || !this.activeChild) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void this.moveActiveChildAfter(rowEl.dataset.puffsTag);
+        });
       }
-      rowEl.querySelector(".puffs-relation-manage-name").textContent = getTagDisplayName(child);
+      rowEl.querySelector(".puffs-relation-manage-name").textContent = this.relationMode === "parents" ? getTagDisplayName(child) : this.plugin.getRelativeChildDisplayName(this.parentTag, child);
       rowEl.querySelector(".puffs-relation-child-count").textContent = String(this.plugin.getTagVisibleNoteCount(child));
       rowEl.classList.toggle("is-active", child === this.activeChild);
       rowEl.setAttribute("role", "button");
       rowEl.setAttribute("aria-pressed", String(child === this.activeChild));
+      (_b = rowEl.querySelector(".puffs-relation-child-order-button")) == null ? void 0 : _b.classList.toggle("is-selected", child === this.activeChild);
       this.syncInheritanceModeButton(rowEl, child);
       this.syncFixedRelationButton(rowEl, child);
       this.childrenListEl.appendChild(rowEl);
@@ -2083,10 +2106,10 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
       button.disabled = true;
       return;
     }
-    const mode = this.plugin.getTagInheritanceMode(parent, child);
+    const intersection = this.plugin.getTagInheritanceMode(parent, child) === "intersection";
     button.empty();
-    (0, import_obsidian4.setIcon)(button, mode === "selected" ? "list-checks" : "layers");
-    button.setAttribute("aria-label", `\u5F53\u524D\u4E3A${mode === "selected" ? "\u9009\u62E9" : "\u5168\u90E8"}\u7EE7\u627F`);
+    (0, import_obsidian4.setIcon)(button, intersection ? "blend" : "layers");
+    button.setAttribute("aria-label", intersection ? "\u5F53\u524D\u4E3A\u4EA4\u96C6" : "\u5F53\u524D\u4E3A\u7EE7\u627F");
     button.disabled = this.isSubmitting;
   }
   syncMutationState() {
@@ -2139,7 +2162,6 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     try {
       await this.plugin.setFixedTagRelation(parent, child, nextFixed);
       this.renderChildren();
-      this.renderExclusionGroups();
       this.renderInheritanceSelection();
       (_a = this.picker) == null ? void 0 : _a.render();
     } catch (error) {
@@ -2170,7 +2192,6 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
         await this.plugin.setInheritanceChildren(this.parentTag, orderedChildren);
       }
       this.updateChildren(orderedChildren);
-      this.renderExclusionGroups();
       this.renderInheritanceSelection();
       return true;
     } catch (error) {
@@ -2229,7 +2250,7 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
       this.syncMutationState();
     }
   }
-  // 复选框的含义统一为「这篇笔记在这条边上可见吗」，至于落到白名单还是黑名单由存储层分流
+  // 复选框的含义统一为「这篇笔记在这条边上可见吗」：未勾选项存进唯一的排除名单。
   async toggleInheritanceCandidate(path, visible) {
     await this.persistInheritanceSelection([{ path, visible: !!visible }]);
   }
@@ -2238,13 +2259,20 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     const entries = this.getFilteredInheritanceCandidates().filter((candidate) => !candidate.fixed).map((candidate) => ({ path: candidate.path, visible: !!visible }));
     await this.persistInheritanceSelection(entries);
   }
+  /**
+   * 继承笔记勾选面板。
+   *
+   * 常驻显示（不再依赖模式）：列出这条边上的全部继承候选，默认全勾，
+   * 取消勾选即写进排除名单、重新勾上即恢复。交集边的成员是实时算出来的，
+   * 没有可维护的名单，整块隐藏。
+   */
   renderInheritanceSelection() {
     var _a, _b;
     if (!this.selectionSectionEl || !this.selectionGroupsEl || !this.selectionSummaryEl) return;
     const { parent, child } = this.getActiveEdge();
-    const selectedMode = !!this.activeChild && this.plugin.getTagInheritanceMode(parent, child) === "selected";
-    this.selectionSectionEl.classList.toggle("is-hidden", !selectedMode);
-    if (!selectedMode) return;
+    const hidden = !this.activeChild || this.plugin.getTagInheritanceMode(parent, child) === "intersection" || this.plugin.isFixedTagEdge(parent, child);
+    this.selectionSectionEl.classList.toggle("is-hidden", hidden);
+    if (hidden) return;
     if (this.selectionTitleEl) {
       this.selectionTitleEl.textContent = `\u7EE7\u627F\u7B14\u8BB0\uFF08${getTagDisplayName(parent)} \u2190 ${getTagDisplayName(child)}\uFF09`;
     }
@@ -2340,71 +2368,6 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     }
     for (const groupEl of existingGroups.values()) groupEl.remove();
     this.selectionGroupsEl.scrollTop = scrollTop;
-  }
-  renderExclusionGroups() {
-    if (!this.exclusionsSectionEl || !this.exclusionGroupsEl) return;
-    const { parent, child } = this.getActiveEdge();
-    if (!this.activeChild || this.plugin.getTagInheritanceMode(parent, child) !== "all") {
-      this.exclusionsSectionEl.classList.add("is-hidden");
-      return;
-    }
-    const exclusions = this.plugin.getExcludedInheritedPaths(parent, child);
-    this.exclusionsSectionEl.classList.toggle("is-hidden", exclusions.length === 0);
-    this.exclusionGroupsEl.empty();
-    if (!exclusions.length) return;
-    const candidatesByPath = new Map(this.plugin.getInheritanceCandidates(parent, child).map((candidate) => [candidate.path, candidate]));
-    const sourcesByPath = new Map(exclusions.map((path) => {
-      var _a;
-      return [path, ((_a = candidatesByPath.get(path)) == null ? void 0 : _a.sources) || []];
-    }));
-    const groups = groupExcludedPathsBySource(
-      exclusions,
-      sourcesByPath,
-      [child, ...this.plugin.getTagDescendants(child)]
-    );
-    for (const group of groups) {
-      const groupEl = this.exclusionGroupsEl.createDiv({ cls: "puffs-relation-exclusion-group" });
-      groupEl.dataset.puffsSource = group.source || "";
-      const headingEl = groupEl.createDiv({ cls: "puffs-relation-exclusion-heading" });
-      if (group.source) {
-        const iconEl = headingEl.createSpan({ cls: "puffs-relation-exclusion-icon" });
-        (0, import_obsidian4.setIcon)(iconEl, "tag");
-      }
-      headingEl.createSpan({ text: group.source ? getTagDisplayName(group.source) : "\u6765\u6E90\u672A\u77E5" });
-      const listEl = groupEl.createDiv({ cls: "puffs-relation-exclusion-list" });
-      for (const path of group.paths) {
-        const rowEl = listEl.createDiv({ cls: "puffs-relation-manage-row" });
-        rowEl.dataset.puffsPath = path;
-        const file = this.app.vault.getAbstractFileByPath(path);
-        rowEl.createSpan({ text: file && file.basename ? file.basename : path, cls: "puffs-relation-manage-name" });
-        const restoreButton = rowEl.createEl("button", { text: "\u6062\u590D" });
-        restoreButton.addEventListener("click", async () => {
-          if (restoreButton.disabled) return;
-          restoreButton.disabled = true;
-          try {
-            await this.plugin.restoreInheritedFile(parent, path, child);
-            this.removeExcludedPath(path);
-          } catch (error) {
-            console.error("[Puffs Tag Enhance] Failed to restore inherited note:", error);
-            new import_obsidian4.Notice("\u6062\u590D\u7EE7\u627F\u7B14\u8BB0\u5931\u8D25");
-            restoreButton.disabled = false;
-          }
-        });
-      }
-    }
-  }
-  removeExcludedPath(path) {
-    if (!this.exclusionGroupsEl || !this.exclusionsSectionEl) return;
-    for (const rowEl of Array.from(this.exclusionGroupsEl.querySelectorAll(".puffs-relation-manage-row"))) {
-      if (rowEl.dataset.puffsPath === path) rowEl.remove();
-    }
-    for (const groupEl of Array.from(this.exclusionGroupsEl.querySelectorAll(".puffs-relation-exclusion-group"))) {
-      if (!groupEl.querySelector(".puffs-relation-manage-row")) groupEl.remove();
-    }
-    this.exclusionsSectionEl.classList.toggle(
-      "is-hidden",
-      !this.exclusionGroupsEl.querySelector(".puffs-relation-manage-row")
-    );
   }
 };
 var ManageParentTagModal = class extends TagInheritanceModal {
@@ -2945,14 +2908,14 @@ var TagTreeRendererBehavior = class {
     const targetPath = options.targetPath || "";
     const renderNotes = (containerEl, node, isInheritedGroup) => {
       const files = node.paths.map((path) => this.app.vault.getAbstractFileByPath(path)).filter((file) => file instanceof import_obsidian5.TFile && file.extension === "md");
-      this.renderInlineTagNoteTree(containerEl, files, node.tag, false, {
+      this.renderInlineTagNoteTree(containerEl, files, node.noteTag || node.tag, false, {
         ...options,
         inheritanceRootTag: rootTag,
         isInheritedGroup,
         allowInheritedReorder: true
       });
     };
-    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent, tagValue = null, parentTagValue = null, hasTagChildren = false) => {
+    const renderGroup = (containerEl, label, count, key, containsTarget, renderContent, tagValue = null) => {
       if (!count) return;
       const expanded = !!targetPath && containsTarget || !collapsed.has(key);
       const itemEl = containerEl.createDiv({ cls: "tree-item puffs-tag-list-item puffs-inheritance-tag-group" });
@@ -2961,40 +2924,15 @@ var TagTreeRendererBehavior = class {
       });
       rowEl.dataset.puffsInheritanceGroup = key;
       if (tagValue) rowEl.dataset.puffsInheritanceTag = tagValue;
-      if (tagValue && parentTagValue) {
-        rowEl.dataset.puffsTagOrderParent = parentTagValue;
-        rowEl.dataset.puffsTagOrderTag = tagValue;
-      }
       rowEl.setAttribute("aria-expanded", String(expanded));
       const toggleEl = rowEl.createDiv({ cls: "tree-item-icon collapse-icon puffs-tag-list-toggle" });
       toggleEl.classList.toggle("is-collapsed", !expanded);
       (0, import_obsidian5.setIcon)(toggleEl, "right-triangle");
-      if (tagValue && parentTagValue) {
-        toggleEl.classList.add("puffs-tag-order-button");
-        toggleEl.dataset.puffsTagOrderParent = parentTagValue;
-        toggleEl.dataset.puffsTagOrderTag = tagValue;
-        toggleEl.dataset.puffsSurface = options.surface || "";
-        toggleEl.dataset.puffsExpanded = String(expanded);
-        toggleEl.dataset.puffsHasChildren = String(hasTagChildren);
-        if (hasTagChildren) toggleEl.classList.add("puffs-tag-order-parent-button");
-        toggleEl.tabIndex = 0;
-        toggleEl.setAttribute("role", "button");
-        this.bindTagHierarchyControlButton(
-          toggleEl,
-          () => {
-            var _a;
-            this.toggleInlineHierarchyBranch(key);
-            (_a = options.rerender) == null ? void 0 : _a.call(options);
-          }
-        );
-        this.syncTagOrderButtonSelection(toggleEl);
-      }
       rowEl.createDiv({ text: label, cls: "tree-item-inner" });
       const flairOuterEl = rowEl.createDiv({ cls: "tree-item-flair-outer" });
       flairOuterEl.createSpan({ text: String(count), cls: "tree-item-flair tag-pane-tag-count" });
       rowEl.addEventListener("click", () => {
         var _a;
-        if (tagValue && this.isTagOrderModeActive(tagValue)) this.exitTagOrderMode(false);
         this.toggleInlineHierarchyBranch(key);
         (_a = options.rerender) == null ? void 0 : _a.call(options);
       });
@@ -3011,6 +2949,18 @@ var TagTreeRendererBehavior = class {
       }
     };
     const renderNode = (containerEl, node, lineage, directParentTag) => {
+      if (node.isIntersection) {
+        renderGroup(
+          containerEl,
+          this.getRelativeChildDisplayName(rootTag, node.tag),
+          node.paths.length,
+          `${rootTag}\0tag-intersection\0${node.tag}`,
+          node.paths.includes(targetPath),
+          (contentEl) => renderNotes(contentEl, node, false),
+          node.tag
+        );
+        return;
+      }
       const key = `${rootTag}\0tag-group\0${lineage.join("")}`;
       const renderNodeContent = (contentEl) => {
         if (!node.children.length) {
@@ -3031,7 +2981,7 @@ var TagTreeRendererBehavior = class {
           renderNode(contentEl, child, [...lineage, child.tag], node.tag);
         }
       };
-      const label = this.isFixedTagEdge(directParentTag, node.tag) ? this.getFixedChildDisplayName(node.tag) : getTagDisplayName(node.tag);
+      const label = this.getRelativeChildDisplayName(directParentTag, node.tag);
       renderGroup(
         containerEl,
         label,
@@ -3039,9 +2989,7 @@ var TagTreeRendererBehavior = class {
         key,
         node.subtreePaths.includes(targetPath),
         renderNodeContent,
-        node.tag,
-        directParentTag,
-        node.children.length > 0
+        node.tag
       );
     };
     if (!tree.children.length) {
@@ -3059,7 +3007,6 @@ var TagTreeRendererBehavior = class {
       );
     }
     for (const child of tree.children) renderNode(hostEl, child, [child.tag], tree.tag);
-    this.scheduleTagOrderModeVisibilityReconcile();
   }
   renderInlineTagNoteTree(hostEl, files, tagValue, isVirtual = false, options = {}) {
     hostEl.empty();
@@ -3670,36 +3617,6 @@ var OrderControllerBehavior = class {
     const noteItemEl = buttonEl.closest(".puffs-tag-note-item");
     if (noteItemEl) noteItemEl.classList.toggle("is-order-selected", isSelected);
   }
-  syncTagOrderButtonSelection(buttonEl) {
-    if (!buttonEl) return;
-    const parentTag = normalizeTag(buttonEl.dataset.puffsTagOrderParent);
-    const tag = normalizeTag(buttonEl.dataset.puffsTagOrderTag);
-    const hasChildren = buttonEl.dataset.puffsHasChildren === "true";
-    const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
-    const isSelected = this.isTagOrderTargetSelected(
-      parentTag,
-      tag
-    );
-    const isModeParent = hasChildren && this.isTagOrderModeActive(tag);
-    const isExpanded = buttonEl.dataset.puffsExpanded === "true";
-    buttonEl.classList.toggle("is-sort-mode", isSortMode);
-    buttonEl.classList.toggle("is-selected", isSelected);
-    buttonEl.classList.toggle("is-order-mode-parent", isModeParent);
-    buttonEl.setAttribute("aria-pressed", String(isSelected || isModeParent));
-    if (isSortMode) {
-      (0, import_obsidian7.setIcon)(buttonEl, "grip-vertical");
-      buttonEl.classList.remove("is-collapsed");
-    } else {
-      (0, import_obsidian7.setIcon)(buttonEl, "right-triangle");
-      buttonEl.classList.toggle("is-collapsed", !isExpanded);
-    }
-    buttonEl.setAttribute("aria-expanded", String(isExpanded));
-    const rowEl = buttonEl.closest(".puffs-inheritance-tag-group-row");
-    if (rowEl) {
-      rowEl.classList.toggle("is-order-selected", isSelected);
-      rowEl.classList.toggle("is-order-mode-parent", isModeParent);
-    }
-  }
   bindOrderControlButton(buttonEl, isSelected, toggleExpansion, toggleOrder) {
     if (!buttonEl) return () => {
     };
@@ -3764,88 +3681,10 @@ var OrderControllerBehavior = class {
       toggleOrder
     );
   }
-  bindTagHierarchyControlButton(buttonEl, toggleExpansion) {
-    if (!buttonEl) return () => {
-    };
-    let longPressTimer = null;
-    let suppressNextClick = false;
-    const clearLongPressTimer = () => {
-      if (!longPressTimer) return;
-      globalThis.clearTimeout(longPressTimer);
-      longPressTimer = null;
-    };
-    const onPointerDown = (event) => {
-      const parentTag = buttonEl.dataset.puffsTagOrderParent;
-      const tag = buttonEl.dataset.puffsTagOrderTag;
-      const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
-      if (event.button !== 0 || isSortMode || buttonEl.dataset.puffsHasChildren !== "true") return;
-      clearLongPressTimer();
-      suppressNextClick = false;
-      longPressTimer = globalThis.setTimeout(() => {
-        longPressTimer = null;
-        suppressNextClick = true;
-        const wasActive = this.isTagOrderModeActive(tag);
-        this.toggleTagOrderMode(tag, buttonEl.dataset.puffsSurface || "");
-        if (!wasActive && this.isTagOrderModeActive(tag) && buttonEl.dataset.puffsExpanded !== "true") {
-          toggleExpansion();
-        }
-      }, NOTE_ORDER_LONG_PRESS_MS);
-    };
-    const onPointerUp = () => clearLongPressTimer();
-    const onPointerAbort = () => {
-      clearLongPressTimer();
-      suppressNextClick = false;
-    };
-    const onClick = (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (suppressNextClick) {
-        suppressNextClick = false;
-        return;
-      }
-      const parentTag = buttonEl.dataset.puffsTagOrderParent;
-      const tag = buttonEl.dataset.puffsTagOrderTag;
-      if (parentTag && this.isTagOrderModeActive(parentTag)) {
-        this.toggleTagOrderTarget(parentTag, tag, buttonEl.dataset.puffsSurface || "");
-        return;
-      }
-      if (this.isTagOrderModeActive(tag)) this.exitTagOrderMode(false);
-      toggleExpansion();
-    };
-    buttonEl.addEventListener("pointerdown", onPointerDown);
-    buttonEl.addEventListener("pointerup", onPointerUp);
-    buttonEl.addEventListener("pointerleave", onPointerAbort);
-    buttonEl.addEventListener("pointercancel", onPointerAbort);
-    buttonEl.addEventListener("click", onClick);
-    return () => {
-      clearLongPressTimer();
-      buttonEl.removeEventListener("pointerdown", onPointerDown);
-      buttonEl.removeEventListener("pointerup", onPointerUp);
-      buttonEl.removeEventListener("pointerleave", onPointerAbort);
-      buttonEl.removeEventListener("pointercancel", onPointerAbort);
-      buttonEl.removeEventListener("click", onClick);
-    };
-  }
   refreshNoteOrderSelectionState() {
     document.querySelectorAll(".puffs-tag-note-order-button").forEach((buttonEl) => {
       this.syncNoteOrderButtonSelection(buttonEl);
     });
-  }
-  refreshTagOrderSelectionState() {
-    document.querySelectorAll(".puffs-tag-order-button, .puffs-tag-order-parent-button").forEach((buttonEl) => {
-      this.syncTagOrderButtonSelection(buttonEl);
-    });
-  }
-  scheduleTagOrderModeVisibilityReconcile() {
-    if (!this.activeTagOrderParent || this.tagOrderModeVisibilityTimer) return;
-    this.tagOrderModeVisibilityTimer = globalThis.setTimeout(() => {
-      this.tagOrderModeVisibilityTimer = null;
-      if (!this.activeTagOrderParent) return;
-      const isVisible = Array.from(document.querySelectorAll(".puffs-tag-order-parent-button")).some(
-        (buttonEl) => normalizeTag(buttonEl.dataset.puffsTagOrderTag) === this.activeTagOrderParent && buttonEl.dataset.puffsExpanded === "true" && buttonEl.offsetParent !== null
-      );
-      if (!isVisible) this.exitTagOrderMode();
-    }, 0);
   }
   focusSelectedNoteOrderButton() {
     if (!this.selectedNoteOrderTarget) return;
@@ -3855,17 +3694,6 @@ var OrderControllerBehavior = class {
       (button) => (hierarchyParent ? button.dataset.puffsHierarchyParent === hierarchyParent : button.dataset.puffsTag === tag) && button.dataset.path === path && button.dataset.puffsSurface === surface && button.offsetParent !== null
     ) || buttons.find(
       (button) => (hierarchyParent ? button.dataset.puffsHierarchyParent === hierarchyParent : button.dataset.puffsTag === tag) && button.dataset.path === path && button.offsetParent !== null
-    );
-    if (buttonEl) buttonEl.focus({ preventScroll: true });
-  }
-  focusSelectedTagOrderButton() {
-    if (!this.selectedTagOrderTarget) return;
-    const { parentTag, tag, surface } = this.selectedTagOrderTarget;
-    const buttons = Array.from(document.querySelectorAll(".puffs-tag-order-button"));
-    const buttonEl = buttons.find(
-      (button) => button.dataset.puffsTagOrderParent === parentTag && button.dataset.puffsTagOrderTag === tag && button.dataset.puffsSurface === surface && button.offsetParent !== null
-    ) || buttons.find(
-      (button) => button.dataset.puffsTagOrderParent === parentTag && button.dataset.puffsTagOrderTag === tag && button.offsetParent !== null
     );
     if (buttonEl) buttonEl.focus({ preventScroll: true });
   }
@@ -4287,7 +4115,6 @@ var InteractionsBehavior = class {
       files,
       exactCount: browseData.exactCount,
       inheritedCount: browseData.inheritedCount,
-      inheritanceEnabled: browseData.inheritanceEnabled,
       hasInheritance: browseData.hasInheritance
     };
   }
@@ -4332,7 +4159,6 @@ var InteractionsBehavior = class {
         files: browseData.files,
         exactCount: browseData.exactCount,
         inheritedCount: browseData.inheritedCount,
-        inheritanceEnabled: browseData.inheritanceEnabled,
         hasInheritance: browseData.hasInheritance,
         sourcesByPath: browseData.sourcesByPath
       };
@@ -4354,7 +4180,6 @@ var InteractionsBehavior = class {
       files: browseData.files,
       exactCount: browseData.exactCount,
       inheritedCount: browseData.inheritedCount,
-      inheritanceEnabled: browseData.inheritanceEnabled,
       hasInheritance: browseData.hasInheritance,
       sourcesByPath: browseData.sourcesByPath
     })).sort((a, b) => compareTagItemsByCount(
@@ -4481,28 +4306,18 @@ var InteractionsBehavior = class {
   isNoteOrderTargetSelected(tag, path, hierarchyParent = "") {
     return !!(this.selectedNoteOrderTarget && (hierarchyParent ? this.selectedNoteOrderTarget.hierarchyParent === hierarchyParent : this.selectedNoteOrderTarget.tag === tag) && this.selectedNoteOrderTarget.path === path);
   }
-  isTagOrderTargetSelected(parentTagValue, tagValue) {
-    const parentTag = normalizeTag(parentTagValue);
-    const tag = normalizeTag(tagValue);
-    return !!(this.selectedTagOrderTarget && this.selectedTagOrderTarget.parentTag === parentTag && this.selectedTagOrderTarget.tag === tag);
-  }
-  isTagOrderModeActive(parentTagValue) {
-    const parentTag = normalizeTag(parentTagValue);
-    return !!parentTag && this.activeTagOrderParent === parentTag;
-  }
   refreshOrderSelectionState() {
     this.refreshNoteOrderSelectionState();
-    this.refreshTagOrderSelectionState();
   }
   activateNoteOrderHotkeyScope() {
-    if (this.noteOrderHotkeyScope || !this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
+    if (this.noteOrderHotkeyScope || !this.selectedNoteOrderTarget) return;
     const scope = new import_obsidian10.Scope();
     const registerMoveHotkey = (settingValue, fallback, direction) => {
       const hotkey = parseHotkeyText(settingValue, fallback);
       scope.register(hotkey.modifiers, hotkey.key, (evt) => {
         evt.preventDefault();
         evt.stopPropagation();
-        this.moveSelectedOrderTarget(direction).catch((error) => {
+        this.moveSelectedNote(direction).catch((error) => {
           console.error("[Puffs Tag Enhance] Failed to move selected item:", error);
           new import_obsidian10.Notice("\u8C03\u6574\u987A\u5E8F\u5931\u8D25");
         });
@@ -4528,7 +4343,7 @@ var InteractionsBehavior = class {
     this.noteOrderHotkeyScope = null;
   }
   refreshNoteOrderHotkeyScope() {
-    const shouldReactivate = !!(this.selectedNoteOrderTarget || this.selectedTagOrderTarget);
+    const shouldReactivate = !!this.selectedNoteOrderTarget;
     this.deactivateNoteOrderHotkeyScope();
     if (shouldReactivate) this.activateNoteOrderHotkeyScope();
   }
@@ -4539,7 +4354,6 @@ var InteractionsBehavior = class {
       this.selectedNoteOrderTarget = null;
       this.deactivateNoteOrderHotkeyScope();
     } else {
-      this.exitTagOrderMode(false);
       this.selectedNoteOrderTarget = { tag, path, surface };
       this.refreshNoteOrderHotkeyScope();
     }
@@ -4551,47 +4365,10 @@ var InteractionsBehavior = class {
       this.selectedNoteOrderTarget = null;
       this.deactivateNoteOrderHotkeyScope();
     } else {
-      this.exitTagOrderMode(false);
       this.selectedNoteOrderTarget = { hierarchyParent: parentPath, path, surface };
       this.refreshNoteOrderHotkeyScope();
     }
     this.refreshOrderSelectionState();
-  }
-  toggleTagOrderTarget(parentTagValue, tagValue, surface = "") {
-    const parentTag = normalizeTag(parentTagValue);
-    const tag = normalizeTag(tagValue);
-    if (!parentTag || !tag || !this.isTagOrderModeActive(parentTag)) return;
-    if (this.isTagOrderTargetSelected(parentTag, tag)) {
-      this.selectedTagOrderTarget = null;
-      this.deactivateNoteOrderHotkeyScope();
-    } else {
-      this.selectedNoteOrderTarget = null;
-      this.selectedTagOrderTarget = { parentTag, tag, surface };
-      this.refreshNoteOrderHotkeyScope();
-    }
-    this.refreshOrderSelectionState();
-  }
-  toggleTagOrderMode(parentTagValue, surface = "") {
-    const parentTag = normalizeTag(parentTagValue);
-    if (!parentTag || !this.hasInheritanceChildren(parentTag)) return;
-    if (this.isTagOrderModeActive(parentTag)) {
-      this.exitTagOrderMode();
-      return;
-    }
-    this.selectedNoteOrderTarget = null;
-    this.selectedTagOrderTarget = null;
-    this.activeTagOrderParent = parentTag;
-    this.activeTagOrderSurface = surface;
-    this.deactivateNoteOrderHotkeyScope();
-    this.refreshOrderSelectionState();
-  }
-  exitTagOrderMode(refresh = true) {
-    if (!this.activeTagOrderParent && !this.selectedTagOrderTarget) return;
-    this.activeTagOrderParent = null;
-    this.activeTagOrderSurface = "";
-    this.selectedTagOrderTarget = null;
-    this.deactivateNoteOrderHotkeyScope();
-    if (refresh) this.refreshOrderSelectionState();
   }
   clearNoteOrderTarget() {
     if (!this.selectedNoteOrderTarget) return;
@@ -4599,68 +4376,10 @@ var InteractionsBehavior = class {
     this.deactivateNoteOrderHotkeyScope();
     this.refreshOrderSelectionState();
   }
-  clearTagOrderTarget() {
-    if (!this.selectedTagOrderTarget) return;
-    this.selectedTagOrderTarget = null;
-    this.deactivateNoteOrderHotkeyScope();
-    this.refreshOrderSelectionState();
-  }
   clearOrderTarget() {
-    if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
-    if (this.selectedNoteOrderTarget) {
-      this.selectedNoteOrderTarget = null;
-      this.deactivateNoteOrderHotkeyScope();
-      this.refreshOrderSelectionState();
-      return;
-    }
-    this.clearTagOrderTarget();
+    this.clearNoteOrderTarget();
   }
-  async moveSelectedOrderTarget(direction) {
-    if (this.selectedTagOrderTarget) return this.moveSelectedTag(direction);
-    return this.moveSelectedNote(direction);
-  }
-  async moveSelectedTag(direction) {
-    const target = this.selectedTagOrderTarget;
-    if (!target || direction !== -1 && direction !== 1) return false;
-    const children = this.getInheritanceChildren(target.parentTag);
-    const currentIndex = children.indexOf(target.tag);
-    if (currentIndex < 0) {
-      this.clearTagOrderTarget();
-      return false;
-    }
-    const nextIndex = currentIndex + direction;
-    if (nextIndex < 0 || nextIndex >= children.length) return false;
-    await this.reorderChildTag(
-      target.parentTag,
-      target.tag,
-      children[nextIndex],
-      direction < 0 ? "before" : "after"
-    );
-    globalThis.setTimeout(() => {
-      this.refreshTagOrderSelectionState();
-      this.focusSelectedTagOrderButton();
-    }, 0);
-    return true;
-  }
-  async moveSelectedTagAfter(parentTagValue, targetTagValue) {
-    const selected = this.selectedTagOrderTarget;
-    const parentTag = normalizeTag(parentTagValue);
-    const targetTag = normalizeTag(targetTagValue);
-    if (!selected || !parentTag || selected.parentTag !== parentTag || !targetTag || selected.tag === targetTag) {
-      return false;
-    }
-    const children = this.getInheritanceChildren(parentTag);
-    const movingIndex = children.indexOf(selected.tag);
-    const targetIndex = children.indexOf(targetTag);
-    if (movingIndex < 0) {
-      this.clearTagOrderTarget();
-      return false;
-    }
-    if (targetIndex < 0 || movingIndex === targetIndex + 1) return false;
-    await this.reorderChildTag(parentTag, selected.tag, targetTag, "after");
-    globalThis.setTimeout(() => this.refreshTagOrderSelectionState(), 0);
-    return true;
-  }
+  /** 子标签排序的写回口。交互入口在管理子标签弹窗内，这里只负责改数组并落盘。 */
   async reorderChildTag(parentTagValue, movingTagValue, targetTagValue, placement) {
     const parentTag = normalizeTag(parentTagValue);
     const movingTag = normalizeTag(movingTagValue);
@@ -4817,44 +4536,18 @@ var WorkspaceBehavior = class {
     };
     window.addEventListener("keydown", this.keydownHandler, true);
     this.pointerdownHandler = (evt) => {
-      if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
+      if (!this.selectedNoteOrderTarget) return;
       const target = evt.target instanceof Element ? evt.target : null;
       if (target && target.closest(".puffs-tag-note-order-button")) return;
-      if (target && target.closest(".puffs-tag-order-button")) return;
       if (target && target.closest(".puffs-tag-scroll-top-button")) return;
       if (target && target.closest(".puffs-tag-scroll-bottom-button")) return;
       if (this.isNoteOrderSearchControl(target)) return;
       if (this.isTagSidebarScrollbarPointer(evt, target)) return;
-      if (evt.button === 2 && target) {
-        if (this.selectedNoteOrderTarget && target.closest(".puffs-tag-note-card")) return;
-        if (this.selectedTagOrderTarget && target.closest(".puffs-inheritance-tag-group-row")) return;
-      }
+      if (evt.button === 2 && target && target.closest(".puffs-tag-note-card")) return;
       this.clearOrderTarget();
     };
     document.addEventListener("pointerdown", this.pointerdownHandler, true);
     this.noteOrderContextMenuHandler = (evt) => {
-      const selectedTag = this.selectedTagOrderTarget;
-      if (selectedTag) {
-        const target2 = evt.target instanceof Element ? evt.target : null;
-        if (!target2 || target2.closest(".puffs-tag-order-button")) return;
-        const rowEl = target2.closest(".puffs-inheritance-tag-group-row");
-        if (!rowEl) return;
-        const parentTag = normalizeTag(rowEl.dataset.puffsTagOrderParent);
-        const tag = normalizeTag(rowEl.dataset.puffsTagOrderTag);
-        if (parentTag === selectedTag.parentTag && tag === selectedTag.tag) return;
-        if (!parentTag || parentTag !== selectedTag.parentTag || !tag) {
-          this.clearTagOrderTarget();
-          return;
-        }
-        evt.preventDefault();
-        evt.stopPropagation();
-        evt.stopImmediatePropagation();
-        this.moveSelectedTagAfter(parentTag, tag).catch((error) => {
-          console.error("[Puffs Tag Enhance] Failed to move selected tag after target:", error);
-          new import_obsidian11.Notice("\u8C03\u6574\u5B50\u6807\u7B7E\u987A\u5E8F\u5931\u8D25");
-        });
-        return;
-      }
       const selected = this.selectedNoteOrderTarget;
       if (!selected) return;
       const target = evt.target instanceof Element ? evt.target : null;
@@ -5959,10 +5652,9 @@ var TagPaneBehavior = class {
         files: browseData.files,
         exactCount: browseData.exactCount,
         inheritedCount: browseData.inheritedCount,
-        inheritanceEnabled: browseData.inheritanceEnabled,
         hasInheritance: browseData.hasInheritance,
-        hasFreeInheritance: browseData.hasFreeInheritance,
         hasActiveInheritance: browseData.hasActiveInheritance,
+        intersectionSignature: browseData.intersectionSignature,
         sourcesByPath: browseData.sourcesByPath,
         inheritanceTree: browseData.inheritanceTree,
         fixedSearchTags,
@@ -6060,22 +5752,6 @@ var TagPaneBehavior = class {
     toggleEl.classList.toggle("is-collapsed", !isExpanded);
     toggleEl.setAttribute("aria-hidden", "true");
     (0, import_obsidian14.setIcon)(toggleEl, "right-triangle");
-    const canOrderChildren = !isVirtual && item.hasInheritance && item.inheritanceEnabled;
-    if (canOrderChildren) {
-      toggleEl.classList.add("puffs-tag-order-parent-button");
-      toggleEl.dataset.puffsTagOrderTag = tag;
-      toggleEl.dataset.puffsSurface = "sidebar";
-      toggleEl.dataset.puffsExpanded = String(isExpanded);
-      toggleEl.dataset.puffsHasChildren = "true";
-      toggleEl.removeAttribute("aria-hidden");
-      toggleEl.tabIndex = 0;
-      toggleEl.setAttribute("role", "button");
-      this.bindTagHierarchyControlButton(
-        toggleEl,
-        () => this.toggleTagExpansion(tag, view)
-      );
-      this.syncTagOrderButtonSelection(toggleEl);
-    }
     const innerEl = document.createElement("div");
     innerEl.className = "tree-item-inner";
     const textEl = document.createElement("div");
@@ -6088,16 +5764,6 @@ var TagPaneBehavior = class {
     countEl.textContent = item.inheritedCount > 0 ? `${item.exactCount}+${item.inheritedCount}` : String(files.length);
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
-    let inheritanceButtonEl = null;
-    if (!isVirtual && item.hasFreeInheritance) {
-      inheritanceButtonEl = document.createElement("button");
-      inheritanceButtonEl.type = "button";
-      inheritanceButtonEl.className = "clickable-icon puffs-tag-inheritance-button";
-      inheritanceButtonEl.dataset.puffsTag = tag;
-      inheritanceButtonEl.classList.toggle("is-active", !!item.inheritanceEnabled);
-      inheritanceButtonEl.setAttribute("aria-label", item.inheritanceEnabled ? "\u9690\u85CF\u540E\u4EE3\u6807\u7B7E\u7B14\u8BB0" : "\u663E\u793A\u540E\u4EE3\u6807\u7B7E\u7B14\u8BB0");
-      (0, import_obsidian14.setIcon)(inheritanceButtonEl, "git-merge");
-    }
     if (isExpanded && files.length > 0) {
       scrollBottomButtonEl = document.createElement("button");
       scrollBottomButtonEl.type = "button";
@@ -6117,7 +5783,6 @@ var TagPaneBehavior = class {
     flairOuterEl.appendChild(countEl);
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
-    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
     tagEl.appendChild(flairOuterEl);
@@ -6142,7 +5807,7 @@ var TagPaneBehavior = class {
     return Object.entries(tagDoms);
   }
   renderNoteList(treeItemEl, files, tagValue, isVirtual = false, options = {}) {
-    var _a, _b, _c;
+    var _a, _b;
     let listEl = Array.from(treeItemEl.children).find(
       (el) => el.classList.contains("puffs-tag-note-list")
     );
@@ -6158,12 +5823,12 @@ var TagPaneBehavior = class {
       targetPath: (target == null ? void 0 : target.tag) === tagValue ? target.path : "",
       scrollContainer: options.scrollContainer || listEl,
       rerender: () => {
-        var _a2, _b2, _c2;
-        return (_c2 = (_b2 = (_a2 = options.view) == null ? void 0 : _a2.requestRender) == null ? void 0 : _b2.call(_a2)) != null ? _c2 : this.refreshAllTagViews();
+        var _a2, _b2, _c;
+        return (_c = (_b2 = (_a2 = options.view) == null ? void 0 : _a2.requestRender) == null ? void 0 : _b2.call(_a2)) != null ? _c : this.refreshAllTagViews();
       }
     };
     const browseData = !isVirtual && (options.browseData || this.getTagBrowseData(tagValue));
-    if (((_c = browseData == null ? void 0 : browseData.hasActiveInheritance) != null ? _c : browseData == null ? void 0 : browseData.inheritanceEnabled) && browseData.inheritanceTree) {
+    if ((browseData == null ? void 0 : browseData.hasActiveInheritance) && browseData.inheritanceTree) {
       this.renderTagInheritanceBrowseTree(listEl, browseData.inheritanceTree, renderOptions);
     } else {
       this.renderInlineTagNoteTree(listEl, files, tagValue, isVirtual, renderOptions);
@@ -6218,6 +5883,10 @@ function getFixedChildDisplayName(tagValue) {
   var _a;
   return ((_a = parseFixedChildTag(tagValue)) == null ? void 0 : _a.displayName) || getTagDisplayName(tagValue);
 }
+function getRelativeChildDisplayName(parentValue, childValue) {
+  const parsed = parseFixedChildTag(childValue);
+  return parsed && parsed.parent === normalizeTag(parentValue) ? parsed.displayName : getTagDisplayName(childValue);
+}
 function getFixedParent(inheritance, childValue) {
   const child = normalizeTag(childValue);
   if (!child) return null;
@@ -6256,31 +5925,46 @@ function getInheritanceChildren(inheritance, tagValue) {
   if (!tag) return [];
   return [...inheritance.childrenByParent[tag] || []];
 }
+function isIntersectionEdge(inheritance, parentValue, childValue) {
+  const parent = normalizeTag(parentValue);
+  const child = normalizeTag(childValue);
+  if (!parent || !child || parent === child) return false;
+  const marked = (from, to) => {
+    var _a;
+    return ((_a = inheritance.modeByParentChild[from]) == null ? void 0 : _a[to]) === "intersection" && (inheritance.childrenByParent[from] || []).includes(to);
+  };
+  return marked(parent, child) && marked(child, parent);
+}
+function getIntersectionPartners(inheritance, tagValue) {
+  const tag = normalizeTag(tagValue);
+  if (!tag) return [];
+  return (inheritance.childrenByParent[tag] || []).filter((child) => isIntersectionEdge(inheritance, tag, child));
+}
+function getInheritanceOnlyChildren(inheritance, tagValue) {
+  const tag = normalizeTag(tagValue);
+  if (!tag) return [];
+  return (inheritance.childrenByParent[tag] || []).filter((child) => !isIntersectionEdge(inheritance, tag, child));
+}
+function areTagsRelated(inheritance, a, b) {
+  const left = normalizeTag(a);
+  const right = normalizeTag(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return (inheritance.childrenByParent[left] || []).includes(right) || (inheritance.childrenByParent[right] || []).includes(left);
+}
 function hasInheritanceChildren(inheritance, tagValue) {
   return getInheritanceChildren(inheritance, tagValue).length > 0;
 }
 function getInheritanceParents(inheritance, tagValue) {
   const tag = normalizeTag(tagValue);
   if (!tag) return [];
-  return Object.entries(inheritance.childrenByParent).filter(([, children]) => Array.isArray(children) && children.includes(tag)).map(([parent]) => parent);
-}
-function isTagInheritanceEnabled(inheritance, tagValue) {
-  const tag = normalizeTag(tagValue);
-  return !!tag && inheritance.enabledParents.includes(tag);
+  return Object.entries(inheritance.childrenByParent).filter(([parent, children]) => Array.isArray(children) && children.includes(tag) && !isIntersectionEdge(inheritance, parent, tag)).map(([parent]) => parent);
 }
 function getSortedTagInheritanceAdjacency(inheritance) {
   const result = {};
   for (const parent of Object.keys(inheritance.childrenByParent)) {
-    const children = getInheritanceChildren(inheritance, parent);
+    const children = getInheritanceOnlyChildren(inheritance, parent);
     if (children.length) result[parent] = children;
-  }
-  return result;
-}
-function getFixedTagInheritanceAdjacency(inheritance) {
-  const result = {};
-  for (const [parent, children] of Object.entries(inheritance.childrenByParent)) {
-    const fixedChildren = children.filter((child) => isFixedTagEdge(inheritance, parent, child));
-    if (fixedChildren.length) result[parent] = fixedChildren;
   }
   return result;
 }
@@ -6293,21 +5977,14 @@ function wouldCreateTagInheritanceCycle(inheritance, parentValue, childValue) {
   const parent = normalizeTag(parentValue);
   const child = normalizeTag(childValue);
   if (!parent || !child) return true;
-  return wouldCreateDirectedCycle(inheritance.childrenByParent, parent, child);
+  return wouldCreateDirectedCycle(getSortedTagInheritanceAdjacency(inheritance), parent, child);
 }
 function getTagInheritanceMode(inheritance, parentValue, childValue) {
   var _a;
   const parent = normalizeTag(parentValue);
   const child = normalizeTag(childValue);
   if (!parent || !child) return "all";
-  return ((_a = inheritance.modeByParentChild[parent]) == null ? void 0 : _a[child]) === "selected" ? "selected" : "all";
-}
-function getIncludedInheritedPaths(inheritance, parentValue, childValue) {
-  var _a;
-  const parent = normalizeTag(parentValue);
-  const child = normalizeTag(childValue);
-  if (!parent || !child) return [];
-  return [...((_a = inheritance.includedPathsByParentChild[parent]) == null ? void 0 : _a[child]) || []];
+  return ((_a = inheritance.modeByParentChild[parent]) == null ? void 0 : _a[child]) === "intersection" ? "intersection" : "all";
 }
 function getExcludedInheritedPaths(inheritance, parentValue, childValue) {
   var _a;
@@ -6316,17 +5993,16 @@ function getExcludedInheritedPaths(inheritance, parentValue, childValue) {
   if (!parent || !child) return [];
   return [...((_a = inheritance.excludedPathsByParentChild[parent]) == null ? void 0 : _a[child]) || []];
 }
-function isInheritanceEdgePathVisible(inheritance, parentValue, childValue, path, isDirect = true) {
+function isInheritanceEdgePathVisible(inheritance, parentValue, childValue, path) {
   const parent = normalizeTag(parentValue);
   const child = normalizeTag(childValue);
   if (!parent || !child || !path) return false;
   if (isFixedTagEdge(inheritance, parent, child)) return true;
-  if (!isDirect) return !getExcludedInheritedPaths(inheritance, parent, child).includes(path);
-  return getTagInheritanceMode(inheritance, parent, child) === "selected" ? getIncludedInheritedPaths(inheritance, parent, child).includes(path) : !getExcludedInheritedPaths(inheritance, parent, child).includes(path);
+  if (getTagInheritanceMode(inheritance, parent, child) === "intersection") return false;
+  return !getExcludedInheritedPaths(inheritance, parent, child).includes(path);
 }
 function isInheritancePathVisible(inheritance, edges, path, ignoredEdge = null) {
-  const list = edges || [];
-  return list.every((edge, index) => ignoredEdge && edge.parent === ignoredEdge.parent && edge.child === ignoredEdge.child ? true : isInheritanceEdgePathVisible(inheritance, edge.parent, edge.child, path, index === list.length - 1));
+  return (edges || []).every((edge) => ignoredEdge && edge.parent === ignoredEdge.parent && edge.child === ignoredEdge.child ? true : isInheritanceEdgePathVisible(inheritance, edge.parent, edge.child, path));
 }
 function createInheritanceEdgesFromLineage(inheritance, lineage) {
   const edges = [];
@@ -6359,14 +6035,13 @@ function cloneParentChildSettings(source) {
 }
 
 // src/relations.ts
+var RELATIONS_VERSION = 7;
 var createEmptyRelations = () => ({
-  version: 6,
+  version: RELATIONS_VERSION,
   tagInheritance: {
     childrenByParent: {},
-    enabledParents: [],
     excludedPathsByParentChild: {},
     modeByParentChild: {},
-    includedPathsByParentChild: {},
     fixedParentByChild: {}
   },
   noteHierarchy: {
@@ -6379,7 +6054,7 @@ var RelationsBehavior = class {
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const result = createEmptyRelations();
     const sourceVersion = Number(source.version);
-    result.version = sourceVersion >= 6 ? 6 : sourceVersion >= 5 ? 5 : sourceVersion >= 4 ? 4 : sourceVersion >= 3 ? 3 : sourceVersion >= 2 ? 2 : 1;
+    result.version = Number.isFinite(sourceVersion) && sourceVersion >= 1 ? Math.min(Math.floor(sourceVersion), RELATIONS_VERSION) : 1;
     const inheritance = source.tagInheritance && typeof source.tagInheritance === "object" ? source.tagInheritance : {};
     const rawChildren = inheritance.childrenByParent;
     if (rawChildren && typeof rawChildren === "object" && !Array.isArray(rawChildren)) {
@@ -6397,10 +6072,6 @@ var RelationsBehavior = class {
         if (children.length > 0) result.tagInheritance.childrenByParent[parent] = children;
       }
     }
-    const enabledParents = Array.isArray(inheritance.enabledParents) ? inheritance.enabledParents : [];
-    result.tagInheritance.enabledParents = Array.from(new Set(
-      enabledParents.map(normalizeTag).filter((tag) => tag && !isNestedTag(tag))
-    ));
     const normalizePaths = (rawPaths) => Array.from(new Set((Array.isArray(rawPaths) ? rawPaths : []).map((path) => typeof path === "string" ? path.trim() : "").filter(Boolean)));
     const copyParentChildPaths = (targetKey, sourceKey) => {
       const rawParents = inheritance[sourceKey];
@@ -6418,42 +6089,22 @@ var RelationsBehavior = class {
         }
       }
     };
-    if (sourceVersion >= 5) {
-      copyParentChildPaths("excludedPathsByParentChild", "excludedPathsByParentChild");
+    copyParentChildPaths("excludedPathsByParentChild", "excludedPathsByParentChild");
+    if (result.version < RELATIONS_VERSION) {
+      result.tagInheritance.includedPathsByParentChild = {};
       copyParentChildPaths("includedPathsByParentChild", "includedPathsByParentChild");
-      const rawModes = inheritance.modeByParentChild;
-      if (rawModes && typeof rawModes === "object" && !Array.isArray(rawModes)) {
-        for (const [rawParent, rawChildren2] of Object.entries(rawModes)) {
-          const parent = normalizeTag(rawParent);
-          if (!parent || !rawChildren2 || typeof rawChildren2 !== "object" || Array.isArray(rawChildren2)) continue;
-          for (const [rawChild, rawMode] of Object.entries(rawChildren2)) {
-            const child = normalizeTag(rawChild);
-            if (rawMode !== "selected" || !(result.tagInheritance.childrenByParent[parent] || []).includes(child)) continue;
-            if (!result.tagInheritance.modeByParentChild[parent]) result.tagInheritance.modeByParentChild[parent] = {};
-            result.tagInheritance.modeByParentChild[parent][child] = "selected";
-          }
-        }
-      }
-    } else {
-      const rawExclusions = inheritance.excludedPathsByParent || {};
-      const rawIncluded = inheritance.includedPathsByParent || {};
-      const rawModes = inheritance.modeByParent || {};
-      for (const [parent, children] of Object.entries(result.tagInheritance.childrenByParent)) {
-        const excluded = normalizePaths(rawExclusions[parent]);
-        const included = normalizePaths(rawIncluded[parent]);
-        for (const child of children) {
-          if (excluded.length) {
-            if (!result.tagInheritance.excludedPathsByParentChild[parent]) result.tagInheritance.excludedPathsByParentChild[parent] = {};
-            result.tagInheritance.excludedPathsByParentChild[parent][child] = [...excluded];
-          }
-          if (included.length) {
-            if (!result.tagInheritance.includedPathsByParentChild[parent]) result.tagInheritance.includedPathsByParentChild[parent] = {};
-            result.tagInheritance.includedPathsByParentChild[parent][child] = [...included];
-          }
-          if (rawModes[parent] === "selected") {
-            if (!result.tagInheritance.modeByParentChild[parent]) result.tagInheritance.modeByParentChild[parent] = {};
-            result.tagInheritance.modeByParentChild[parent][child] = "selected";
-          }
+    }
+    const rawModes = inheritance.modeByParentChild;
+    if (rawModes && typeof rawModes === "object" && !Array.isArray(rawModes)) {
+      for (const [rawParent, rawChildren2] of Object.entries(rawModes)) {
+        const parent = normalizeTag(rawParent);
+        if (!parent || !rawChildren2 || typeof rawChildren2 !== "object" || Array.isArray(rawChildren2)) continue;
+        for (const [rawChild, rawMode] of Object.entries(rawChildren2)) {
+          const child = normalizeTag(rawChild);
+          const keep = rawMode === "intersection" || rawMode === "selected" && result.version < RELATIONS_VERSION;
+          if (!keep || !(result.tagInheritance.childrenByParent[parent] || []).includes(child)) continue;
+          if (!result.tagInheritance.modeByParentChild[parent]) result.tagInheritance.modeByParentChild[parent] = {};
+          result.tagInheritance.modeByParentChild[parent][child] = rawMode;
         }
       }
     }
@@ -6491,6 +6142,7 @@ var RelationsBehavior = class {
       }
     }
     this.settings.relations = result;
+    this.reconcileIntersectionPairs();
     this.reconcileRelationCycles();
     this.reconcileFixedTagRelations();
     return result;
@@ -6506,9 +6158,6 @@ var RelationsBehavior = class {
     }
     if (!inheritance.excludedPathsByParentChild || typeof inheritance.excludedPathsByParentChild !== "object") {
       inheritance.excludedPathsByParentChild = {};
-    }
-    if (!inheritance.includedPathsByParentChild || typeof inheritance.includedPathsByParentChild !== "object") {
-      inheritance.includedPathsByParentChild = {};
     }
     return inheritance;
   }
@@ -6527,6 +6176,9 @@ var RelationsBehavior = class {
   isFixedTagEdge(parentValue, childValue) {
     return isFixedTagEdge(this.getTagInheritanceSettings(), parentValue, childValue);
   }
+  getRelativeChildDisplayName(parentValue, childValue) {
+    return getRelativeChildDisplayName(parentValue, childValue);
+  }
   getFixedChildDisplayName(tagValue) {
     return getFixedChildDisplayName(tagValue);
   }
@@ -6537,6 +6189,7 @@ var RelationsBehavior = class {
     if (!tree) return null;
     const allowed = new Set(Array.from(includedTags || []).map(normalizeTag).filter(Boolean));
     const visit = (node, isRoot = false) => {
+      if (node.isIntersection) return null;
       const children = (node.children || []).map((child) => visit(child)).filter(Boolean);
       if (!isRoot && !allowed.has(node.tag) && children.length === 0) return null;
       const paths = isRoot || !allowed.has(node.tag) ? [] : [...node.paths];
@@ -6876,6 +6529,10 @@ var RelationsBehavior = class {
           changed = true;
         }
       }
+      if (parts[1] === "tag-intersection" && parts[2] === oldTag) {
+        parts[2] = newTag;
+        changed = true;
+      }
       migrated.add(parts.join("\0"));
     }
     if (!changed) return false;
@@ -6992,9 +6649,16 @@ var RelationsBehavior = class {
   getInheritanceChildren(tagValue) {
     return getInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
   }
+  /**
+   * 关系数据的版本化迁移。
+   *
+   * 挂在这里而不是 data/schema.ts：v7 的等价转换要算「自由候选」和「这篇笔记是不是
+   * 直接挂在子标签上」，两者都依赖 tagFileIndex，而 schema 迁移跑在 loadSettings 里、
+   * 那时索引还没建。本方法由 tag-index.ts 在索引就绪且元数据缓存可用时调用。
+   */
   initializeTagInheritanceOrder() {
     const relations = this.settings.relations;
-    if (!relations || Number(relations.version) >= 6) return false;
+    if (!relations || Number(relations.version) >= RELATIONS_VERSION) return false;
     const inheritance = this.getTagInheritanceSettings();
     if (Number(relations.version) < 2) {
       const nextChildrenByParent = {};
@@ -7008,9 +6672,54 @@ var RelationsBehavior = class {
       inheritance.fixedParentByChild = {};
     }
     this.reconcileFixedTagRelations();
+    if (Number(relations.version) < 7) this.migrateSelectedInheritanceToExclusion();
     this.reconcileInheritancePathLists();
-    relations.version = 6;
+    relations.version = RELATIONS_VERSION;
     return true;
+  }
+  /**
+   * v6 -> v7：把「选择继承」等价改写成「继承 + 排除名单」，白名单整张表退场。
+   *
+   * 白名单是「默认拒绝」、排除名单是「默认放行」，两者的可见集合可以互相表达：
+   * 把当前不可见的自由候选全部写进排除名单，显示结果完全一致。
+   *
+   * 例外是白名单为空的边 —— 那意味着「一篇都不继承」，留着这条关系没有意义，
+   * 视为误设，直接转成普通继承而不是把整棵子树写进排除名单。
+   */
+  migrateSelectedInheritanceToExclusion() {
+    var _a;
+    const inheritance = this.getTagInheritanceSettings();
+    const legacyIncluded = inheritance.includedPathsByParentChild || {};
+    const selectedEdges = [];
+    for (const [parent, children] of Object.entries(inheritance.modeByParentChild || {})) {
+      for (const [child, mode] of Object.entries(children || {})) {
+        if (mode === "selected") selectedEdges.push([parent, child]);
+      }
+    }
+    const isDirectPath = (child, path) => {
+      var _a2;
+      return (((_a2 = this.tagFileIndex) == null ? void 0 : _a2.get(child)) || []).some((file) => file.path === path);
+    };
+    for (const [parent, child] of selectedEdges) {
+      this.setParentChildValue(inheritance.modeByParentChild, parent, child, void 0);
+      if (this.isFixedTagEdge(parent, child)) {
+        this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, void 0);
+        continue;
+      }
+      const included = ((_a = legacyIncluded[parent]) == null ? void 0 : _a[child]) || [];
+      if (!included.length) continue;
+      const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
+      const free = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
+      const hidden = free.filter((candidate) => isDirectPath(child, candidate.path) ? !included.includes(candidate.path) : excluded.has(candidate.path)).map((candidate) => candidate.path);
+      this.setParentChildValue(
+        inheritance.excludedPathsByParentChild,
+        parent,
+        child,
+        hidden.length ? hidden : void 0
+      );
+    }
+    delete inheritance.includedPathsByParentChild;
+    return selectedEdges.length > 0;
   }
   getTagVisibleNoteCount(tagValue) {
     const tag = normalizeTag(tagValue);
@@ -7031,39 +6740,139 @@ var RelationsBehavior = class {
   getSortedTagInheritanceAdjacency() {
     return getSortedTagInheritanceAdjacency(this.getTagInheritanceSettings());
   }
-  getFixedTagInheritanceAdjacency() {
-    return getFixedTagInheritanceAdjacency(this.getTagInheritanceSettings());
-  }
-  getActiveTagInheritanceAdjacency(tagValue) {
-    return this.isTagInheritanceEnabled(tagValue) ? this.getSortedTagInheritanceAdjacency() : this.getFixedTagInheritanceAdjacency();
-  }
-  hasFreeInheritanceBranch(tagValue) {
-    const root = normalizeTag(tagValue);
-    if (!root) return false;
-    const adjacency = this.getSortedTagInheritanceAdjacency();
-    const visit = (parent, branch) => {
-      if (branch.has(parent)) return false;
-      const nextBranch = new Set(branch);
-      nextBranch.add(parent);
-      for (const child of adjacency[parent] || []) {
-        if (!this.isFixedTagEdge(parent, child)) return true;
-        if (visit(child, nextBranch)) return true;
-      }
-      return false;
-    };
-    return visit(root, /* @__PURE__ */ new Set());
-  }
   getInheritanceParents(tagValue) {
     return getInheritanceParents(this.getTagInheritanceSettings(), tagValue);
   }
-  getTagInheritanceGroupKeys(tagValue) {
+  isIntersectionEdge(parentValue, childValue) {
+    return isIntersectionEdge(this.getTagInheritanceSettings(), parentValue, childValue);
+  }
+  getIntersectionPartners(tagValue) {
+    return getIntersectionPartners(this.getTagInheritanceSettings(), tagValue);
+  }
+  getInheritanceOnlyChildren(tagValue) {
+    return getInheritanceOnlyChildren(this.getTagInheritanceSettings(), tagValue);
+  }
+  areTagsRelated(leftValue, rightValue) {
+    return areTagsRelated(this.getTagInheritanceSettings(), leftValue, rightValue);
+  }
+  /**
+   * 一个交集分组的成员：root 的原生笔记 ∩ partner 的笔记。
+   *
+   * 只吃原生笔记 —— 从子标签继承上来的笔记仍留在自己的血缘分组里，不进交集组。
+   * 顺序取自 root 的 exactPaths（已过 noteOrderByTag），这样同一批笔记在
+   * 「原生」与交集组之间挪动时排序不会错乱。
+   */
+  getIntersectionGroupPaths(rootTagValue, partnerTagValue) {
     var _a;
+    const root = normalizeTag(rootTagValue);
+    const partner = normalizeTag(partnerTagValue);
+    if (!root || !partner) return [];
+    const partnerPaths = new Set((((_a = this.tagFileIndex) == null ? void 0 : _a.get(partner)) || []).map((file) => file.path));
+    if (!partnerPaths.size) return [];
+    const branchData = this.getInheritanceBranchData(root);
+    return ((branchData == null ? void 0 : branchData.exactPaths) || []).filter((path) => partnerPaths.has(path));
+  }
+  /**
+   * 交集边的一致性对账：清除半条边。
+   *
+   * 交集必须成对存在。任一侧缺失（写入中断、标签改名、另一侧被单独移除）时，
+   * 把剩下那条边降级成普通继承边 —— 保留关系本身，只是不再是交集。
+   * 返回是否发生过改动。
+   */
+  reconcileIntersectionPairs() {
+    var _a;
+    const inheritance = this.getTagInheritanceSettings();
+    const modes = inheritance.modeByParentChild || {};
+    let changed = false;
+    for (const [parent, children] of Object.entries(modes)) {
+      for (const child of Object.keys(children || {})) {
+        if (children[child] !== "intersection") continue;
+        const hasForwardEdge = (inheritance.childrenByParent[parent] || []).includes(child);
+        const paired = ((_a = modes[child]) == null ? void 0 : _a[parent]) === "intersection" && hasForwardEdge && (inheritance.childrenByParent[child] || []).includes(parent) && parent !== child;
+        if (paired) continue;
+        if (parent === child) {
+          inheritance.childrenByParent[parent] = (inheritance.childrenByParent[parent] || []).filter((tag) => tag !== child);
+          if (!inheritance.childrenByParent[parent].length) delete inheritance.childrenByParent[parent];
+        }
+        this.setParentChildValue(inheritance.modeByParentChild, parent, child, void 0);
+        if (!hasForwardEdge || parent === child) {
+          this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, void 0);
+        }
+        changed = true;
+      }
+    }
+    return changed;
+  }
+  /**
+   * 绑定/解绑交集。成对写两条边，失败整体回滚。
+   *
+   * 交集与继承互斥，因此绑定时若两标签之间已有继承边会先被这条边覆盖为交集；
+   * 解绑时两条边都删掉 —— 交集是对称的，没有「只保留一个方向」的说法。
+   */
+  async setIntersectionRelation(leftValue, rightValue, bound) {
+    const left = normalizeTag(leftValue);
+    const right = normalizeTag(rightValue);
+    if (!left || !right || left === right) throw new Error("\u6807\u7B7E\u65E0\u6548");
+    if (isNestedTag(left) || isNestedTag(right)) throw new Error("\u5D4C\u5957\u6807\u7B7E\u4E0D\u652F\u6301\u4EA4\u96C6");
+    if (bound && (this.isFixedChild(left) || this.isFixedChild(right))) {
+      throw new Error("\u56FA\u5B9A\u5B50\u6807\u7B7E\u4E0D\u80FD\u7ED1\u5B9A\u4EA4\u96C6");
+    }
+    const inheritance = this.getTagInheritanceSettings();
+    const previousChildren = inheritance.childrenByParent;
+    const previousModes = inheritance.modeByParentChild;
+    const previousExcluded = inheritance.excludedPathsByParentChild;
+    const previousFixedParents = inheritance.fixedParentByChild;
+    const stagedChildren = Object.fromEntries(
+      Object.entries(previousChildren).map(([parent, children]) => [parent, [...children]])
+    );
+    inheritance.childrenByParent = stagedChildren;
+    inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
+    inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
+    inheritance.fixedParentByChild = { ...previousFixedParents };
+    const writeEdge = (parent, child) => {
+      if (!stagedChildren[parent]) stagedChildren[parent] = [];
+      if (!stagedChildren[parent].includes(child)) stagedChildren[parent].push(child);
+      this.setParentChildValue(inheritance.modeByParentChild, parent, child, "intersection");
+      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, void 0);
+    };
+    const dropEdge = (parent, child) => {
+      stagedChildren[parent] = (stagedChildren[parent] || []).filter((tag) => tag !== child);
+      if (!stagedChildren[parent].length) delete stagedChildren[parent];
+      this.setParentChildValue(inheritance.modeByParentChild, parent, child, void 0);
+      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, void 0);
+    };
+    if (bound) {
+      writeEdge(left, right);
+      writeEdge(right, left);
+    } else {
+      dropEdge(left, right);
+      dropEdge(right, left);
+    }
+    this.reconcileIntersectionPairs();
+    this.reconcileInheritancePathLists([left, right]);
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      inheritance.childrenByParent = previousChildren;
+      inheritance.modeByParentChild = previousModes;
+      inheritance.excludedPathsByParentChild = previousExcluded;
+      inheritance.fixedParentByChild = previousFixedParents;
+      throw error;
+    }
+    this.refreshHierarchyViews();
+  }
+  /** 该标签下全部非空的交集分组，顺序即它们在 childrenByParent 里的位置。 */
+  getIntersectionGroups(tagValue) {
+    return this.getIntersectionPartners(tagValue).map((partner) => ({ tag: partner, paths: this.getIntersectionGroupPaths(tagValue, partner) })).filter((group) => group.paths.length > 0);
+  }
+  getTagInheritanceGroupKeys(tagValue) {
     const tag = normalizeTag(tagValue);
     const browseData = tag && this.getTagBrowseData(tag);
-    const tree = ((_a = browseData == null ? void 0 : browseData.hasActiveInheritance) != null ? _a : browseData == null ? void 0 : browseData.inheritanceEnabled) ? browseData.inheritanceTree : null;
+    const tree = (browseData == null ? void 0 : browseData.hasActiveInheritance) ? browseData.inheritanceTree : null;
     if (!tree || !tree.children.length) return [];
     const keys = [];
     const prefix = `${tag}\0tag-group\0`;
+    const intersectionPrefix = `${tag}\0tag-intersection\0`;
     if (tree.paths.length) keys.push(`${prefix}original`);
     const visit = (node, lineage) => {
       const key = `${prefix}${lineage.join("")}`;
@@ -7071,7 +6880,10 @@ var RelationsBehavior = class {
       if (node.children.length && node.paths.length) keys.push(`${key}\0original`);
       for (const child of node.children) visit(child, [...lineage, child.tag]);
     };
-    for (const child of tree.children) visit(child, [child.tag]);
+    for (const child of tree.children) {
+      if (child.isIntersection) keys.push(`${intersectionPrefix}${child.tag}`);
+      else visit(child, [child.tag]);
+    }
     return keys;
   }
   getUniqueSearchInheritanceControl(items, queryValue, expandedTags = this.expandedTags, matchingItems = items) {
@@ -7116,14 +6928,8 @@ var RelationsBehavior = class {
   hasInheritanceChildren(tagValue) {
     return hasInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
   }
-  isTagInheritanceEnabled(tagValue) {
-    return isTagInheritanceEnabled(this.getTagInheritanceSettings(), tagValue);
-  }
   getTagInheritanceMode(parentValue, childValue) {
     return getTagInheritanceMode(this.getTagInheritanceSettings(), parentValue, childValue);
-  }
-  getIncludedInheritedPaths(parentValue, childValue) {
-    return getIncludedInheritedPaths(this.getTagInheritanceSettings(), parentValue, childValue);
   }
   getExcludedInheritedPaths(parentValue, childValue) {
     return getExcludedInheritedPaths(this.getTagInheritanceSettings(), parentValue, childValue);
@@ -7143,7 +6949,7 @@ var RelationsBehavior = class {
   createInheritanceEdgesFromLineage(lineage) {
     return createInheritanceEdgesFromLineage(this.getTagInheritanceSettings(), lineage);
   }
-  getInheritanceBranchData(tagValue, childValue = null, includeInactive = false) {
+  getInheritanceBranchData(tagValue, childValue = null) {
     const tag = normalizeTag(tagValue);
     const requestedChild = normalizeTag(childValue);
     if (!tag) return null;
@@ -7154,7 +6960,7 @@ var RelationsBehavior = class {
     const orderedBranches = [];
     const orderedPathsByTag = { [tag]: exactPaths };
     const fixedTags = /* @__PURE__ */ new Set();
-    const adjacency = includeInactive ? this.getSortedTagInheritanceAdjacency() : this.getActiveTagInheritanceAdjacency(tag);
+    const adjacency = this.getSortedTagInheritanceAdjacency();
     const visit = (sourceTag, edges, branch = /* @__PURE__ */ new Set([tag])) => {
       if (branch.has(sourceTag)) return;
       const nextBranch = new Set(branch);
@@ -7179,7 +6985,7 @@ var RelationsBehavior = class {
   }
   getInheritanceCandidates(parentValue, childValue) {
     var _a, _b;
-    const branchData = this.getInheritanceBranchData(parentValue, childValue, true);
+    const branchData = this.getInheritanceBranchData(parentValue, childValue);
     if (!branchData) return [];
     const exactPaths = new Set(branchData.exactPaths);
     const candidatesByPath = /* @__PURE__ */ new Map();
@@ -7202,8 +7008,7 @@ var RelationsBehavior = class {
     const inheritance = this.getTagInheritanceSettings();
     const requestedParents = parentValues ? Array.from(new Set(parentValues.map(normalizeTag).filter(Boolean))) : Array.from(/* @__PURE__ */ new Set([
       ...Object.keys(inheritance.childrenByParent),
-      ...Object.keys(inheritance.excludedPathsByParentChild),
-      ...Object.keys(inheritance.includedPathsByParentChild)
+      ...Object.keys(inheritance.excludedPathsByParentChild)
     ]));
     const parents = new Set(requestedParents);
     if (parentValues) {
@@ -7217,7 +7022,6 @@ var RelationsBehavior = class {
         }
       }
     }
-    const beforeIncluded = JSON.stringify(inheritance.includedPathsByParentChild);
     const beforeExcluded = JSON.stringify(inheritance.excludedPathsByParentChild);
     const visited = /* @__PURE__ */ new Set();
     const reconcileParent = (parent) => {
@@ -7226,42 +7030,29 @@ var RelationsBehavior = class {
       visited.add(parent);
       for (const child of inheritance.childrenByParent[parent] || []) reconcileParent(child);
       const children = new Set(inheritance.childrenByParent[parent] || []);
-      for (const key of ["modeByParentChild", "excludedPathsByParentChild", "includedPathsByParentChild"]) {
+      for (const key of ["modeByParentChild", "excludedPathsByParentChild"]) {
         for (const child of Object.keys(inheritance[key][parent] || {})) {
           if (!children.has(child)) this.setParentChildValue(inheritance[key], parent, child, void 0);
         }
       }
       for (const child of children) {
         const freePaths = new Set(this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed).map((candidate) => candidate.path));
-        for (const key of ["excludedPathsByParentChild", "includedPathsByParentChild"]) {
-          const nextPaths = (((_a = inheritance[key][parent]) == null ? void 0 : _a[child]) || []).filter((path) => freePaths.has(path) && // 白名单额外收窄到直接笔记：跨层条目在新规则下不再被读取，留着就是死数据
-          (key === "excludedPathsByParentChild" || this.isDirectInheritedPath(child, path)));
-          this.setParentChildValue(inheritance[key], parent, child, nextPaths.length ? nextPaths : void 0);
-        }
+        const nextPaths = (((_a = inheritance.excludedPathsByParentChild[parent]) == null ? void 0 : _a[child]) || []).filter((path) => freePaths.has(path));
+        this.setParentChildValue(
+          inheritance.excludedPathsByParentChild,
+          parent,
+          child,
+          nextPaths.length ? nextPaths : void 0
+        );
       }
     };
     for (const parent of parents) reconcileParent(parent);
-    return beforeIncluded !== JSON.stringify(inheritance.includedPathsByParentChild) || beforeExcluded !== JSON.stringify(inheritance.excludedPathsByParentChild);
+    return beforeExcluded !== JSON.stringify(inheritance.excludedPathsByParentChild);
   }
-  /**
-   * 这篇笔记是不是直接挂在该子标签上的。
-   *
-   * 「选择继承」的白名单只管直接笔记；更深层冒上来的笔记由更深的边决定，本边只能排除
-   * （见 core/inheritance.ts 的 isInheritanceEdgePathVisible）。写入侧要按同一口径分流，
-   * 否则勾选面板会把深层笔记写进永远不被读取的白名单里。
-   */
-  isDirectInheritedPath(childValue, path) {
-    var _a;
-    const child = normalizeTag(childValue);
-    if (!child || !path) return false;
-    return (((_a = this.tagFileIndex) == null ? void 0 : _a.get(child)) || []).some((file) => file.path === path);
-  }
+  /** 这条边上当前可见的笔记：自由候选减去排除名单。 */
   collectVisiblePathsForEdge(parent, child) {
-    const selectedMode = this.getTagInheritanceMode(parent, child) === "selected";
-    const included = new Set(this.getIncludedInheritedPaths(parent, child));
     const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
-    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
-    return new Set(freeCandidates.filter((candidate) => selectedMode && this.isDirectInheritedPath(child, candidate.path) ? included.has(candidate.path) : !excluded.has(candidate.path)).map((candidate) => candidate.path));
+    return new Set(this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed && !excluded.has(candidate.path)).map((candidate) => candidate.path));
   }
   propagateNewlyAllowedPathsToAncestors(childTagValue, newlyAllowedPaths) {
     const startTag = normalizeTag(childTagValue);
@@ -7281,98 +7072,65 @@ var RelationsBehavior = class {
       }
     }
   }
+  /**
+   * 切换一条边的模式：继承 <-> 交集。
+   *
+   * 交集是对称的，两个方向要一起改：切到交集时补上反向边，切回继承时把反向边删掉、
+   * 只保留当前方向。所以整条路都走 setIntersectionRelation。
+   */
   async setTagInheritanceMode(parentValue, childValue, modeValue) {
     const parent = normalizeTag(parentValue);
     const child = normalizeTag(childValue);
-    const mode = modeValue === "selected" ? "selected" : "all";
+    const mode = modeValue === "intersection" ? "intersection" : "all";
     if (!parent || !child || !this.getInheritanceChildren(parent).includes(child)) throw new Error("\u7EE7\u627F\u5173\u7CFB\u65E0\u6548");
-    if (this.isFixedTagEdge(parent, child)) throw new Error("\u56FA\u5B9A\u5B50\u6807\u7B7E\u4E0D\u80FD\u5207\u6362\u7EE7\u627F\u6A21\u5F0F");
+    if (this.isFixedTagEdge(parent, child)) throw new Error("\u56FA\u5B9A\u5B50\u6807\u7B7E\u4E0D\u80FD\u5207\u6362\u6A21\u5F0F");
+    if (this.getTagInheritanceMode(parent, child) === mode) return;
+    if (mode === "intersection") {
+      await this.setIntersectionRelation(parent, child, true);
+      return;
+    }
     const inheritance = this.getTagInheritanceSettings();
+    const previousChildren = inheritance.childrenByParent;
     const previousModes = inheritance.modeByParentChild;
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
-    const currentMode = this.getTagInheritanceMode(parent, child);
-    if (currentMode === mode) return;
-    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
-    const currentVisible = this.collectVisiblePathsForEdge(parent, child);
-    inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
-    inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
-    if (mode === "selected") {
-      this.setParentChildValue(inheritance.modeByParentChild, parent, child, "selected");
-      const paths = freeCandidates.filter((candidate) => this.isDirectInheritedPath(child, candidate.path) && currentVisible.has(candidate.path)).map((candidate) => candidate.path);
-      const hiddenDeepPaths = freeCandidates.filter((candidate) => !this.isDirectInheritedPath(child, candidate.path) && !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
-      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : void 0);
-      this.setParentChildValue(
-        inheritance.excludedPathsByParentChild,
-        parent,
-        child,
-        hiddenDeepPaths.length ? hiddenDeepPaths : void 0
-      );
-    } else {
-      this.setParentChildValue(inheritance.modeByParentChild, parent, child, void 0);
-      const paths = freeCandidates.filter((candidate) => !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
-      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.length ? paths : void 0);
-      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, void 0);
-    }
-    this.propagateNewlyAllowedPathsToAncestors(
-      parent,
-      Array.from(this.collectVisiblePathsForEdge(parent, child)).filter((path) => !currentVisible.has(path))
+    const previousFixedParents = inheritance.fixedParentByChild;
+    inheritance.childrenByParent = Object.fromEntries(
+      Object.entries(previousChildren).map(([storedParent, children]) => [storedParent, [...children]])
     );
-    this.reconcileInheritancePathLists([parent]);
-    try {
-      await this.saveSettings();
-    } catch (error) {
-      inheritance.modeByParentChild = previousModes;
-      inheritance.includedPathsByParentChild = previousIncluded;
-      inheritance.excludedPathsByParentChild = previousExcluded;
-      throw error;
-    }
-    this.refreshHierarchyViews();
-  }
-  async setIncludedInheritedPaths(parentValue, childValue, pathValues) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    if (!parent || !child || !this.getInheritanceChildren(parent).includes(child)) throw new Error("\u7EE7\u627F\u5173\u7CFB\u65E0\u6548");
-    const inheritance = this.getTagInheritanceSettings();
-    const previousIncluded = inheritance.includedPathsByParentChild;
-    const previousExcluded = inheritance.excludedPathsByParentChild;
-    const allowed = new Set(this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed && this.isDirectInheritedPath(child, candidate.path)).map((candidate) => candidate.path));
-    const paths = Array.from(new Set((pathValues || []).map((path) => typeof path === "string" ? path.trim() : "").filter((path) => path && allowed.has(path))));
-    const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
+    inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
-    this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : void 0);
-    this.propagateNewlyAllowedPathsToAncestors(parent, paths.filter((path) => !previouslyVisible.has(path)));
-    this.reconcileInheritancePathLists([parent]);
+    inheritance.fixedParentByChild = { ...previousFixedParents };
+    inheritance.childrenByParent[child] = (inheritance.childrenByParent[child] || []).filter((tag) => tag !== parent);
+    if (!inheritance.childrenByParent[child].length) delete inheritance.childrenByParent[child];
+    this.setParentChildValue(inheritance.modeByParentChild, parent, child, void 0);
+    this.setParentChildValue(inheritance.modeByParentChild, child, parent, void 0);
+    this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, void 0);
+    this.setParentChildValue(inheritance.excludedPathsByParentChild, child, parent, void 0);
+    this.reconcileIntersectionPairs();
+    this.reconcileInheritancePathLists([parent, child]);
     try {
       await this.saveSettings();
     } catch (error) {
-      inheritance.includedPathsByParentChild = previousIncluded;
+      inheritance.childrenByParent = previousChildren;
+      inheritance.modeByParentChild = previousModes;
       inheritance.excludedPathsByParentChild = previousExcluded;
+      inheritance.fixedParentByChild = previousFixedParents;
       throw error;
     }
     this.refreshHierarchyViews();
   }
   applyInheritedFileVisibilityToEdge(parent, child, path, visible) {
     const inheritance = this.getTagInheritanceSettings();
-    if (this.getTagInheritanceMode(parent, child) === "selected" && this.isDirectInheritedPath(child, path)) {
-      const paths = new Set(this.getIncludedInheritedPaths(parent, child));
-      if (visible) paths.add(path);
-      else paths.delete(path);
-      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.size ? Array.from(paths) : void 0);
-    } else {
-      const paths = new Set(this.getExcludedInheritedPaths(parent, child));
-      if (visible) paths.delete(path);
-      else paths.add(path);
-      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.size ? Array.from(paths) : void 0);
-    }
+    const paths = new Set(this.getExcludedInheritedPaths(parent, child));
+    if (visible) paths.delete(path);
+    else paths.add(path);
+    this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.size ? Array.from(paths) : void 0);
   }
   /**
    * 批量设置一条边上若干笔记的可见性。
    *
    * 勾选面板的「全选/全不选」一次能改几十行，逐条走单篇版本会重复落盘、重复刷视图，
-   * 这里合成一次保存。每条写进白名单还是黑名单由 applyInheritedFileVisibilityToEdge 分流。
+   * 这里合成一次保存；取消勾选写入排除名单，重新勾选则从排除名单移除。
    */
   async setEdgePathsVisible(parentValue, childValue, entries) {
     const parent = normalizeTag(parentValue);
@@ -7382,10 +7140,8 @@ var RelationsBehavior = class {
     const changes = Array.from(entries || []).map((entry) => ({ path: entry && entry.path, visible: !!(entry && entry.visible) })).filter((entry) => entry.path && candidates.has(entry.path) && !candidates.get(entry.path).fixed);
     if (!changes.length) return;
     const inheritance = this.getTagInheritanceSettings();
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
     const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     for (const { path, visible } of changes) this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
     this.propagateNewlyAllowedPathsToAncestors(
@@ -7396,7 +7152,6 @@ var RelationsBehavior = class {
     try {
       await this.saveSettings();
     } catch (error) {
-      inheritance.includedPathsByParentChild = previousIncluded;
       inheritance.excludedPathsByParentChild = previousExcluded;
       throw error;
     }
@@ -7408,22 +7163,19 @@ var RelationsBehavior = class {
   async setInheritedFileVisible(parentValue, path, visible) {
     const parent = normalizeTag(parentValue);
     if (!parent || !path) return;
-    const edges = this.getInheritanceChildren(parent).filter((child) => {
+    const edges = this.getInheritanceOnlyChildren(parent).filter((child) => {
       const candidate = this.getInheritanceCandidates(parent, child).find((item) => item.path === path);
       return candidate && !candidate.fixed;
     });
     if (!edges.length) return;
     const inheritance = this.getTagInheritanceSettings();
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     for (const child of edges) this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
     } catch (error) {
-      inheritance.includedPathsByParentChild = previousIncluded;
       inheritance.excludedPathsByParentChild = previousExcluded;
       throw error;
     }
@@ -7441,7 +7193,10 @@ var RelationsBehavior = class {
   reconcileRelationCycles() {
     const inheritance = this.settings.relations && this.settings.relations.tagInheritance;
     if (!inheritance) return;
-    inheritance.childrenByParent = sanitizeAcyclicAdjacency(inheritance.childrenByParent);
+    inheritance.childrenByParent = sanitizeAcyclicAdjacency(
+      inheritance.childrenByParent,
+      (parent, child) => isIntersectionEdge(inheritance, parent, child)
+    );
     const hierarchy = this.settings.relations.noteHierarchy;
     hierarchy.childrenByParentPath = sanitizeAcyclicAdjacency(hierarchy.childrenByParentPath);
     for (const parentPath of Object.keys(hierarchy.displayNamesByParentPath)) {
@@ -7458,6 +7213,10 @@ var RelationsBehavior = class {
   async setInheritanceChildren(parentValue, childValues) {
     const parent = normalizeTag(parentValue);
     if (!parent || isNestedTag(parent)) throw new Error("\u7236\u6807\u7B7E\u65E0\u6548");
+    const inheritance = this.getTagInheritanceSettings();
+    const previousChildren = inheritance.childrenByParent;
+    const existingChildren = new Set(previousChildren[parent] || []);
+    const existingIntersectionPartners = new Set(getIntersectionPartners(inheritance, parent));
     const children = [];
     const seen = /* @__PURE__ */ new Set();
     for (const rawChild of childValues || []) {
@@ -7467,52 +7226,51 @@ var RelationsBehavior = class {
       if (fixedParent && fixedParent !== parent) {
         throw new Error(`${getTagDisplayName(child)} \u662F\u56FA\u5B9A\u5B50\u6807\u7B7E\uFF0C\u8BF7\u5148\u89E3\u9664\u56FA\u5B9A`);
       }
-      if (this.wouldCreateTagInheritanceCycle(parent, child)) {
+      if (!existingChildren.has(child) && this.areTagsRelated(parent, child)) {
+        throw new Error(`${getTagDisplayName(parent)} \u4E0E ${getTagDisplayName(child)} \u5DF2\u6709\u5173\u8054`);
+      }
+      if (!existingIntersectionPartners.has(child) && this.wouldCreateTagInheritanceCycle(parent, child)) {
         throw new Error(`\u4E0D\u80FD\u5EFA\u7ACB\u5FAA\u73AF\u7EE7\u627F\uFF1A${getTagDisplayName(parent)} \u2192 ${getTagDisplayName(child)}`);
       }
       seen.add(child);
       children.push(child);
     }
-    const inheritance = this.getTagInheritanceSettings();
-    const previousChildren = inheritance.childrenByParent;
-    const previousEnabled = inheritance.enabledParents;
     const previousModes = inheritance.modeByParentChild;
     const previousExclusions = inheritance.excludedPathsByParentChild;
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousFixedParents = inheritance.fixedParentByChild;
-    const wasParent = Array.isArray(previousChildren[parent]) && previousChildren[parent].length > 0;
     const stagedChildren = { ...previousChildren };
     const stagedModes = this.cloneParentChildSettings(previousModes);
     const stagedExclusions = this.cloneParentChildSettings(previousExclusions);
-    const stagedIncluded = this.cloneParentChildSettings(previousIncluded);
-    let stagedEnabled = [...previousEnabled];
     if (children.length > 0) {
       stagedChildren[parent] = children;
-      if (!wasParent && !stagedEnabled.includes(parent)) stagedEnabled.push(parent);
     } else {
       delete stagedChildren[parent];
-      stagedEnabled = stagedEnabled.filter((tag) => tag !== parent);
       delete stagedModes[parent];
       delete stagedExclusions[parent];
-      delete stagedIncluded[parent];
     }
     inheritance.childrenByParent = stagedChildren;
-    inheritance.enabledParents = stagedEnabled;
     inheritance.modeByParentChild = stagedModes;
     inheritance.excludedPathsByParentChild = stagedExclusions;
-    inheritance.includedPathsByParentChild = stagedIncluded;
     inheritance.fixedParentByChild = Object.fromEntries(
       Object.entries(previousFixedParents).filter(([child, fixedParent]) => fixedParent !== parent || children.includes(child))
     );
-    this.reconcileInheritancePathLists([parent]);
+    const removedIntersectionPartners = Array.from(existingIntersectionPartners).filter((partner) => !children.includes(partner));
+    for (const partner of removedIntersectionPartners) {
+      stagedChildren[partner] = (stagedChildren[partner] || []).filter((tag) => tag !== parent);
+      if (!stagedChildren[partner].length) delete stagedChildren[partner];
+      this.setParentChildValue(stagedModes, parent, partner, void 0);
+      this.setParentChildValue(stagedModes, partner, parent, void 0);
+      this.setParentChildValue(stagedExclusions, parent, partner, void 0);
+      this.setParentChildValue(stagedExclusions, partner, parent, void 0);
+    }
+    this.reconcileIntersectionPairs();
+    this.reconcileInheritancePathLists([parent, ...removedIntersectionPartners]);
     try {
       await this.saveSettings();
     } catch (error) {
       inheritance.childrenByParent = previousChildren;
-      inheritance.enabledParents = previousEnabled;
       inheritance.modeByParentChild = previousModes;
       inheritance.excludedPathsByParentChild = previousExclusions;
-      inheritance.includedPathsByParentChild = previousIncluded;
       inheritance.fixedParentByChild = previousFixedParents;
       throw error;
     }
@@ -7529,49 +7287,48 @@ var RelationsBehavior = class {
     }
     const inheritance = this.getTagInheritanceSettings();
     const previousChildren = inheritance.childrenByParent;
-    const previousEnabled = inheritance.enabledParents;
     const previousModes = inheritance.modeByParentChild;
     const previousExclusions = inheritance.excludedPathsByParentChild;
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousFixedParents = inheritance.fixedParentByChild;
+    const currentInheritanceParents = this.getInheritanceParents(child);
     const affectedParents = Array.from(/* @__PURE__ */ new Set([
-      ...Object.entries(previousChildren).filter(([, children]) => children.includes(child)).map(([parent]) => parent),
+      ...currentInheritanceParents,
       ...parents
     ]));
-    const stagedChildren = Object.fromEntries(Object.entries(previousChildren).map(([parent, children]) => [
-      parent,
-      children.filter((tag) => tag !== child)
-    ]).filter(([, children]) => children.length));
+    const stagedChildren = Object.fromEntries(Object.entries(previousChildren).map(([parent, children]) => [parent, [...children]]));
+    for (const parent of currentInheritanceParents) {
+      stagedChildren[parent] = (stagedChildren[parent] || []).filter((tag) => tag !== child);
+      if (!stagedChildren[parent].length) delete stagedChildren[parent];
+    }
+    const stagedInheritanceAdjacency = Object.fromEntries(
+      Object.entries(this.getSortedTagInheritanceAdjacency()).map(([parent, children]) => [parent, children.filter((tag) => tag !== child)]).filter(([, children]) => children.length)
+    );
     for (const parent of parents) {
-      if (wouldCreateDirectedCycle(stagedChildren, parent, child)) {
+      if (!currentInheritanceParents.includes(parent) && this.areTagsRelated(parent, child)) {
+        throw new Error(`${getTagDisplayName(parent)} \u4E0E ${getTagDisplayName(child)} \u5DF2\u6709\u5173\u8054`);
+      }
+      if (wouldCreateDirectedCycle(stagedInheritanceAdjacency, parent, child)) {
         throw new Error(`\u4E0D\u80FD\u5EFA\u7ACB\u5FAA\u73AF\u7EE7\u627F\uFF1A${getTagDisplayName(parent)} \u2192 ${getTagDisplayName(child)}`);
       }
       stagedChildren[parent] = this.sortTagsByVisibleCount([...stagedChildren[parent] || [], child]);
+      stagedInheritanceAdjacency[parent] = [
+        ...(stagedInheritanceAdjacency[parent] || []).filter((tag) => tag !== child),
+        child
+      ];
     }
     inheritance.childrenByParent = stagedChildren;
-    const validParents = new Set(Object.keys(stagedChildren));
-    const newlyPromotedParents = parents.filter((parent) => {
-      var _a;
-      return !((_a = previousChildren[parent]) == null ? void 0 : _a.length);
-    });
-    inheritance.enabledParents = Array.from(/* @__PURE__ */ new Set([
-      ...previousEnabled.filter((tag) => validParents.has(tag)),
-      ...newlyPromotedParents
-    ]));
     inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExclusions);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.fixedParentByChild = { ...previousFixedParents };
     if (parents.length === 0) delete inheritance.fixedParentByChild[child];
+    this.reconcileIntersectionPairs();
     this.reconcileInheritancePathLists(affectedParents);
     try {
       await this.saveSettings();
     } catch (error) {
       inheritance.childrenByParent = previousChildren;
-      inheritance.enabledParents = previousEnabled;
       inheritance.modeByParentChild = previousModes;
       inheritance.excludedPathsByParentChild = previousExclusions;
-      inheritance.includedPathsByParentChild = previousIncluded;
       inheritance.fixedParentByChild = previousFixedParents;
       throw error;
     }
@@ -7588,7 +7345,6 @@ var RelationsBehavior = class {
     const previousFixedParents = inheritance.fixedParentByChild;
     const previousModes = inheritance.modeByParentChild;
     const previousExclusions = inheritance.excludedPathsByParentChild;
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousPinnedTag = this.settings.pinnedTag;
     const nextFixedParents = { ...previousFixedParents };
     if (fixed) nextFixedParents[child] = parent;
@@ -7596,11 +7352,9 @@ var RelationsBehavior = class {
     inheritance.fixedParentByChild = nextFixedParents;
     inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExclusions);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     if (fixed) {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, void 0);
       this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, void 0);
-      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, void 0);
     }
     this.reconcileInheritancePathLists([parent]);
     if (fixed && this.settings.pinnedTag === child) this.settings.pinnedTag = null;
@@ -7610,7 +7364,6 @@ var RelationsBehavior = class {
       inheritance.fixedParentByChild = previousFixedParents;
       inheritance.modeByParentChild = previousModes;
       inheritance.excludedPathsByParentChild = previousExclusions;
-      inheritance.includedPathsByParentChild = previousIncluded;
       this.settings.pinnedTag = previousPinnedTag;
       throw error;
     }
@@ -7623,14 +7376,6 @@ var RelationsBehavior = class {
     const children = this.getInheritanceChildren(parent);
     if (!children.includes(child)) children.push(child);
     await this.setInheritanceChildren(parent, children);
-  }
-  async toggleTagInheritance(tagValue) {
-    const tag = normalizeTag(tagValue);
-    if (!tag || !this.hasInheritanceChildren(tag)) return;
-    const inheritance = this.getTagInheritanceSettings();
-    inheritance.enabledParents = inheritance.enabledParents.includes(tag) ? inheritance.enabledParents.filter((item) => item !== tag) : [...inheritance.enabledParents, tag];
-    await this.saveSettings();
-    this.refreshAllTagViews();
   }
   /**
    * 标签浏览数据。计算涉及继承分支遍历与继承树构建，开销不小，而一次渲染中
@@ -7673,18 +7418,20 @@ var RelationsBehavior = class {
       var _a2, _b;
       return ((_b = (_a2 = this.app) == null ? void 0 : _a2.vault) == null ? void 0 : _b.getAbstractFileByPath(path)) || (indexedFilesByPath == null ? void 0 : indexedFilesByPath.get(path));
     }).filter((file) => file instanceof import_obsidian15.TFile && file.extension === "md");
-    const hasActiveInheritance = !!(adjacency[tag] || []).length;
+    const intersectionGroups = this.getIntersectionGroups(tag);
+    const hasActiveInheritance = !!(adjacency[tag] || []).length || intersectionGroups.length > 0;
     const inheritanceTree = hasActiveInheritance ? buildTagInheritanceGroupTree(
       tag,
       adjacency,
       orderedPathsByTag,
       [],
       fixedTags,
-      null,
       (_sourceTag, path, lineage) => this.isInheritancePathVisible(
         this.createInheritanceEdgesFromLineage(lineage),
         path
-      )
+      ),
+      intersectionGroups,
+      this.getInheritanceChildren(tag)
     ) : null;
     return {
       tag,
@@ -7695,10 +7442,12 @@ var RelationsBehavior = class {
       inheritanceTree,
       exactCount: exactFiles.length,
       inheritedCount: inheritedFiles.length,
-      inheritanceEnabled: this.isTagInheritanceEnabled(tag),
       hasInheritance: this.hasInheritanceChildren(tag),
-      hasFreeInheritance: this.hasFreeInheritanceBranch(tag),
       hasActiveInheritance,
+      intersectionGroups,
+      // 交集组的内容取决于**对方标签**的笔记集合，而那不会改变本标签的 files 或计数。
+      // 不进签名的话，「某篇笔记新加了对方标签」时旧 DOM 会被原样复用、交集组显示陈旧内容。
+      intersectionSignature: intersectionGroups.map((group) => `${group.tag}:${group.paths.join("\n")}`).join(""),
       fixedTags,
       fixedPaths
     };
@@ -7734,7 +7483,7 @@ var RelationsBehavior = class {
     const inheritance = this.getTagInheritanceSettings();
     const oldChildren = inheritance.childrenByParent[oldTag] || [];
     const newChildren = inheritance.childrenByParent[newTag] || [];
-    const participatesInInheritance = !!(oldChildren.length || Object.values(inheritance.childrenByParent).some((children) => children.includes(oldTag)) || inheritance.enabledParents.includes(oldTag) || inheritance.excludedPathsByParentChild[oldTag] || inheritance.modeByParentChild[oldTag] || inheritance.includedPathsByParentChild[oldTag] || [inheritance.excludedPathsByParentChild, inheritance.modeByParentChild, inheritance.includedPathsByParentChild].some((parents) => Object.values(parents).some((children) => Object.prototype.hasOwnProperty.call(children, oldTag))) || inheritance.fixedParentByChild[oldTag] || Object.values(inheritance.fixedParentByChild).includes(oldTag));
+    const participatesInInheritance = !!(oldChildren.length || Object.values(inheritance.childrenByParent).some((children) => children.includes(oldTag)) || inheritance.excludedPathsByParentChild[oldTag] || inheritance.modeByParentChild[oldTag] || [inheritance.excludedPathsByParentChild, inheritance.modeByParentChild].some((parents) => Object.values(parents).some((children) => Object.prototype.hasOwnProperty.call(children, oldTag))) || inheritance.fixedParentByChild[oldTag] || Object.values(inheritance.fixedParentByChild).includes(oldTag));
     if (oldChildren.length || newChildren.length) {
       inheritance.childrenByParent[newTag] = Array.from(/* @__PURE__ */ new Set([...oldChildren, ...newChildren])).filter((child) => child !== newTag);
     }
@@ -7742,9 +7491,7 @@ var RelationsBehavior = class {
     for (const [parent, children] of Object.entries(inheritance.childrenByParent)) {
       inheritance.childrenByParent[parent] = Array.from(new Set(children.map((child) => child === oldTag ? newTag : child))).filter((child) => child !== parent);
     }
-    if (inheritance.enabledParents.includes(oldTag)) inheritance.enabledParents.push(newTag);
-    inheritance.enabledParents = Array.from(new Set(inheritance.enabledParents.filter((tag) => tag !== oldTag)));
-    for (const key of ["modeByParentChild", "excludedPathsByParentChild", "includedPathsByParentChild"]) {
+    for (const key of ["modeByParentChild", "excludedPathsByParentChild"]) {
       const migrated = {};
       for (const [storedParent, children] of Object.entries(inheritance[key] || {})) {
         const parent = storedParent === oldTag ? newTag : storedParent;
@@ -7752,7 +7499,7 @@ var RelationsBehavior = class {
           const child = storedChild === oldTag ? newTag : storedChild;
           if (parent === child) continue;
           const existing = (_a = migrated[parent]) == null ? void 0 : _a[child];
-          const merged = Array.isArray(value) ? Array.from(/* @__PURE__ */ new Set([...Array.isArray(existing) ? existing : [], ...value])) : existing === "selected" || value === "selected" ? "selected" : value;
+          const merged = Array.isArray(value) ? Array.from(/* @__PURE__ */ new Set([...Array.isArray(existing) ? existing : [], ...value])) : existing === "intersection" || value === "intersection" ? "intersection" : value;
           this.setParentChildValue(migrated, parent, child, merged);
         }
       }
@@ -7765,6 +7512,7 @@ var RelationsBehavior = class {
       migratedFixedParents[migratedChild] = migratedParent;
     }
     inheritance.fixedParentByChild = migratedFixedParents;
+    this.reconcileIntersectionPairs();
     this.reconcileRelationCycles();
     this.migrateInlineTagBranchState(oldTag, newTag);
     if (participatesInInheritance) {
@@ -7776,7 +7524,7 @@ var RelationsBehavior = class {
     if (!(file instanceof import_obsidian15.TFile) || file.extension !== "md" || !oldPath || !file.path) return;
     const inheritance = this.getTagInheritanceSettings();
     let changed = false;
-    for (const key of ["excludedPathsByParentChild", "includedPathsByParentChild"]) {
+    for (const key of ["excludedPathsByParentChild"]) {
       for (const children of Object.values(inheritance[key])) {
         for (const [child, paths] of Object.entries(children)) {
           if (!paths.includes(oldPath)) continue;
@@ -7819,7 +7567,7 @@ var RelationsBehavior = class {
     if (!(file instanceof import_obsidian15.TFile) || file.extension !== "md" || !file.path) return;
     const inheritance = this.getTagInheritanceSettings();
     let changed = false;
-    for (const key of ["excludedPathsByParentChild", "includedPathsByParentChild"]) {
+    for (const key of ["excludedPathsByParentChild"]) {
       for (const [parent, children] of Object.entries(inheritance[key])) {
         for (const [child, paths] of Object.entries(children)) {
           const nextPaths = paths.filter((path) => path !== file.path);
@@ -7942,10 +7690,6 @@ var PuffsTagEnhancePlugin = class extends import_obsidian16.Plugin {
     this.inlineHierarchyExpansionVersion = 0;
     this.relationStructureVersion = 0;
     this.selectedNoteOrderTarget = null;
-    this.activeTagOrderParent = null;
-    this.activeTagOrderSurface = "";
-    this.selectedTagOrderTarget = null;
-    this.tagOrderModeVisibilityTimer = null;
     this.noteOrderHotkeyScope = null;
     this.lastMainLeaf = null;
     this.currentMainFilePath = null;
@@ -7995,10 +7739,6 @@ var PuffsTagEnhancePlugin = class extends import_obsidian16.Plugin {
     this.metadataRefreshScheduler.cancel();
     this.tagBrowseCache.invalidate();
     this.deactivateNoteOrderHotkeyScope();
-    if (this.tagOrderModeVisibilityTimer) {
-      globalThis.clearTimeout(this.tagOrderModeVisibilityTimer);
-      this.tagOrderModeVisibilityTimer = null;
-    }
     this.clearBackupTimer();
     this.clearInitialTagIndexRefreshTimers();
     this.clearTagRenameProtectionTimer();

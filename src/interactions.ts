@@ -93,7 +93,7 @@ export class InteractionsBehavior {
       this.settings.noteDisplayNameByTag[tag][file.path];
     return selected && this.getNoteAliases(file).includes(selected) ? selected : file.basename;
   }
-
+
 
   async setNoteDisplayName(tagValue: any, file: any, displayName: any) {
     const tag = normalizeTag(tagValue);
@@ -129,8 +129,8 @@ export class InteractionsBehavior {
     await this.saveSettings();
     this.refreshAllTagViews();
   }
-
-
+
+
 
   resolvePinnedSearchQuery(value: any) {
     const query = String(value || '').trimStart();
@@ -154,7 +154,6 @@ export class InteractionsBehavior {
       files,
       exactCount: browseData.exactCount,
       inheritedCount: browseData.inheritedCount,
-      inheritanceEnabled: browseData.inheritanceEnabled,
       hasInheritance: browseData.hasInheritance,
     };
   }
@@ -215,7 +214,6 @@ export class InteractionsBehavior {
         files: browseData.files,
         exactCount: browseData.exactCount,
         inheritedCount: browseData.inheritedCount,
-        inheritanceEnabled: browseData.inheritanceEnabled,
         hasInheritance: browseData.hasInheritance,
         sourcesByPath: browseData.sourcesByPath,
       };
@@ -248,7 +246,6 @@ export class InteractionsBehavior {
         files: browseData.files,
         exactCount: browseData.exactCount,
         inheritedCount: browseData.inheritedCount,
-        inheritanceEnabled: browseData.inheritanceEnabled,
         hasInheritance: browseData.hasInheritance,
         sourcesByPath: browseData.sourcesByPath,
       }))
@@ -402,9 +399,9 @@ export class InteractionsBehavior {
     state.lastScrolledKey = '';
     state.pendingScrollKey = '';
   }
-
-
-
+
+
+
 
   isNoteOrderTargetSelected(tag: any, path: any, hierarchyParent = '') {
     return !!(
@@ -415,37 +412,14 @@ export class InteractionsBehavior {
       this.selectedNoteOrderTarget.path === path
     );
   }
-
 
-  isTagOrderTargetSelected(parentTagValue: any, tagValue: any) {
-    const parentTag = normalizeTag(parentTagValue);
-    const tag = normalizeTag(tagValue);
-    return !!(
-      this.selectedTagOrderTarget &&
-      this.selectedTagOrderTarget.parentTag === parentTag &&
-      this.selectedTagOrderTarget.tag === tag
-    );
-  }
-
-  isTagOrderModeActive(parentTagValue: any) {
-    const parentTag = normalizeTag(parentTagValue);
-    return !!parentTag && this.activeTagOrderParent === parentTag;
-  }
-
-
-
-
-
-
-
 
   refreshOrderSelectionState() {
     this.refreshNoteOrderSelectionState();
-    this.refreshTagOrderSelectionState();
   }
 
   activateNoteOrderHotkeyScope() {
-    if (this.noteOrderHotkeyScope || (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget)) return;
+    if (this.noteOrderHotkeyScope || !this.selectedNoteOrderTarget) return;
 
     const scope = new Scope();
     const registerMoveHotkey = (settingValue: any, fallback: any, direction: any) => {
@@ -453,7 +427,7 @@ export class InteractionsBehavior {
       scope.register(hotkey.modifiers as any, hotkey.key, (evt) => {
         evt.preventDefault();
         evt.stopPropagation();
-        this.moveSelectedOrderTarget(direction).catch((error) => {
+        this.moveSelectedNote(direction).catch((error) => {
           console.error('[Puffs Tag Enhance] Failed to move selected item:', error);
           new Notice('调整顺序失败');
         });
@@ -482,7 +456,7 @@ export class InteractionsBehavior {
   }
 
   refreshNoteOrderHotkeyScope() {
-    const shouldReactivate = !!(this.selectedNoteOrderTarget || this.selectedTagOrderTarget);
+    const shouldReactivate = !!this.selectedNoteOrderTarget;
     this.deactivateNoteOrderHotkeyScope();
     if (shouldReactivate) this.activateNoteOrderHotkeyScope();
   }
@@ -495,8 +469,7 @@ export class InteractionsBehavior {
       this.selectedNoteOrderTarget = null;
       this.deactivateNoteOrderHotkeyScope();
     } else {
-      this.exitTagOrderMode(false);
-      this.selectedNoteOrderTarget = { tag, path, surface };
+      this.selectedNoteOrderTarget ={ tag, path, surface };
       this.refreshNoteOrderHotkeyScope();
     }
     this.refreshOrderSelectionState();
@@ -508,50 +481,10 @@ export class InteractionsBehavior {
       this.selectedNoteOrderTarget = null;
       this.deactivateNoteOrderHotkeyScope();
     } else {
-      this.exitTagOrderMode(false);
-      this.selectedNoteOrderTarget = { hierarchyParent: parentPath, path, surface };
+      this.selectedNoteOrderTarget ={ hierarchyParent: parentPath, path, surface };
       this.refreshNoteOrderHotkeyScope();
     }
     this.refreshOrderSelectionState();
-  }
-
-  toggleTagOrderTarget(parentTagValue: any, tagValue: any, surface = '') {
-    const parentTag = normalizeTag(parentTagValue);
-    const tag = normalizeTag(tagValue);
-    if (!parentTag || !tag || !this.isTagOrderModeActive(parentTag)) return;
-    if (this.isTagOrderTargetSelected(parentTag, tag)) {
-      this.selectedTagOrderTarget = null;
-      this.deactivateNoteOrderHotkeyScope();
-    } else {
-      this.selectedNoteOrderTarget = null;
-      this.selectedTagOrderTarget = { parentTag, tag, surface };
-      this.refreshNoteOrderHotkeyScope();
-    }
-    this.refreshOrderSelectionState();
-  }
-
-  toggleTagOrderMode(parentTagValue: any, surface = '') {
-    const parentTag = normalizeTag(parentTagValue);
-    if (!parentTag || !this.hasInheritanceChildren(parentTag)) return;
-    if (this.isTagOrderModeActive(parentTag)) {
-      this.exitTagOrderMode();
-      return;
-    }
-    this.selectedNoteOrderTarget = null;
-    this.selectedTagOrderTarget = null;
-    this.activeTagOrderParent = parentTag;
-    this.activeTagOrderSurface = surface;
-    this.deactivateNoteOrderHotkeyScope();
-    this.refreshOrderSelectionState();
-  }
-
-  exitTagOrderMode(refresh = true) {
-    if (!this.activeTagOrderParent && !this.selectedTagOrderTarget) return;
-    this.activeTagOrderParent = null;
-    this.activeTagOrderSurface = '';
-    this.selectedTagOrderTarget = null;
-    this.deactivateNoteOrderHotkeyScope();
-    if (refresh) this.refreshOrderSelectionState();
   }
 
   clearNoteOrderTarget() {
@@ -561,81 +494,11 @@ export class InteractionsBehavior {
     this.refreshOrderSelectionState();
   }
 
-  clearTagOrderTarget() {
-    if (!this.selectedTagOrderTarget) return;
-    this.selectedTagOrderTarget = null;
-    this.deactivateNoteOrderHotkeyScope();
-    this.refreshOrderSelectionState();
-  }
-
   clearOrderTarget() {
-    if (!this.selectedNoteOrderTarget && !this.selectedTagOrderTarget) return;
-    if (this.selectedNoteOrderTarget) {
-      this.selectedNoteOrderTarget = null;
-      this.deactivateNoteOrderHotkeyScope();
-      this.refreshOrderSelectionState();
-      return;
-    }
-    this.clearTagOrderTarget();
+    this.clearNoteOrderTarget();
   }
 
-  async moveSelectedOrderTarget(direction: any) {
-    if (this.selectedTagOrderTarget) return this.moveSelectedTag(direction);
-    return this.moveSelectedNote(direction);
-  }
-
-
-
-  async moveSelectedTag(direction: any) {
-    const target = this.selectedTagOrderTarget;
-    if (!target || (direction !== -1 && direction !== 1)) return false;
-    const children = this.getInheritanceChildren(target.parentTag);
-    const currentIndex = children.indexOf(target.tag);
-    if (currentIndex < 0) {
-      this.clearTagOrderTarget();
-      return false;
-    }
-    const nextIndex = currentIndex + direction;
-    if (nextIndex < 0 || nextIndex >= children.length) return false;
-    await this.reorderChildTag(
-      target.parentTag,
-      target.tag,
-      children[nextIndex],
-      direction < 0 ? 'before' : 'after'
-    );
-    globalThis.setTimeout(() => {
-      this.refreshTagOrderSelectionState();
-      this.focusSelectedTagOrderButton();
-    }, 0);
-    return true;
-  }
-
-  async moveSelectedTagAfter(parentTagValue: any, targetTagValue: any) {
-    const selected = this.selectedTagOrderTarget;
-    const parentTag = normalizeTag(parentTagValue);
-    const targetTag = normalizeTag(targetTagValue);
-    if (
-      !selected ||
-      !parentTag ||
-      selected.parentTag !== parentTag ||
-      !targetTag ||
-      selected.tag === targetTag
-    ) {
-      return false;
-    }
-    const children = this.getInheritanceChildren(parentTag);
-    const movingIndex = children.indexOf(selected.tag);
-    const targetIndex = children.indexOf(targetTag);
-    if (movingIndex < 0) {
-      this.clearTagOrderTarget();
-      return false;
-    }
-    if (targetIndex < 0 || movingIndex === targetIndex + 1) return false;
-    await this.reorderChildTag(parentTag, selected.tag, targetTag, 'after');
-    globalThis.setTimeout(() => this.refreshTagOrderSelectionState(), 0);
-    return true;
-  }
-
+  /** 子标签排序的写回口。交互入口在管理子标签弹窗内，这里只负责改数组并落盘。 */
   async reorderChildTag(parentTagValue: any, movingTagValue: any, targetTagValue: any, placement: any) {
     const parentTag = normalizeTag(parentTagValue);
     const movingTag = normalizeTag(movingTagValue);

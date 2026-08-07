@@ -9,7 +9,6 @@ import {
   getNoteRelationSubmitError,
   getTagRelationCandidates,
   filterInheritanceCandidates,
-  groupExcludedPathsBySource,
   groupInheritanceCandidates,
 } from "./relation-modals";
 
@@ -84,32 +83,7 @@ describe('标签关系候选', () => {
   });
 });
 
-describe('已排除继承笔记分组', () => {
-  it('按来源顺序分组，并让多来源笔记在各组重复出现', () => {
-    const sources = new Map([
-      ['共享.md', ['#子二', '#子一']],
-      ['子一.md', ['#子一']],
-      ['未知.md', []],
-    ]);
-    expect(groupExcludedPathsBySource(
-      ['共享.md', '子一.md', '未知.md'],
-      sources,
-      ['#子一', '#子二']
-    )).toEqual([
-      { source: '#子一', paths: ['共享.md', '子一.md'] },
-      { source: '#子二', paths: ['共享.md'] },
-      { source: null, paths: ['未知.md'] },
-    ]);
-  });
-
-  it('去重路径并在已知顺序后追加新发现来源', () => {
-    const sources = new Map([['笔记.md', ['#未排序来源']]]);
-    expect(groupExcludedPathsBySource(['笔记.md', '笔记.md'], sources, ['#空来源']))
-      .toEqual([{ source: '#未排序来源', paths: ['笔记.md'] }]);
-  });
-});
-
-describe('选择继承候选', () => {
+describe('继承候选分组', () => {
   it('按首次来源分组且多来源笔记只出现一次', () => {
     const shared = new (TFile as any)('共享.md');
     const groups = groupInheritanceCandidates([
@@ -146,7 +120,7 @@ describe('管理子标签立即保存', () => {
     modal.inputEl = null;
     modal.childrenListEl = null;
     modal.renderChildren = vi.fn();
-    modal.renderExclusionGroups = vi.fn();
+    modal.renderInheritanceSelection = vi.fn();
     modal.picker = { render: vi.fn() };
     modal.plugin = {
       sortTagsByVisibleCount: (tags: string[]) => [...tags].sort(),
@@ -163,7 +137,8 @@ describe('管理子标签立即保存', () => {
     expect(modal.plugin.setInheritanceChildren).toHaveBeenCalledWith('#父', ['#旧', '#新']);
     expect(modal.children).toEqual(['#旧', '#新']);
     expect(modal.renderChildren).toHaveBeenCalled();
-    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
+    // 常驻勾选面板要跟着刷新，新增的子标签才会出现在候选里
+    expect(modal.renderInheritanceSelection).toHaveBeenCalledOnce();
     expect(modal.close).not.toHaveBeenCalled();
     expect(modal.isSubmitting).toBe(false);
   });
@@ -175,7 +150,7 @@ describe('管理子标签立即保存', () => {
     await modal.removeChild('#旧');
     expect(modal.plugin.setInheritanceChildren).toHaveBeenCalledWith('#父', ['#新']);
     expect(modal.children).toEqual(['#新']);
-    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
+    expect(modal.renderInheritanceSelection).toHaveBeenCalledOnce();
     expect(modal.close).not.toHaveBeenCalled();
     expect(modal.isSubmitting).toBe(false);
   });
@@ -204,31 +179,29 @@ describe('管理子标签立即保存', () => {
 
     expect(modal.children).toEqual(['#旧']);
     expect(modal.renderChildren).not.toHaveBeenCalled();
-    expect(modal.renderExclusionGroups).not.toHaveBeenCalled();
+    expect(modal.renderInheritanceSelection).not.toHaveBeenCalled();
     expect(modal.isSubmitting).toBe(false);
     expect((Notice as any).messages).toEqual(['保存失败']);
   });
 });
 
-describe('选择继承弹窗操作', () => {
+describe('继承笔记弹窗操作', () => {
   it('点击子标签行只切换下半部当前关系', () => {
     const modal = Object.create(TagInheritanceModal.prototype) as any;
     modal.relationMode = 'children';
     modal.children = ['#子一', '#子二'];
     modal.activeChild = '#子一';
     modal.renderChildren = vi.fn();
-    modal.renderExclusionGroups = vi.fn();
     modal.renderInheritanceSelection = vi.fn();
 
     modal.selectActiveChild('#子二');
 
     expect(modal.activeChild).toBe('#子二');
     expect(modal.renderChildren).toHaveBeenCalledOnce();
-    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
     expect(modal.renderInheritanceSelection).toHaveBeenCalledOnce();
   });
 
-  it('模式切换立即保存并刷新两个名单区', async () => {
+  it('模式切换立即保存并刷新关系行与继承笔记区', async () => {
     const modal = Object.create(TagInheritanceModal.prototype) as any;
     let mode = 'all';
     modal.parentTag = '#父';
@@ -236,7 +209,6 @@ describe('选择继承弹窗操作', () => {
     modal.isSubmitting = false;
     modal.syncMutationState = vi.fn();
     modal.renderChildren = vi.fn();
-    modal.renderExclusionGroups = vi.fn();
     modal.renderInheritanceSelection = vi.fn();
     modal.plugin = {
       getTagInheritanceMode: vi.fn(() => mode),
@@ -244,11 +216,10 @@ describe('选择继承弹窗操作', () => {
       setTagInheritanceMode: vi.fn(async (_parent, _child, nextMode) => { mode = nextMode; }),
     };
 
-    await modal.changeInheritanceMode('#子', 'selected');
+    await modal.changeInheritanceMode('#子', 'intersection');
 
-    expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#父', '#子', 'selected');
+    expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#父', '#子', 'intersection');
     expect(modal.renderChildren).toHaveBeenCalledOnce();
-    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
     expect(modal.renderInheritanceSelection).toHaveBeenCalledOnce();
     expect(modal.isSubmitting).toBe(false);
   });
@@ -265,7 +236,7 @@ describe('选择继承弹窗操作', () => {
     ]);
     modal.persistInheritanceSelection = vi.fn(async () => true);
 
-    // 只提交筛选结果里的自由路径，未被筛出的行原样不动（不再整份重写白名单）
+    // 只提交筛选结果里的自由路径，未被筛出的行原样不动
     await modal.applyInheritanceSelectionBatch(true);
     expect(modal.persistInheritanceSelection).toHaveBeenCalledWith([{ path: '筛选.md', visible: true }]);
 
@@ -274,7 +245,7 @@ describe('选择继承弹窗操作', () => {
   });
 });
 
-describe('父标签弹窗的选择继承', () => {
+describe('父标签弹窗的继承笔记', () => {
   function createParentsModal() {
     const modal = Object.create(ManageParentTagModal.prototype) as any;
     modal.parentTag = '#亲昵';
@@ -284,7 +255,6 @@ describe('父标签弹窗的选择继承', () => {
     modal.isSubmitting = false;
     modal.syncMutationState = vi.fn();
     modal.renderChildren = vi.fn();
-    modal.renderExclusionGroups = vi.fn();
     modal.renderInheritanceSelection = vi.fn();
     return modal;
   }
@@ -309,12 +279,14 @@ describe('父标签弹窗的选择继承', () => {
       setTagInheritanceMode: vi.fn(async () => undefined),
     };
 
-    await modal.changeInheritanceMode('#爱情', 'selected');
+    await modal.changeInheritanceMode('#爱情', 'intersection');
 
-    expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#爱情', '#亲昵', 'selected');
+    expect(modal.plugin.setTagInheritanceMode).toHaveBeenCalledWith('#爱情', '#亲昵', 'intersection');
+    expect(modal.children).toEqual([]);
+    expect(modal.activeChild).toBeNull();
   });
 
-  it('勾选继承笔记按 父→子 方向写入，落白名单还是黑名单交给存储层分流', async () => {
+  it('勾选继承笔记按 父→子 方向写入排除名单规则', async () => {
     const modal = createParentsModal();
     modal.plugin = { setEdgePathsVisible: vi.fn(async () => undefined) };
 
@@ -335,7 +307,6 @@ describe('管理父标签立即保存', () => {
     modal.inputEl = null;
     modal.childrenListEl = null;
     modal.renderChildren = vi.fn();
-    modal.renderExclusionGroups = vi.fn();
     modal.picker = { render: vi.fn() };
     modal.plugin = {
       sortTagsByVisibleCount: (tags: string[]) => [...tags].sort(),
@@ -377,7 +348,6 @@ describe('固定子标签按钮', () => {
     modal.isSubmitting = false;
     modal.childrenListEl = null;
     modal.renderChildren = vi.fn();
-    modal.renderExclusionGroups = vi.fn();
     modal.picker = { render: vi.fn() };
     modal.syncMutationState = vi.fn();
     modal.plugin = {
@@ -390,7 +360,6 @@ describe('固定子标签按钮', () => {
 
     expect(modal.plugin.setFixedTagRelation).toHaveBeenCalledWith('#秘境', '#秘境-开始', true);
     expect(modal.renderChildren).toHaveBeenCalledOnce();
-    expect(modal.renderExclusionGroups).toHaveBeenCalledOnce();
     expect(modal.picker.render).toHaveBeenCalledOnce();
     expect(modal.isSubmitting).toBe(false);
   });

@@ -210,9 +210,7 @@ describe('标签行签名', () => {
     files: [{ path: 'a.md' }, { path: 'b.md' }],
     exactCount: 2,
     inheritedCount: 0,
-    inheritanceEnabled: false,
     hasInheritance: false,
-    hasFreeInheritance: false,
     hasActiveInheritance: false,
     fixedSearchTags: [],
   };
@@ -233,8 +231,7 @@ describe('标签行签名', () => {
     ['笔记数量', { files: [{ path: 'a.md' }] }, {}],
     ['精确计数', { exactCount: 3 }, {}],
     ['继承计数', { inheritedCount: 5 }, {}],
-    ['继承开关', { inheritanceEnabled: true }, {}],
-    ['自由继承分支', { hasFreeInheritance: true }, {}],
+    ['生效的继承分支', { hasActiveInheritance: true }, {}],
     ['固定子标签命中', { fixedSearchTags: ['#升温'] }, {}],
     ['虚拟标签标记', { isVirtual: true }, {}],
   ])('%s 变化会改变签名', (_label, itemPatch, contextPatch) => {

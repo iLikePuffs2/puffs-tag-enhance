@@ -6,15 +6,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   type TagInheritance,
+  areTagsRelated,
   cloneParentChildSettings,
   createInheritanceEdgesFromLineage,
   getExcludedInheritedPaths,
   getFixedChildDisplayName,
   getFixedParent,
-  getFixedTagInheritanceAdjacency,
   getInheritanceChildren,
+  getInheritanceOnlyChildren,
   getInheritanceParents,
-  getIncludedInheritedPaths,
+  getIntersectionPartners,
+  getRelativeChildDisplayName,
   getSortedTagInheritanceAdjacency,
   getTagDescendants,
   getTagInheritanceMode,
@@ -25,7 +27,7 @@ import {
   isFixedTagRelationEligible,
   isInheritanceEdgePathVisible,
   isInheritancePathVisible,
-  isTagInheritanceEnabled,
+  isIntersectionEdge,
   parseFixedChildTag,
   setParentChildValue,
   wouldCreateTagInheritanceCycle,
@@ -34,14 +36,34 @@ import {
 function makeInheritance(overrides: Partial<TagInheritance> = {}): TagInheritance {
   return {
     childrenByParent: {},
-    enabledParents: [],
     excludedPathsByParentChild: {},
     modeByParentChild: {},
-    includedPathsByParentChild: {},
     fixedParentByChild: {},
     ...overrides,
   };
 }
+
+describe('子标签的相对显示名', () => {
+  it('名字符合「父标签-子名称」时只显示后缀', () => {
+    expect(getRelativeChildDisplayName('#爱情', '#爱情-追求')).toBe('追求');
+  });
+
+  it('不看是否锁定为固定子标签，只看名字格式', () => {
+    // 这里没有任何 fixedParentByChild 数据，简称照样成立
+    expect(getRelativeChildDisplayName('#爱情', '#爱情-升温')).toBe('升温');
+  });
+
+  it('父标签对不上时显示完整名', () => {
+    expect(getRelativeChildDisplayName('#亲昵', '#爱情-追求')).toBe('爱情-追求');
+  });
+
+  it.each(['#读书', '#爱情-追求-额外', '#爱情/追求', '#-追求', '#爱情-'])(
+    '不符合格式时显示完整名：%s',
+    (child) => {
+      expect(getRelativeChildDisplayName('#爱情', child)).toBe(child.replace(/^#/, ''));
+    }
+  );
+});
 
 describe('固定子标签的命名规则', () => {
   it('恰好一个连字符、两侧非空才成立', () => {
@@ -101,7 +123,6 @@ describe('固定子标签的命名规则', () => {
 describe('关系查询', () => {
   const inh = makeInheritance({
     childrenByParent: { '#爱情': ['#初识', '#升温'], '#百艺': ['#炼丹'] },
-    enabledParents: ['#爱情'],
   });
 
   it('取直接子标签，保持持久化的排序', () => {
@@ -127,22 +148,18 @@ describe('关系查询', () => {
     expect(hasInheritanceChildren(inh, '#初识')).toBe(false);
   });
 
-  it('继承开关按父标签持久化', () => {
-    expect(isTagInheritanceEnabled(inh, '#爱情')).toBe(true);
-    expect(isTagInheritanceEnabled(inh, '#百艺')).toBe(false);
-  });
-
   it('邻接表跳过没有子标签的条目', () => {
     const withEmpty = makeInheritance({ childrenByParent: { '#爱情': ['#升温'], '#空': [] } });
     expect(getSortedTagInheritanceAdjacency(withEmpty)).toEqual({ '#爱情': ['#升温'] });
   });
 
-  it('固定邻接表只保留固定边', () => {
+  it('邻接表对固定边与自由边一视同仁', () => {
+    // 继承开关移除后不再有「只走固定边」的退化状态
     const mixed = makeInheritance({
       childrenByParent: { '#爱情': ['#爱情-升温', '#初识'] },
       fixedParentByChild: { '#爱情-升温': '#爱情' },
     });
-    expect(getFixedTagInheritanceAdjacency(mixed)).toEqual({ '#爱情': ['#爱情-升温'] });
+    expect(getSortedTagInheritanceAdjacency(mixed)).toEqual({ '#爱情': ['#爱情-升温', '#初识'] });
   });
 
   it('递归取全部后代', () => {
@@ -161,67 +178,52 @@ describe('关系查询', () => {
 });
 
 describe('继承模式与名单', () => {
-  it('缺省是全部继承', () => {
+  it('缺省是继承', () => {
     expect(getTagInheritanceMode(makeInheritance(), '#父', '#子')).toBe('all');
   });
 
-  it('显式标记为选择继承', () => {
-    const inh = makeInheritance({ modeByParentChild: { '#父': { '#子': 'selected' } } });
-    expect(getTagInheritanceMode(inh, '#父', '#子')).toBe('selected');
+  it('显式标记为交集', () => {
+    const inh = makeInheritance({ modeByParentChild: { '#父': { '#子': 'intersection' } } });
+    expect(getTagInheritanceMode(inh, '#父', '#子')).toBe('intersection');
   });
 
   it('名单取副本', () => {
     const inh = makeInheritance({
-      includedPathsByParentChild: { '#父': { '#子': ['a.md'] } },
       excludedPathsByParentChild: { '#父': { '#子': ['b.md'] } },
     });
-    getIncludedInheritedPaths(inh, '#父', '#子').push('污染.md');
-    expect(inh.includedPathsByParentChild['#父']['#子']).toEqual(['a.md']);
-    expect(getExcludedInheritedPaths(inh, '#父', '#子')).toEqual(['b.md']);
+    getExcludedInheritedPaths(inh, '#父', '#子').push('污染.md');
+    expect(inh.excludedPathsByParentChild['#父']['#子']).toEqual(['b.md']);
   });
 });
 
 describe('单条边的可见性', () => {
-  it('全部继承下：不在黑名单即可见', () => {
+  it('不在排除名单即可见', () => {
     const inh = makeInheritance({ excludedPathsByParentChild: { '#父': { '#子': ['b.md'] } } });
     expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'a.md')).toBe(true);
     expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'b.md')).toBe(false);
   });
 
-  it('选择继承下：必须在白名单里', () => {
-    const inh = makeInheritance({
-      modeByParentChild: { '#父': { '#子': 'selected' } },
-      includedPathsByParentChild: { '#父': { '#子': ['a.md'] } },
-    });
-    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'a.md')).toBe(true);
-    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'b.md')).toBe(false);
+  it('直接笔记与深层笔记同一口径 —— 只查一张排除名单', () => {
+    const inh = makeInheritance({ excludedPathsByParentChild: { '#父': { '#子': ['c.md'] } } });
+    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'b.md')).toBe(true);
+    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'c.md')).toBe(false);
   });
 
-  it('固定边始终放行，不看任何名单', () => {
+  it('固定边始终放行，不看排除名单', () => {
     const inh = makeInheritance({
       fixedParentByChild: { '#子': '#父' },
-      modeByParentChild: { '#父': { '#子': 'selected' } },
-      includedPathsByParentChild: { '#父': { '#子': [] } },
       excludedPathsByParentChild: { '#父': { '#子': ['a.md'] } },
     });
     expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'a.md')).toBe(true);
   });
 
-  it('路径为空时不可见', () => {
-    expect(isInheritanceEdgePathVisible(makeInheritance(), '#父', '#子', '')).toBe(false);
+  it('交集边不参与继承链，一律拦下', () => {
+    const inh = makeInheritance({ modeByParentChild: { '#父': { '#子': 'intersection' } } });
+    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'a.md')).toBe(false);
   });
 
-  it('非直接笔记：白名单不参与，只看黑名单', () => {
-    const inh = makeInheritance({
-      modeByParentChild: { '#父': { '#子': 'selected' } },
-      includedPathsByParentChild: { '#父': { '#子': ['a.md'] } },
-      excludedPathsByParentChild: { '#父': { '#子': ['c.md'] } },
-    });
-    // b.md 不在白名单里，但它是从更深层冒上来的 —— 这条边管不着，放行
-    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'b.md', false)).toBe(true);
-    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'a.md', false)).toBe(true);
-    // 黑名单对深层笔记照样生效
-    expect(isInheritanceEdgePathVisible(inh, '#父', '#子', 'c.md', false)).toBe(false);
+  it('路径为空时不可见', () => {
+    expect(isInheritanceEdgePathVisible(makeInheritance(), '#父', '#子', '')).toBe(false);
   });
 });
 
@@ -249,28 +251,15 @@ describe('整条路径的可见性', () => {
     expect(isInheritancePathVisible(inh, null, 'any.md')).toBe(true);
   });
 
-  // 下面三条钉住「下级决定继承、上层只做排除」：
-  // 上游边的白名单一旦参与判定，给子标签新加一个孙标签就会让整棵子树在祖先下凭空消失。
-  it('上游边的白名单不拦深层笔记，只有最深那条边按模式判定', () => {
-    const selected = makeInheritance({
-      modeByParentChild: { '#祖': { '#父': 'selected' }, '#父': { '#子': 'selected' } },
-      includedPathsByParentChild: { '#祖': { '#父': [] }, '#父': { '#子': ['孙.md'] } },
-    });
-    expect(isInheritancePathVisible(selected, edges, '孙.md')).toBe(true);
+  // 单名单化之后不再有「下级决定、上层只排除」的分工：每条边都只做排除，
+  // 因此给子标签新增孙标签、孙笔记时，祖先侧不需要任何跟进就自动放行。
+  it('新增的深层笔记默认放行，无需在上游做任何登记', () => {
+    expect(isInheritancePathVisible(inh, edges, '刚加的孙.md')).toBe(true);
   });
 
-  it('最深那条边的白名单照常生效', () => {
-    const selected = makeInheritance({
-      modeByParentChild: { '#父': { '#子': 'selected' } },
-      includedPathsByParentChild: { '#父': { '#子': ['孙.md'] } },
-    });
-    expect(isInheritancePathVisible(selected, edges, '别的.md')).toBe(false);
-  });
-
-  it('上游边的黑名单仍然拦得住深层笔记', () => {
+  it('任意一层排除掉就拦得住', () => {
     const blocked = makeInheritance({
-      modeByParentChild: { '#祖': { '#父': 'selected' } },
-      excludedPathsByParentChild: { '#祖': { '#父': ['孙.md'] } },
+      excludedPathsByParentChild: { '#父': { '#子': ['孙.md'] } },
     });
     expect(isInheritancePathVisible(blocked, edges, '孙.md')).toBe(false);
   });
@@ -313,5 +302,91 @@ describe('两级名单的写入工具', () => {
     const clone = cloneParentChildSettings(source);
     clone['#父']['#子'].push('b.md');
     expect(source['#父']['#子']).toEqual(['a.md']);
+  });
+});
+
+describe('交集关系', () => {
+  // 交集成对存两条边，两侧都标 intersection
+  const pair = (a: string, b: string, extra: Partial<TagInheritance> = {}) => makeInheritance({
+    childrenByParent: { [a]: [b], [b]: [a], ...(extra.childrenByParent || {}) },
+    modeByParentChild: {
+      [a]: { [b]: 'intersection' },
+      [b]: { [a]: 'intersection' },
+      ...(extra.modeByParentChild || {}),
+    },
+    ...(extra.fixedParentByChild ? { fixedParentByChild: extra.fixedParentByChild } : {}),
+  });
+
+  it('两侧都标记才算交集边', () => {
+    const inh = pair('#宗门', '#战争');
+    expect(isIntersectionEdge(inh, '#宗门', '#战争')).toBe(true);
+    expect(isIntersectionEdge(inh, '#战争', '#宗门')).toBe(true);
+  });
+
+  it('半条边不算 —— 那是写入中断的残留', () => {
+    const half = makeInheritance({
+      childrenByParent: { '#宗门': ['#战争'], '#战争': ['#宗门'] },
+      modeByParentChild: { '#宗门': { '#战争': 'intersection' } },
+    });
+    expect(isIntersectionEdge(half, '#宗门', '#战争')).toBe(false);
+  });
+
+  it('边不存在于 childrenByParent 时不算', () => {
+    const orphan = makeInheritance({
+      modeByParentChild: { '#宗门': { '#战争': 'intersection' }, '#战争': { '#宗门': 'intersection' } },
+    });
+    expect(isIntersectionEdge(orphan, '#宗门', '#战争')).toBe(false);
+  });
+
+  it('伙伴列表保持在 childrenByParent 里的顺序', () => {
+    const inh = makeInheritance({
+      childrenByParent: { '#宗门': ['#内门', '#战争', '#秘境'], '#战争': ['#宗门'], '#秘境': ['#宗门'] },
+      modeByParentChild: {
+        '#宗门': { '#战争': 'intersection', '#秘境': 'intersection' },
+        '#战争': { '#宗门': 'intersection' },
+        '#秘境': { '#宗门': 'intersection' },
+      },
+    });
+    expect(getIntersectionPartners(inh, '#宗门')).toEqual(['#战争', '#秘境']);
+    expect(getInheritanceOnlyChildren(inh, '#宗门')).toEqual(['#内门']);
+  });
+
+  it('继承邻接表不含交集边', () => {
+    const inh = pair('#宗门', '#战争');
+    expect(getSortedTagInheritanceAdjacency(inh)).toEqual({});
+  });
+
+  it('交集伙伴不算父标签', () => {
+    const inh = pair('#宗门', '#战争');
+    expect(getInheritanceParents(inh, '#战争')).toEqual([]);
+    expect(getInheritanceParents(inh, '#宗门')).toEqual([]);
+  });
+
+  it('交集边不产生后代关系', () => {
+    const inh = pair('#宗门', '#战争');
+    expect(getTagDescendants(inh, '#宗门')).toEqual([]);
+  });
+
+  it('成对的交集边不会把新继承边误判成环', () => {
+    // A↔B 交集。此时 A→C→B 这条继承链完全合法，环检测必须放行
+    const inh = pair('#宗门', '#战争');
+    expect(wouldCreateTagInheritanceCycle(inh, '#宗门', '#内门')).toBe(false);
+    expect(wouldCreateTagInheritanceCycle(inh, '#内门', '#战争')).toBe(false);
+  });
+
+  it('真正的继承环仍然拦得住', () => {
+    const chain = makeInheritance({ childrenByParent: { '#a': ['#b'], '#b': ['#c'] } });
+    expect(wouldCreateTagInheritanceCycle(chain, '#c', '#a')).toBe(true);
+  });
+
+  it('互斥判定：任一方向的任意关系都算已关联', () => {
+    const inh = pair('#宗门', '#战争');
+    expect(areTagsRelated(inh, '#宗门', '#战争')).toBe(true);
+    expect(areTagsRelated(inh, '#战争', '#宗门')).toBe(true);
+    expect(areTagsRelated(inh, '#宗门', '#无关')).toBe(false);
+
+    const inherit = makeInheritance({ childrenByParent: { '#父': ['#子'] } });
+    expect(areTagsRelated(inherit, '#父', '#子')).toBe(true);
+    expect(areTagsRelated(inherit, '#子', '#父')).toBe(true);
   });
 });

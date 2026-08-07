@@ -29,14 +29,15 @@ import {
   wouldCreateDirectedCycle,
 } from "./relation-utils";
 
+/** 关系数据结构版本。7：移除「选择继承」白名单，模式的另一端换成「交集」。 */
+const RELATIONS_VERSION = 7;
+
 const createEmptyRelations = (): any => ({
-  version: 6,
+  version: RELATIONS_VERSION,
   tagInheritance: {
     childrenByParent: {},
-    enabledParents: [],
     excludedPathsByParentChild: {},
     modeByParentChild: {},
-    includedPathsByParentChild: {},
     fixedParentByChild: {},
   },
   noteHierarchy: {
@@ -52,7 +53,9 @@ export class RelationsBehavior {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const result = createEmptyRelations();
     const sourceVersion = Number(source.version);
-    result.version = sourceVersion >= 6 ? 6 : sourceVersion >= 5 ? 5 : sourceVersion >= 4 ? 4 : sourceVersion >= 3 ? 3 : sourceVersion >= 2 ? 2 : 1;
+    result.version = Number.isFinite(sourceVersion) && sourceVersion >= 1
+      ? Math.min(Math.floor(sourceVersion), RELATIONS_VERSION)
+      : 1;
     const inheritance = source.tagInheritance && typeof source.tagInheritance === 'object'
       ? source.tagInheritance
       : {};
@@ -73,11 +76,6 @@ export class RelationsBehavior {
       }
     }
 
-    const enabledParents = Array.isArray(inheritance.enabledParents) ? inheritance.enabledParents : [];
-    result.tagInheritance.enabledParents = Array.from(new Set(
-      enabledParents.map(normalizeTag).filter((tag: any) => tag && !isNestedTag(tag))
-    ));
-
     const normalizePaths = (rawPaths: any) => Array.from(new Set((Array.isArray(rawPaths) ? rawPaths : [])
       .map((path: any) => typeof path === 'string' ? path.trim() : '')
       .filter(Boolean)));
@@ -97,42 +95,27 @@ export class RelationsBehavior {
         }
       }
     };
-    if (sourceVersion >= 5) {
-      copyParentChildPaths('excludedPathsByParentChild', 'excludedPathsByParentChild');
+    copyParentChildPaths('excludedPathsByParentChild', 'excludedPathsByParentChild');
+    // 白名单是 v7 之前「选择继承」的遗留结构。这里必须原样透传到迁移执行为止 ——
+    // 本函数跑在 loadSettings 里、早于 tagFileIndex 建立，而等价转换要等索引就绪，
+    // 提前丢弃会让那些边退化成「继承 + 空排除名单」= 全部笔记都冒上来。
+    if (result.version < RELATIONS_VERSION) {
+      result.tagInheritance.includedPathsByParentChild = {};
       copyParentChildPaths('includedPathsByParentChild', 'includedPathsByParentChild');
-      const rawModes = inheritance.modeByParentChild;
-      if (rawModes && typeof rawModes === 'object' && !Array.isArray(rawModes)) {
-        for (const [rawParent, rawChildren] of Object.entries<any>(rawModes)) {
-          const parent = normalizeTag(rawParent);
-          if (!parent || !rawChildren || typeof rawChildren !== 'object' || Array.isArray(rawChildren)) continue;
-          for (const [rawChild, rawMode] of Object.entries<any>(rawChildren)) {
-            const child = normalizeTag(rawChild);
-            if (rawMode !== 'selected' || !(result.tagInheritance.childrenByParent[parent] || []).includes(child)) continue;
-            if (!result.tagInheritance.modeByParentChild[parent]) result.tagInheritance.modeByParentChild[parent] = {};
-            result.tagInheritance.modeByParentChild[parent][child as any] = 'selected';
-          }
-        }
-      }
-    } else {
-      const rawExclusions = inheritance.excludedPathsByParent || {};
-      const rawIncluded = inheritance.includedPathsByParent || {};
-      const rawModes = inheritance.modeByParent || {};
-      for (const [parent, children] of Object.entries<any>(result.tagInheritance.childrenByParent)) {
-        const excluded = normalizePaths(rawExclusions[parent]);
-        const included = normalizePaths(rawIncluded[parent]);
-        for (const child of children) {
-          if (excluded.length) {
-            if (!result.tagInheritance.excludedPathsByParentChild[parent]) result.tagInheritance.excludedPathsByParentChild[parent] = {};
-            result.tagInheritance.excludedPathsByParentChild[parent][child] = [...excluded];
-          }
-          if (included.length) {
-            if (!result.tagInheritance.includedPathsByParentChild[parent]) result.tagInheritance.includedPathsByParentChild[parent] = {};
-            result.tagInheritance.includedPathsByParentChild[parent][child] = [...included];
-          }
-          if (rawModes[parent] === 'selected') {
-            if (!result.tagInheritance.modeByParentChild[parent]) result.tagInheritance.modeByParentChild[parent] = {};
-            result.tagInheritance.modeByParentChild[parent][child as any] = 'selected';
-          }
+    }
+    const rawModes = inheritance.modeByParentChild;
+    if (rawModes && typeof rawModes === 'object' && !Array.isArray(rawModes)) {
+      for (const [rawParent, rawChildren] of Object.entries<any>(rawModes)) {
+        const parent = normalizeTag(rawParent);
+        if (!parent || !rawChildren || typeof rawChildren !== 'object' || Array.isArray(rawChildren)) continue;
+        for (const [rawChild, rawMode] of Object.entries<any>(rawChildren)) {
+          const child = normalizeTag(rawChild);
+          // 'selected' 是待迁移的旧值，迁移跑完就不会再出现
+          const keep = rawMode === 'intersection' ||
+            (rawMode === 'selected' && result.version < RELATIONS_VERSION);
+          if (!keep || !(result.tagInheritance.childrenByParent[parent] || []).includes(child)) continue;
+          if (!result.tagInheritance.modeByParentChild[parent]) result.tagInheritance.modeByParentChild[parent] = {};
+          result.tagInheritance.modeByParentChild[parent][child as any] = rawMode;
         }
       }
     }
@@ -177,6 +160,8 @@ export class RelationsBehavior {
     }
 
     this.settings.relations = result;
+    // 先把半条交集边降级/清理，再做环检测；否则残缺的交集标记会被误当成普通继承边。
+    this.reconcileIntersectionPairs();
     this.reconcileRelationCycles();
     this.reconcileFixedTagRelations();
     return result;
@@ -193,9 +178,6 @@ export class RelationsBehavior {
     }
     if (!inheritance.excludedPathsByParentChild || typeof inheritance.excludedPathsByParentChild !== 'object') {
       inheritance.excludedPathsByParentChild = {};
-    }
-    if (!inheritance.includedPathsByParentChild || typeof inheritance.includedPathsByParentChild !== 'object') {
-      inheritance.includedPathsByParentChild = {};
     }
     return inheritance;
   }
@@ -220,6 +202,10 @@ export class RelationsBehavior {
     return core.isFixedTagEdge(this.getTagInheritanceSettings(), parentValue, childValue);
   }
 
+  getRelativeChildDisplayName(parentValue: any, childValue: any) {
+    return core.getRelativeChildDisplayName(parentValue, childValue);
+  }
+
   getFixedChildDisplayName(tagValue: any) {
     return core.getFixedChildDisplayName(tagValue);
   }
@@ -232,6 +218,8 @@ export class RelationsBehavior {
     if (!tree) return null;
     const allowed = new Set(Array.from(includedTags || []).map(normalizeTag).filter(Boolean));
     const visit = (node: any, isRoot = false) => {
+      // 固定子标签搜索的结果里不该混进交集组
+      if (node.isIntersection) return null;
       const children = (node.children || []).map((child: any) => visit(child)).filter(Boolean);
       if (!isRoot && !allowed.has(node.tag) && children.length === 0) return null;
       const paths = isRoot || !allowed.has(node.tag) ? [] : [...node.paths];
@@ -604,6 +592,11 @@ export class RelationsBehavior {
           changed = true;
         }
       }
+      // 交集组的 key 是「根标签 tag-intersection 伙伴标签」，伙伴改名也要跟着迁
+      if (parts[1] === 'tag-intersection' && parts[2] === oldTag) {
+        parts[2] = newTag;
+        changed = true;
+      }
       migrated.add(parts.join('\u0000'));
     }
     if (!changed) return false;
@@ -753,9 +746,16 @@ export class RelationsBehavior {
     return core.getInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
   }
 
+  /**
+   * 关系数据的版本化迁移。
+   *
+   * 挂在这里而不是 data/schema.ts：v7 的等价转换要算「自由候选」和「这篇笔记是不是
+   * 直接挂在子标签上」，两者都依赖 tagFileIndex，而 schema 迁移跑在 loadSettings 里、
+   * 那时索引还没建。本方法由 tag-index.ts 在索引就绪且元数据缓存可用时调用。
+   */
   initializeTagInheritanceOrder() {
     const relations = this.settings.relations;
-    if (!relations || Number(relations.version) >= 6) return false;
+    if (!relations || Number(relations.version) >= RELATIONS_VERSION) return false;
 
     const inheritance = this.getTagInheritanceSettings();
     if (Number(relations.version) < 2) {
@@ -770,9 +770,62 @@ export class RelationsBehavior {
       inheritance.fixedParentByChild = {};
     }
     this.reconcileFixedTagRelations();
+    if (Number(relations.version) < 7) this.migrateSelectedInheritanceToExclusion();
     this.reconcileInheritancePathLists();
-    relations.version = 6;
+    relations.version = RELATIONS_VERSION;
     return true;
+  }
+
+  /**
+   * v6 -> v7：把「选择继承」等价改写成「继承 + 排除名单」，白名单整张表退场。
+   *
+   * 白名单是「默认拒绝」、排除名单是「默认放行」，两者的可见集合可以互相表达：
+   * 把当前不可见的自由候选全部写进排除名单，显示结果完全一致。
+   *
+   * 例外是白名单为空的边 —— 那意味着「一篇都不继承」，留着这条关系没有意义，
+   * 视为误设，直接转成普通继承而不是把整棵子树写进排除名单。
+   */
+  migrateSelectedInheritanceToExclusion() {
+    const inheritance = this.getTagInheritanceSettings();
+    const legacyIncluded = inheritance.includedPathsByParentChild || {};
+    const selectedEdges: Array<[string, string]> = [];
+    for (const [parent, children] of Object.entries<any>(inheritance.modeByParentChild || {})) {
+      for (const [child, mode] of Object.entries<any>(children || {})) {
+        if (mode === 'selected') selectedEdges.push([parent, child]);
+      }
+    }
+
+    // 迁移期专用：白名单当年只管直接挂在子标签上的笔记，深层笔记由排除名单承接
+    const isDirectPath = (child: string, path: string) =>
+      (this.tagFileIndex?.get(child) || []).some((file: any) => file.path === path);
+
+    for (const [parent, child] of selectedEdges) {
+      this.setParentChildValue(inheritance.modeByParentChild, parent, child, undefined);
+      if (this.isFixedTagEdge(parent, child)) {
+        this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, undefined);
+        continue;
+      }
+
+      const included: string[] = legacyIncluded[parent]?.[child] || [];
+      if (!included.length) continue;
+
+      const excluded = new Set<string>(this.getExcludedInheritedPaths(parent, child));
+      const free = this.getInheritanceCandidates(parent, child).filter((candidate: any) => !candidate.fixed);
+      const hidden = free
+        .filter((candidate: any) => (isDirectPath(child, candidate.path)
+          ? !included.includes(candidate.path)
+          : excluded.has(candidate.path)))
+        .map((candidate: any) => candidate.path);
+      this.setParentChildValue(
+        inheritance.excludedPathsByParentChild,
+        parent,
+        child,
+        hidden.length ? hidden : undefined
+      );
+    }
+
+    delete inheritance.includedPathsByParentChild;
+    return selectedEdges.length > 0;
   }
 
   getTagVisibleNoteCount(tagValue: any) {
@@ -799,46 +852,160 @@ export class RelationsBehavior {
     return core.getSortedTagInheritanceAdjacency(this.getTagInheritanceSettings());
   }
 
-  getFixedTagInheritanceAdjacency() {
-    return core.getFixedTagInheritanceAdjacency(this.getTagInheritanceSettings());
-  }
-
-  getActiveTagInheritanceAdjacency(tagValue: any) {
-    return this.isTagInheritanceEnabled(tagValue)
-      ? this.getSortedTagInheritanceAdjacency()
-      : this.getFixedTagInheritanceAdjacency();
-  }
-
-  hasFreeInheritanceBranch(tagValue: any) {
-    const root = normalizeTag(tagValue);
-    if (!root) return false;
-    const adjacency = this.getSortedTagInheritanceAdjacency();
-    const visit = (parent: any, branch: any) => {
-      if (branch.has(parent)) return false;
-      const nextBranch = new Set(branch);
-      nextBranch.add(parent);
-      for (const child of adjacency[parent] || []) {
-        if (!this.isFixedTagEdge(parent, child)) return true;
-        if (visit(child, nextBranch)) return true;
-      }
-      return false;
-    };
-    return visit(root, new Set());
-  }
-
   getInheritanceParents(tagValue: any) {
     return core.getInheritanceParents(this.getTagInheritanceSettings(), tagValue);
+  }
+
+  isIntersectionEdge(parentValue: any, childValue: any) {
+    return core.isIntersectionEdge(this.getTagInheritanceSettings(), parentValue, childValue);
+  }
+
+  getIntersectionPartners(tagValue: any) {
+    return core.getIntersectionPartners(this.getTagInheritanceSettings(), tagValue);
+  }
+
+  getInheritanceOnlyChildren(tagValue: any) {
+    return core.getInheritanceOnlyChildren(this.getTagInheritanceSettings(), tagValue);
+  }
+
+  areTagsRelated(leftValue: any, rightValue: any) {
+    return core.areTagsRelated(this.getTagInheritanceSettings(), leftValue, rightValue);
+  }
+
+  /**
+   * 一个交集分组的成员：root 的原生笔记 ∩ partner 的笔记。
+   *
+   * 只吃原生笔记 —— 从子标签继承上来的笔记仍留在自己的血缘分组里，不进交集组。
+   * 顺序取自 root 的 exactPaths（已过 noteOrderByTag），这样同一批笔记在
+   * 「原生」与交集组之间挪动时排序不会错乱。
+   */
+  getIntersectionGroupPaths(rootTagValue: any, partnerTagValue: any) {
+    const root = normalizeTag(rootTagValue);
+    const partner = normalizeTag(partnerTagValue);
+    if (!root || !partner) return [];
+    const partnerPaths = new Set((this.tagFileIndex?.get(partner) || []).map((file: any) => file.path));
+    if (!partnerPaths.size) return [];
+    const branchData: any = this.getInheritanceBranchData(root);
+    return (branchData?.exactPaths || []).filter((path: any) => partnerPaths.has(path));
+  }
+
+  /**
+   * 交集边的一致性对账：清除半条边。
+   *
+   * 交集必须成对存在。任一侧缺失（写入中断、标签改名、另一侧被单独移除）时，
+   * 把剩下那条边降级成普通继承边 —— 保留关系本身，只是不再是交集。
+   * 返回是否发生过改动。
+   */
+  reconcileIntersectionPairs() {
+    const inheritance = this.getTagInheritanceSettings();
+    const modes = inheritance.modeByParentChild || {};
+    let changed = false;
+    for (const [parent, children] of Object.entries<any>(modes)) {
+      for (const child of Object.keys(children || {})) {
+        if (children[child] !== 'intersection') continue;
+        const hasForwardEdge = (inheritance.childrenByParent[parent] || []).includes(child);
+        const paired = modes[child]?.[parent] === 'intersection' &&
+          hasForwardEdge &&
+          (inheritance.childrenByParent[child] || []).includes(parent) &&
+          parent !== child;
+        if (paired) continue;
+        if (parent === child) {
+          inheritance.childrenByParent[parent] = (inheritance.childrenByParent[parent] || [])
+            .filter((tag: any) => tag !== child);
+          if (!inheritance.childrenByParent[parent].length) delete inheritance.childrenByParent[parent];
+        }
+        this.setParentChildValue(inheritance.modeByParentChild, parent, child, undefined);
+        // 没有实体边时连同名单死数据一起清掉；实体边仍在时则降级为普通继承并保留其排除设置。
+        if (!hasForwardEdge || parent === child) {
+          this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, undefined);
+        }
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * 绑定/解绑交集。成对写两条边，失败整体回滚。
+   *
+   * 交集与继承互斥，因此绑定时若两标签之间已有继承边会先被这条边覆盖为交集；
+   * 解绑时两条边都删掉 —— 交集是对称的，没有「只保留一个方向」的说法。
+   */
+  async setIntersectionRelation(leftValue: any, rightValue: any, bound: any) {
+    const left = normalizeTag(leftValue);
+    const right = normalizeTag(rightValue);
+    if (!left || !right || left === right) throw new Error('标签无效');
+    if (isNestedTag(left) || isNestedTag(right)) throw new Error('嵌套标签不支持交集');
+    if (bound && (this.isFixedChild(left) || this.isFixedChild(right))) {
+      throw new Error('固定子标签不能绑定交集');
+    }
+
+    const inheritance = this.getTagInheritanceSettings();
+    const previousChildren = inheritance.childrenByParent;
+    const previousModes = inheritance.modeByParentChild;
+    const previousExcluded = inheritance.excludedPathsByParentChild;
+    const previousFixedParents = inheritance.fixedParentByChild;
+
+    const stagedChildren: any = Object.fromEntries(
+      Object.entries<any>(previousChildren).map(([parent, children]) => [parent, [...children]])
+    );
+    inheritance.childrenByParent = stagedChildren;
+    inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
+    inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
+    inheritance.fixedParentByChild = { ...previousFixedParents };
+
+    const writeEdge = (parent: string, child: string) => {
+      if (!stagedChildren[parent]) stagedChildren[parent] = [];
+      if (!stagedChildren[parent].includes(child)) stagedChildren[parent].push(child);
+      this.setParentChildValue(inheritance.modeByParentChild, parent, child, 'intersection');
+      // 交集成员实时算出，没有可维护的排除名单
+      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, undefined);
+    };
+    const dropEdge = (parent: string, child: string) => {
+      stagedChildren[parent] = (stagedChildren[parent] || []).filter((tag: any) => tag !== child);
+      if (!stagedChildren[parent].length) delete stagedChildren[parent];
+      this.setParentChildValue(inheritance.modeByParentChild, parent, child, undefined);
+      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, undefined);
+    };
+
+    if (bound) {
+      writeEdge(left, right);
+      writeEdge(right, left);
+    } else {
+      dropEdge(left, right);
+      dropEdge(right, left);
+    }
+    this.reconcileIntersectionPairs();
+    this.reconcileInheritancePathLists([left, right]);
+
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      inheritance.childrenByParent = previousChildren;
+      inheritance.modeByParentChild = previousModes;
+      inheritance.excludedPathsByParentChild = previousExcluded;
+      inheritance.fixedParentByChild = previousFixedParents;
+      throw error;
+    }
+    this.refreshHierarchyViews();
+  }
+
+  /** 该标签下全部非空的交集分组，顺序即它们在 childrenByParent 里的位置。 */
+  getIntersectionGroups(tagValue: any) {
+    return this.getIntersectionPartners(tagValue)
+      .map((partner: any) => ({ tag: partner, paths: this.getIntersectionGroupPaths(tagValue, partner) }))
+      .filter((group: any) => group.paths.length > 0);
   }
 
   getTagInheritanceGroupKeys(tagValue: any) {
     const tag = normalizeTag(tagValue);
     const browseData = tag && this.getTagBrowseData(tag);
-    const tree = (browseData?.hasActiveInheritance ?? browseData?.inheritanceEnabled)
-      ? browseData.inheritanceTree
-      : null;
+    const tree = browseData?.hasActiveInheritance ? browseData.inheritanceTree : null;
     if (!tree || !tree.children.length) return [];
     const keys = [];
     const prefix = `${tag}\u0000tag-group\u0000`;
+    // 交集组另起命名空间，避免与同名子标签分组的 key 撞车
+    const intersectionPrefix = `${tag}\u0000tag-intersection\u0000`;
     if (tree.paths.length) keys.push(`${prefix}original`);
     const visit = (node: any, lineage: any) => {
       const key = `${prefix}${lineage.join('\u0001')}`;
@@ -846,7 +1013,10 @@ export class RelationsBehavior {
       if (node.children.length && node.paths.length) keys.push(`${key}\u0000original`);
       for (const child of node.children) visit(child, [...lineage, child.tag]);
     };
-    for (const child of tree.children) visit(child, [child.tag]);
+    for (const child of tree.children) {
+      if (child.isIntersection) keys.push(`${intersectionPrefix}${child.tag}`);
+      else visit(child, [child.tag]);
+    }
     return keys;
   }
 
@@ -901,16 +1071,8 @@ export class RelationsBehavior {
     return core.hasInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
   }
 
-  isTagInheritanceEnabled(tagValue: any) {
-    return core.isTagInheritanceEnabled(this.getTagInheritanceSettings(), tagValue);
-  }
-
   getTagInheritanceMode(parentValue: any, childValue: any) {
     return core.getTagInheritanceMode(this.getTagInheritanceSettings(), parentValue, childValue);
-  }
-
-  getIncludedInheritedPaths(parentValue: any, childValue: any) {
-    return core.getIncludedInheritedPaths(this.getTagInheritanceSettings(), parentValue, childValue);
   }
 
   getExcludedInheritedPaths(parentValue: any, childValue: any) {
@@ -937,7 +1099,7 @@ export class RelationsBehavior {
     return core.createInheritanceEdgesFromLineage(this.getTagInheritanceSettings(), lineage);
   }
 
-  getInheritanceBranchData(tagValue: any, childValue = null, includeInactive = false) {
+  getInheritanceBranchData(tagValue: any, childValue = null) {
     const tag = normalizeTag(tagValue);
     const requestedChild = normalizeTag(childValue);
     if (!tag) return null;
@@ -950,9 +1112,7 @@ export class RelationsBehavior {
     const orderedBranches: any[] = [];
     const orderedPathsByTag = { [tag]: exactPaths };
     const fixedTags = new Set();
-    const adjacency = includeInactive
-      ? this.getSortedTagInheritanceAdjacency()
-      : this.getActiveTagInheritanceAdjacency(tag);
+    const adjacency = this.getSortedTagInheritanceAdjacency();
     const visit = (sourceTag: any, edges: any, branch = new Set([tag])) => {
       if (branch.has(sourceTag)) return;
       const nextBranch = new Set(branch);
@@ -981,7 +1141,7 @@ export class RelationsBehavior {
   }
 
   getInheritanceCandidates(parentValue: any, childValue: any) {
-    const branchData = this.getInheritanceBranchData(parentValue, childValue, true);
+    const branchData = this.getInheritanceBranchData(parentValue, childValue);
     if (!branchData) return [];
     const exactPaths = new Set(branchData.exactPaths);
     const candidatesByPath = new Map();
@@ -1009,7 +1169,6 @@ export class RelationsBehavior {
       : Array.from(new Set([
         ...Object.keys(inheritance.childrenByParent),
         ...Object.keys(inheritance.excludedPathsByParentChild),
-        ...Object.keys(inheritance.includedPathsByParentChild),
       ]));
     const parents = new Set(requestedParents);
     if (parentValues) {
@@ -1023,7 +1182,6 @@ export class RelationsBehavior {
         }
       }
     }
-    const beforeIncluded = JSON.stringify(inheritance.includedPathsByParentChild);
     const beforeExcluded = JSON.stringify(inheritance.excludedPathsByParentChild);
     const visited = new Set();
     const reconcileParent = (parent: any) => {
@@ -1031,55 +1189,35 @@ export class RelationsBehavior {
       visited.add(parent);
       for (const child of inheritance.childrenByParent[parent] || []) reconcileParent(child);
       const children = new Set<any>(inheritance.childrenByParent[parent] || []);
-      for (const key of ['modeByParentChild', 'excludedPathsByParentChild', 'includedPathsByParentChild']) {
+      for (const key of ['modeByParentChild', 'excludedPathsByParentChild']) {
         for (const child of Object.keys(inheritance[key][parent] || {})) {
           if (!children.has(child)) this.setParentChildValue(inheritance[key], parent, child, undefined);
         }
       }
       for (const child of children) {
+        // 只保留仍是自由候选的路径：标签或笔记被删掉后，名单里的残留条目就是死数据
         const freePaths = new Set(this.getInheritanceCandidates(parent, child)
           .filter((candidate) => !candidate.fixed)
           .map((candidate) => candidate.path));
-        // 这里只按"路径是否仍是自由候选"过滤，不按当前模式丢弃另一侧名单：
-        // v4 数据迁移会有意同时搬迁两侧（见 relations-behavior.test.ts 的 v4 迁移用例），
-        // 按模式清理会破坏那条契约。真正的死数据来源已在 setTagInheritanceMode 处堵住。
-        for (const key of ['excludedPathsByParentChild', 'includedPathsByParentChild']) {
-          const nextPaths = (inheritance[key][parent]?.[child] || []).filter((path: any) => (
-            freePaths.has(path) &&
-            // 白名单额外收窄到直接笔记：跨层条目在新规则下不再被读取，留着就是死数据
-            (key === 'excludedPathsByParentChild' || this.isDirectInheritedPath(child, path))
-          ));
-          this.setParentChildValue(inheritance[key], parent, child, nextPaths.length ? nextPaths : undefined);
-        }
+        const nextPaths = (inheritance.excludedPathsByParentChild[parent]?.[child] || [])
+          .filter((path: any) => freePaths.has(path));
+        this.setParentChildValue(
+          inheritance.excludedPathsByParentChild,
+          parent,
+          child,
+          nextPaths.length ? nextPaths : undefined
+        );
       }
     };
     for (const parent of parents) reconcileParent(parent);
-    return beforeIncluded !== JSON.stringify(inheritance.includedPathsByParentChild) ||
-      beforeExcluded !== JSON.stringify(inheritance.excludedPathsByParentChild);
+    return beforeExcluded !== JSON.stringify(inheritance.excludedPathsByParentChild);
   }
 
-  /**
-   * 这篇笔记是不是直接挂在该子标签上的。
-   *
-   * 「选择继承」的白名单只管直接笔记；更深层冒上来的笔记由更深的边决定，本边只能排除
-   * （见 core/inheritance.ts 的 isInheritanceEdgePathVisible）。写入侧要按同一口径分流，
-   * 否则勾选面板会把深层笔记写进永远不被读取的白名单里。
-   */
-  isDirectInheritedPath(childValue: any, path: any) {
-    const child = normalizeTag(childValue);
-    if (!child || !path) return false;
-    return (this.tagFileIndex?.get(child) || []).some((file: any) => file.path === path);
-  }
-
+  /** 这条边上当前可见的笔记：自由候选减去排除名单。 */
   collectVisiblePathsForEdge(parent: any, child: any) {
-    const selectedMode = this.getTagInheritanceMode(parent, child) === 'selected';
-    const included = new Set(this.getIncludedInheritedPaths(parent, child));
     const excluded = new Set(this.getExcludedInheritedPaths(parent, child));
-    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
-    return new Set(freeCandidates
-      .filter((candidate) => (selectedMode && this.isDirectInheritedPath(child, candidate.path)
-        ? included.has(candidate.path)
-        : !excluded.has(candidate.path)))
+    return new Set(this.getInheritanceCandidates(parent, child)
+      .filter((candidate) => !candidate.fixed && !excluded.has(candidate.path))
       .map((candidate) => candidate.path));
   }
 
@@ -1094,7 +1232,7 @@ export class RelationsBehavior {
     while (queue.length) {
       const child = queue.shift();
       for (const parent of this.getInheritanceParents(child)) {
-        // 走同一个分流器：直接笔记进白名单，深层笔记则是把它从黑名单里摘掉
+        // 恢复一篇笔记要把它从整条路径上每条边的排除名单里摘掉，少一条就还是冒不上去
         if (!this.isFixedTagEdge(parent, child)) {
           for (const path of paths) this.applyInheritedFileVisibilityToEdge(parent, child, path, true);
         }
@@ -1105,88 +1243,52 @@ export class RelationsBehavior {
     }
   }
 
+  /**
+   * 切换一条边的模式：继承 <-> 交集。
+   *
+   * 交集是对称的，两个方向要一起改：切到交集时补上反向边，切回继承时把反向边删掉、
+   * 只保留当前方向。所以整条路都走 setIntersectionRelation。
+   */
   async setTagInheritanceMode(parentValue: any, childValue: any, modeValue: any) {
     const parent = normalizeTag(parentValue);
     const child = normalizeTag(childValue);
-    const mode = modeValue === 'selected' ? 'selected' : 'all';
+    const mode = modeValue === 'intersection' ? 'intersection' : 'all';
     if (!parent || !child || !this.getInheritanceChildren(parent).includes(child)) throw new Error('继承关系无效');
-    if (this.isFixedTagEdge(parent, child)) throw new Error('固定子标签不能切换继承模式');
-    const inheritance = this.getTagInheritanceSettings();
-    const previousModes = inheritance.modeByParentChild;
-    const previousIncluded = inheritance.includedPathsByParentChild;
-    const previousExcluded = inheritance.excludedPathsByParentChild;
-    const currentMode = this.getTagInheritanceMode(parent, child);
-    if (currentMode === mode) return;
-    const freeCandidates = this.getInheritanceCandidates(parent, child).filter((candidate) => !candidate.fixed);
-    const currentVisible = this.collectVisiblePathsForEdge(parent, child);
-    inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
-    inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
-    // 切换模式时按"保持当前可见集合"重算名单。
-    // 「选择继承」下白名单只管直接笔记，深层笔记仍由黑名单承接，所以这里两侧都要写；
-    // 「全部继承」下白名单不再被读取（见 isInheritanceEdgePathVisible），留着就是死数据，直接清掉。
-    if (mode === 'selected') {
-      this.setParentChildValue(inheritance.modeByParentChild, parent, child, 'selected');
-      const paths = freeCandidates
-        .filter((candidate) => this.isDirectInheritedPath(child, candidate.path) && currentVisible.has(candidate.path))
-        .map((candidate) => candidate.path);
-      const hiddenDeepPaths = freeCandidates
-        .filter((candidate) => !this.isDirectInheritedPath(child, candidate.path) && !currentVisible.has(candidate.path))
-        .map((candidate) => candidate.path);
-      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : undefined);
-      this.setParentChildValue(
-        inheritance.excludedPathsByParentChild,
-        parent,
-        child,
-        hiddenDeepPaths.length ? hiddenDeepPaths : undefined
-      );
-    } else {
-      this.setParentChildValue(inheritance.modeByParentChild, parent, child, undefined);
-      const paths = freeCandidates.filter((candidate) => !currentVisible.has(candidate.path)).map((candidate) => candidate.path);
-      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.length ? paths : undefined);
-      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, undefined);
-    }
-    this.propagateNewlyAllowedPathsToAncestors(
-      parent,
-      Array.from(this.collectVisiblePathsForEdge(parent, child)).filter((path) => !currentVisible.has(path))
-    );
-    this.reconcileInheritancePathLists([parent]);
-    try {
-      await this.saveSettings();
-    } catch (error) {
-      inheritance.modeByParentChild = previousModes;
-      inheritance.includedPathsByParentChild = previousIncluded;
-      inheritance.excludedPathsByParentChild = previousExcluded;
-      throw error;
-    }
-    this.refreshHierarchyViews();
-  }
+    if (this.isFixedTagEdge(parent, child)) throw new Error('固定子标签不能切换模式');
+    if (this.getTagInheritanceMode(parent, child) === mode) return;
 
-  async setIncludedInheritedPaths(parentValue: any, childValue: any, pathValues: any) {
-    const parent = normalizeTag(parentValue);
-    const child = normalizeTag(childValue);
-    if (!parent || !child || !this.getInheritanceChildren(parent).includes(child)) throw new Error('继承关系无效');
+    if (mode === 'intersection') {
+      await this.setIntersectionRelation(parent, child, true);
+      return;
+    }
+    // 交集 -> 继承：原子地删掉反向边、保留当前方向及其排序位置，且只落盘一次。
     const inheritance = this.getTagInheritanceSettings();
-    const previousIncluded = inheritance.includedPathsByParentChild;
+    const previousChildren = inheritance.childrenByParent;
+    const previousModes = inheritance.modeByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
-    // 白名单只收直接笔记；深层笔记要在这条边上藏起来得走黑名单
-    const allowed = new Set(this.getInheritanceCandidates(parent, child)
-      .filter((candidate) => !candidate.fixed && this.isDirectInheritedPath(child, candidate.path))
-      .map((candidate) => candidate.path));
-    const paths = Array.from(new Set((pathValues || [])
-      .map((path: any) => typeof path === 'string' ? path.trim() : '')
-      .filter((path: any) => path && allowed.has(path))));
-    const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
+    const previousFixedParents = inheritance.fixedParentByChild;
+    inheritance.childrenByParent = Object.fromEntries(
+      Object.entries<any>(previousChildren).map(([storedParent, children]) => [storedParent, [...children]])
+    );
+    inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
-    this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.length ? paths : undefined);
-    this.propagateNewlyAllowedPathsToAncestors(parent, paths.filter((path) => !previouslyVisible.has(path)));
-    this.reconcileInheritancePathLists([parent]);
+    inheritance.fixedParentByChild = { ...previousFixedParents };
+    inheritance.childrenByParent[child] = (inheritance.childrenByParent[child] || [])
+      .filter((tag: any) => tag !== parent);
+    if (!inheritance.childrenByParent[child].length) delete inheritance.childrenByParent[child];
+    this.setParentChildValue(inheritance.modeByParentChild, parent, child, undefined);
+    this.setParentChildValue(inheritance.modeByParentChild, child, parent, undefined);
+    this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, undefined);
+    this.setParentChildValue(inheritance.excludedPathsByParentChild, child, parent, undefined);
+    this.reconcileIntersectionPairs();
+    this.reconcileInheritancePathLists([parent, child]);
     try {
       await this.saveSettings();
     } catch (error) {
-      inheritance.includedPathsByParentChild = previousIncluded;
+      inheritance.childrenByParent = previousChildren;
+      inheritance.modeByParentChild = previousModes;
       inheritance.excludedPathsByParentChild = previousExcluded;
+      inheritance.fixedParentByChild = previousFixedParents;
       throw error;
     }
     this.refreshHierarchyViews();
@@ -1194,25 +1296,17 @@ export class RelationsBehavior {
 
   applyInheritedFileVisibilityToEdge(parent: any, child: any, path: any, visible: any) {
     const inheritance = this.getTagInheritanceSettings();
-    // 深层笔记即使在「选择继承」模式下也只写黑名单 —— 白名单对它们不生效
-    if (this.getTagInheritanceMode(parent, child) === 'selected' && this.isDirectInheritedPath(child, path)) {
-      const paths = new Set(this.getIncludedInheritedPaths(parent, child));
-      if (visible) paths.add(path);
-      else paths.delete(path);
-      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, paths.size ? Array.from(paths) : undefined);
-    } else {
-      const paths = new Set(this.getExcludedInheritedPaths(parent, child));
-      if (visible) paths.delete(path);
-      else paths.add(path);
-      this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.size ? Array.from(paths) : undefined);
-    }
+    const paths = new Set(this.getExcludedInheritedPaths(parent, child));
+    if (visible) paths.delete(path);
+    else paths.add(path);
+    this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, paths.size ? Array.from(paths) : undefined);
   }
 
   /**
    * 批量设置一条边上若干笔记的可见性。
    *
    * 勾选面板的「全选/全不选」一次能改几十行，逐条走单篇版本会重复落盘、重复刷视图，
-   * 这里合成一次保存。每条写进白名单还是黑名单由 applyInheritedFileVisibilityToEdge 分流。
+   * 这里合成一次保存；取消勾选写入排除名单，重新勾选则从排除名单移除。
    */
   async setEdgePathsVisible(parentValue: any, childValue: any, entries: any) {
     const parent = normalizeTag(parentValue);
@@ -1224,10 +1318,8 @@ export class RelationsBehavior {
       .filter((entry) => entry.path && candidates.has(entry.path) && !candidates.get(entry.path).fixed);
     if (!changes.length) return;
     const inheritance = this.getTagInheritanceSettings();
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
     const previouslyVisible = this.collectVisiblePathsForEdge(parent, child);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     for (const { path, visible } of changes) this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
     this.propagateNewlyAllowedPathsToAncestors(
@@ -1238,7 +1330,6 @@ export class RelationsBehavior {
     try {
       await this.saveSettings();
     } catch (error) {
-      inheritance.includedPathsByParentChild = previousIncluded;
       inheritance.excludedPathsByParentChild = previousExcluded;
       throw error;
     }
@@ -1252,22 +1343,20 @@ export class RelationsBehavior {
   async setInheritedFileVisible(parentValue: any, path: any, visible: any) {
     const parent = normalizeTag(parentValue);
     if (!parent || !path) return;
-    const edges = this.getInheritanceChildren(parent).filter((child) => {
+    // 交集边没有排除名单可写，直接跳过 —— 也省掉一次全量的候选遍历
+    const edges = this.getInheritanceOnlyChildren(parent).filter((child) => {
       const candidate = this.getInheritanceCandidates(parent, child).find((item) => item.path === path);
       return candidate && !candidate.fixed;
     });
     if (!edges.length) return;
     const inheritance = this.getTagInheritanceSettings();
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousExcluded = inheritance.excludedPathsByParentChild;
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExcluded);
     for (const child of edges) this.applyInheritedFileVisibilityToEdge(parent, child, path, visible);
     this.reconcileInheritancePathLists([parent]);
     try {
       await this.saveSettings();
     } catch (error) {
-      inheritance.includedPathsByParentChild = previousIncluded;
       inheritance.excludedPathsByParentChild = previousExcluded;
       throw error;
     }
@@ -1289,7 +1378,11 @@ export class RelationsBehavior {
   reconcileRelationCycles() {
     const inheritance = this.settings.relations && this.settings.relations.tagInheritance;
     if (!inheritance) return;
-    inheritance.childrenByParent = sanitizeAcyclicAdjacency(inheritance.childrenByParent);
+    // 交集边成对存在、天然构成环，豁免环检测
+    inheritance.childrenByParent = sanitizeAcyclicAdjacency(
+      inheritance.childrenByParent,
+      (parent, child) => core.isIntersectionEdge(inheritance, parent, child)
+    );
     const hierarchy = this.settings.relations.noteHierarchy;
     hierarchy.childrenByParentPath = sanitizeAcyclicAdjacency(hierarchy.childrenByParentPath);
     for (const parentPath of Object.keys(hierarchy.displayNamesByParentPath)) {
@@ -1307,6 +1400,10 @@ export class RelationsBehavior {
   async setInheritanceChildren(parentValue: any, childValues: any) {
     const parent = normalizeTag(parentValue);
     if (!parent || isNestedTag(parent)) throw new Error('父标签无效');
+    const inheritance = this.getTagInheritanceSettings();
+    const previousChildren = inheritance.childrenByParent;
+    const existingChildren = new Set(previousChildren[parent] || []);
+    const existingIntersectionPartners = new Set(core.getIntersectionPartners(inheritance, parent));
     const children: any[] = [];
     const seen = new Set();
     for (const rawChild of childValues || []) {
@@ -1316,54 +1413,56 @@ export class RelationsBehavior {
       if (fixedParent && fixedParent !== parent) {
         throw new Error(`${getTagDisplayName(child)} 是固定子标签，请先解除固定`);
       }
-      if (this.wouldCreateTagInheritanceCycle(parent, child)) {
+      if (!existingChildren.has(child) && this.areTagsRelated(parent, child)) {
+        throw new Error(`${getTagDisplayName(parent)} 与 ${getTagDisplayName(child)} 已有关联`);
+      }
+      // 已存在的交集伙伴参与同一序列排序，但不属于继承图，不能拿去做继承环检测。
+      if (!existingIntersectionPartners.has(child) && this.wouldCreateTagInheritanceCycle(parent, child)) {
         throw new Error(`不能建立循环继承：${getTagDisplayName(parent)} → ${getTagDisplayName(child)}`);
       }
       seen.add(child);
       children.push(child);
     }
-    const inheritance = this.getTagInheritanceSettings();
-    const previousChildren = inheritance.childrenByParent;
-    const previousEnabled = inheritance.enabledParents;
     const previousModes = inheritance.modeByParentChild;
     const previousExclusions = inheritance.excludedPathsByParentChild;
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousFixedParents = inheritance.fixedParentByChild;
-    const wasParent = Array.isArray(previousChildren[parent]) && previousChildren[parent].length > 0;
     const stagedChildren = { ...previousChildren };
     const stagedModes = this.cloneParentChildSettings(previousModes);
     const stagedExclusions = this.cloneParentChildSettings(previousExclusions);
-    const stagedIncluded = this.cloneParentChildSettings(previousIncluded);
-    let stagedEnabled = [...previousEnabled];
     if (children.length > 0) {
       stagedChildren[parent] = children;
-      if (!wasParent && !stagedEnabled.includes(parent)) stagedEnabled.push(parent);
     } else {
       delete stagedChildren[parent];
-      stagedEnabled = stagedEnabled.filter((tag) => tag !== parent);
       delete stagedModes[parent];
       delete stagedExclusions[parent];
-      delete stagedIncluded[parent];
     }
     inheritance.childrenByParent = stagedChildren;
-    inheritance.enabledParents = stagedEnabled;
     inheritance.modeByParentChild = stagedModes;
     inheritance.excludedPathsByParentChild = stagedExclusions;
-    inheritance.includedPathsByParentChild = stagedIncluded;
     inheritance.fixedParentByChild = Object.fromEntries(
       Object.entries<any>(previousFixedParents).filter(([child, fixedParent]) => (
         fixedParent !== parent || children.includes(child)
       ))
     );
-    this.reconcileInheritancePathLists([parent]);
+    // 从任一子标签列表移除交集伙伴时，两侧边必须一起删除，避免留下半条关系。
+    const removedIntersectionPartners = Array.from(existingIntersectionPartners)
+      .filter((partner) => !children.includes(partner));
+    for (const partner of removedIntersectionPartners) {
+      stagedChildren[partner] = (stagedChildren[partner] || []).filter((tag: any) => tag !== parent);
+      if (!stagedChildren[partner].length) delete stagedChildren[partner];
+      this.setParentChildValue(stagedModes, parent, partner, undefined);
+      this.setParentChildValue(stagedModes, partner, parent, undefined);
+      this.setParentChildValue(stagedExclusions, parent, partner, undefined);
+      this.setParentChildValue(stagedExclusions, partner, parent, undefined);
+    }
+    this.reconcileIntersectionPairs();
+    this.reconcileInheritancePathLists([parent, ...removedIntersectionPartners]);
     try {
       await this.saveSettings();
     } catch (error) {
       inheritance.childrenByParent = previousChildren;
-      inheritance.enabledParents = previousEnabled;
       inheritance.modeByParentChild = previousModes;
       inheritance.excludedPathsByParentChild = previousExclusions;
-      inheritance.includedPathsByParentChild = previousIncluded;
       inheritance.fixedParentByChild = previousFixedParents;
       throw error;
     }
@@ -1382,50 +1481,54 @@ export class RelationsBehavior {
 
     const inheritance = this.getTagInheritanceSettings();
     const previousChildren = inheritance.childrenByParent;
-    const previousEnabled = inheritance.enabledParents;
     const previousModes = inheritance.modeByParentChild;
     const previousExclusions = inheritance.excludedPathsByParentChild;
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousFixedParents = inheritance.fixedParentByChild;
+    // 父标签管理只读写继承边；交集伙伴不是父级，必须原样保留。
+    const currentInheritanceParents = this.getInheritanceParents(child);
     const affectedParents = Array.from(new Set<any>([
-      ...Object.entries<any>(previousChildren)
-        .filter(([, children]) => children.includes(child))
-        .map(([parent]) => parent),
+      ...currentInheritanceParents,
       ...parents,
     ]));
-    const stagedChildren: any = Object.fromEntries(Object.entries<any>(previousChildren).map(([parent, children]: [any, any]) => [
-      parent,
-      children.filter((tag: any) => tag !== child),
-    ]).filter(([, children]) => children.length));
+    const stagedChildren: any = Object.fromEntries(Object.entries<any>(previousChildren)
+      .map(([parent, children]: [any, any]) => [parent, [...children]]));
+    for (const parent of currentInheritanceParents) {
+      stagedChildren[parent] = (stagedChildren[parent] || []).filter((tag: any) => tag !== child);
+      if (!stagedChildren[parent].length) delete stagedChildren[parent];
+    }
+    const stagedInheritanceAdjacency: any = Object.fromEntries(
+      Object.entries<any>(this.getSortedTagInheritanceAdjacency())
+        .map(([parent, children]) => [parent, children.filter((tag: any) => tag !== child)])
+        .filter(([, children]) => children.length)
+    );
 
     for (const parent of parents) {
-      if (wouldCreateDirectedCycle(stagedChildren, parent, child)) {
+      if (!currentInheritanceParents.includes(parent) && this.areTagsRelated(parent, child)) {
+        throw new Error(`${getTagDisplayName(parent)} 与 ${getTagDisplayName(child)} 已有关联`);
+      }
+      if (wouldCreateDirectedCycle(stagedInheritanceAdjacency, parent, child)) {
         throw new Error(`不能建立循环继承：${getTagDisplayName(parent)} → ${getTagDisplayName(child)}`);
       }
       stagedChildren[parent] = this.sortTagsByVisibleCount([...(stagedChildren[parent] || []), child]);
+      stagedInheritanceAdjacency[parent] = [
+        ...(stagedInheritanceAdjacency[parent] || []).filter((tag: any) => tag !== child),
+        child,
+      ];
     }
 
     inheritance.childrenByParent = stagedChildren;
-    const validParents = new Set(Object.keys(stagedChildren));
-    const newlyPromotedParents = parents.filter((parent) => !previousChildren[parent]?.length);
-    inheritance.enabledParents = Array.from(new Set([
-      ...previousEnabled.filter((tag: any) => validParents.has(tag)),
-      ...newlyPromotedParents,
-    ]));
     inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExclusions);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     inheritance.fixedParentByChild = { ...previousFixedParents };
     if (parents.length === 0) delete inheritance.fixedParentByChild[child];
+    this.reconcileIntersectionPairs();
     this.reconcileInheritancePathLists(affectedParents);
     try {
       await this.saveSettings();
     } catch (error) {
       inheritance.childrenByParent = previousChildren;
-      inheritance.enabledParents = previousEnabled;
       inheritance.modeByParentChild = previousModes;
       inheritance.excludedPathsByParentChild = previousExclusions;
-      inheritance.includedPathsByParentChild = previousIncluded;
       inheritance.fixedParentByChild = previousFixedParents;
       throw error;
     }
@@ -1443,7 +1546,6 @@ export class RelationsBehavior {
     const previousFixedParents = inheritance.fixedParentByChild;
     const previousModes = inheritance.modeByParentChild;
     const previousExclusions = inheritance.excludedPathsByParentChild;
-    const previousIncluded = inheritance.includedPathsByParentChild;
     const previousPinnedTag = this.settings.pinnedTag;
     const nextFixedParents = { ...previousFixedParents };
     if (fixed) nextFixedParents[child] = parent;
@@ -1451,11 +1553,9 @@ export class RelationsBehavior {
     inheritance.fixedParentByChild = nextFixedParents;
     inheritance.modeByParentChild = this.cloneParentChildSettings(previousModes);
     inheritance.excludedPathsByParentChild = this.cloneParentChildSettings(previousExclusions);
-    inheritance.includedPathsByParentChild = this.cloneParentChildSettings(previousIncluded);
     if (fixed) {
       this.setParentChildValue(inheritance.modeByParentChild, parent, child, undefined);
       this.setParentChildValue(inheritance.excludedPathsByParentChild, parent, child, undefined);
-      this.setParentChildValue(inheritance.includedPathsByParentChild, parent, child, undefined);
     }
     this.reconcileInheritancePathLists([parent]);
     if (fixed && this.settings.pinnedTag === child) this.settings.pinnedTag = null;
@@ -1465,7 +1565,6 @@ export class RelationsBehavior {
       inheritance.fixedParentByChild = previousFixedParents;
       inheritance.modeByParentChild = previousModes;
       inheritance.excludedPathsByParentChild = previousExclusions;
-      inheritance.includedPathsByParentChild = previousIncluded;
       this.settings.pinnedTag = previousPinnedTag;
       throw error;
     }
@@ -1479,17 +1578,6 @@ export class RelationsBehavior {
     const children = this.getInheritanceChildren(parent);
     if (!children.includes(child)) children.push(child);
     await this.setInheritanceChildren(parent, children);
-  }
-
-  async toggleTagInheritance(tagValue: any) {
-    const tag = normalizeTag(tagValue);
-    if (!tag || !this.hasInheritanceChildren(tag)) return;
-    const inheritance = this.getTagInheritanceSettings();
-    inheritance.enabledParents = inheritance.enabledParents.includes(tag)
-      ? inheritance.enabledParents.filter((item: any) => item !== tag)
-      : [...inheritance.enabledParents, tag];
-    await this.saveSettings();
-    this.refreshAllTagViews();
   }
 
   /**
@@ -1532,7 +1620,9 @@ export class RelationsBehavior {
     const inheritedFiles = inheritedPaths
       .map((path) => this.app?.vault?.getAbstractFileByPath(path) || indexedFilesByPath?.get(path))
       .filter((file) => file instanceof TFile && file.extension === 'md');
-    const hasActiveInheritance = !!(adjacency[tag] || []).length;
+    // 交集分组：成员是 root 的原生笔记，对 inheritedFiles 与计数零贡献，只影响分组展示
+    const intersectionGroups = this.getIntersectionGroups(tag);
+    const hasActiveInheritance = !!(adjacency[tag] || []).length || intersectionGroups.length > 0;
     const inheritanceTree = hasActiveInheritance
       ? buildTagInheritanceGroupTree(
         tag,
@@ -1540,11 +1630,12 @@ export class RelationsBehavior {
         orderedPathsByTag,
         [],
         fixedTags,
-        null,
         (_sourceTag, path, lineage) => this.isInheritancePathVisible(
           this.createInheritanceEdgesFromLineage(lineage),
           path
-        )
+        ),
+        intersectionGroups,
+        this.getInheritanceChildren(tag)
       )
       : null;
     return {
@@ -1556,10 +1647,14 @@ export class RelationsBehavior {
       inheritanceTree,
       exactCount: exactFiles.length,
       inheritedCount: inheritedFiles.length,
-      inheritanceEnabled: this.isTagInheritanceEnabled(tag),
       hasInheritance: this.hasInheritanceChildren(tag),
-      hasFreeInheritance: this.hasFreeInheritanceBranch(tag),
       hasActiveInheritance,
+      intersectionGroups,
+      // 交集组的内容取决于**对方标签**的笔记集合，而那不会改变本标签的 files 或计数。
+      // 不进签名的话，「某篇笔记新加了对方标签」时旧 DOM 会被原样复用、交集组显示陈旧内容。
+      intersectionSignature: intersectionGroups
+        .map((group: any) => `${group.tag}:${group.paths.join('\n')}`)
+        .join(''),
       fixedTags,
       fixedPaths,
     };
@@ -1602,11 +1697,9 @@ export class RelationsBehavior {
     const participatesInInheritance = !!(
       oldChildren.length ||
       Object.values<any>(inheritance.childrenByParent).some((children: any) => children.includes(oldTag)) ||
-      inheritance.enabledParents.includes(oldTag) ||
       inheritance.excludedPathsByParentChild[oldTag] ||
       inheritance.modeByParentChild[oldTag] ||
-      inheritance.includedPathsByParentChild[oldTag] ||
-      [inheritance.excludedPathsByParentChild, inheritance.modeByParentChild, inheritance.includedPathsByParentChild]
+      [inheritance.excludedPathsByParentChild, inheritance.modeByParentChild]
         .some((parents) => Object.values(parents).some((children) => Object.prototype.hasOwnProperty.call(children, oldTag))) ||
       inheritance.fixedParentByChild[oldTag] ||
       Object.values(inheritance.fixedParentByChild).includes(oldTag)
@@ -1620,9 +1713,7 @@ export class RelationsBehavior {
       inheritance.childrenByParent[parent] = Array.from(new Set(children.map((child: any) => child === oldTag ? newTag : child)))
         .filter((child) => child !== parent);
     }
-    if (inheritance.enabledParents.includes(oldTag)) inheritance.enabledParents.push(newTag);
-    inheritance.enabledParents = Array.from(new Set(inheritance.enabledParents.filter((tag: any) => tag !== oldTag)));
-    for (const key of ['modeByParentChild', 'excludedPathsByParentChild', 'includedPathsByParentChild']) {
+    for (const key of ['modeByParentChild', 'excludedPathsByParentChild']) {
       const migrated: any = {};
       for (const [storedParent, children] of Object.entries<any>(inheritance[key] || {})) {
         const parent = storedParent === oldTag ? newTag : storedParent;
@@ -1632,7 +1723,8 @@ export class RelationsBehavior {
           const existing = migrated[parent]?.[child];
           const merged = Array.isArray(value)
             ? Array.from(new Set([...(Array.isArray(existing) ? existing : []), ...value]))
-            : (existing === 'selected' || value === 'selected' ? 'selected' : value);
+            // 两条边合并成一条时，交集模式优先保留（它比普通继承更强的约束）
+            : (existing === 'intersection' || value === 'intersection' ? 'intersection' : value);
           this.setParentChildValue(migrated, parent, child, merged);
         }
       }
@@ -1645,6 +1737,7 @@ export class RelationsBehavior {
       migratedFixedParents[migratedChild] = migratedParent;
     }
     inheritance.fixedParentByChild = migratedFixedParents;
+    this.reconcileIntersectionPairs();
     this.reconcileRelationCycles();
     this.migrateInlineTagBranchState(oldTag, newTag);
     if (participatesInInheritance) {
@@ -1657,7 +1750,7 @@ export class RelationsBehavior {
     if (!(file instanceof TFile) || file.extension !== 'md' || !oldPath || !file.path) return;
     const inheritance = this.getTagInheritanceSettings();
     let changed = false;
-    for (const key of ['excludedPathsByParentChild', 'includedPathsByParentChild']) {
+    for (const key of ['excludedPathsByParentChild']) {
       for (const children of Object.values(inheritance[key])) {
         for (const [child, paths] of Object.entries<any>(children as any)) {
           if (!paths.includes(oldPath)) continue;
@@ -1702,7 +1795,7 @@ export class RelationsBehavior {
     if (!(file instanceof TFile) || file.extension !== 'md' || !file.path) return;
     const inheritance = this.getTagInheritanceSettings();
     let changed = false;
-    for (const key of ['excludedPathsByParentChild', 'includedPathsByParentChild']) {
+    for (const key of ['excludedPathsByParentChild']) {
       for (const [parent, children] of Object.entries<any>(inheritance[key])) {
         for (const [child, paths] of Object.entries<any>(children as any)) {
           const nextPaths = paths.filter((path: any) => path !== file.path);

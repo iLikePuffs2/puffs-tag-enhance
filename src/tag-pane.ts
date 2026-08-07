@@ -139,10 +139,9 @@ export class TagPaneBehavior {
         files: browseData.files,
         exactCount: browseData.exactCount,
         inheritedCount: browseData.inheritedCount,
-        inheritanceEnabled: browseData.inheritanceEnabled,
         hasInheritance: browseData.hasInheritance,
-        hasFreeInheritance: browseData.hasFreeInheritance,
         hasActiveInheritance: browseData.hasActiveInheritance,
+        intersectionSignature: browseData.intersectionSignature,
         sourcesByPath: browseData.sourcesByPath,
         inheritanceTree: browseData.inheritanceTree,
         fixedSearchTags,
@@ -261,23 +260,6 @@ export class TagPaneBehavior {
     toggleEl.classList.toggle('is-collapsed', !isExpanded);
     toggleEl.setAttribute('aria-hidden', 'true');
     setIcon(toggleEl, 'right-triangle');
-    const canOrderChildren = !isVirtual && item.hasInheritance && item.inheritanceEnabled;
-    if (canOrderChildren) {
-      toggleEl.classList.add('puffs-tag-order-parent-button');
-      toggleEl.dataset.puffsTagOrderTag = tag;
-      toggleEl.dataset.puffsSurface = 'sidebar';
-      toggleEl.dataset.puffsExpanded = String(isExpanded);
-      toggleEl.dataset.puffsHasChildren = 'true';
-      toggleEl.removeAttribute('aria-hidden');
-      toggleEl.tabIndex = 0;
-      toggleEl.setAttribute('role', 'button');
-      this.bindTagHierarchyControlButton(
-        toggleEl,
-        () => this.toggleTagExpansion(tag, view)
-      );
-      this.syncTagOrderButtonSelection(toggleEl);
-    }
-
     const innerEl = document.createElement('div');
     innerEl.className = 'tree-item-inner';
 
@@ -296,16 +278,6 @@ export class TagPaneBehavior {
 
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
-    let inheritanceButtonEl = null;
-    if (!isVirtual && item.hasFreeInheritance) {
-      inheritanceButtonEl = document.createElement('button');
-      inheritanceButtonEl.type = 'button';
-      inheritanceButtonEl.className = 'clickable-icon puffs-tag-inheritance-button';
-      inheritanceButtonEl.dataset.puffsTag = tag;
-      inheritanceButtonEl.classList.toggle('is-active', !!item.inheritanceEnabled);
-      inheritanceButtonEl.setAttribute('aria-label', item.inheritanceEnabled ? '隐藏后代标签笔记' : '显示后代标签笔记');
-      setIcon(inheritanceButtonEl, 'git-merge');
-    }
     if (isExpanded && files.length > 0) {
       scrollBottomButtonEl = document.createElement('button');
       scrollBottomButtonEl.type = 'button';
@@ -327,7 +299,6 @@ export class TagPaneBehavior {
     flairOuterEl.appendChild(countEl);
     tagEl.appendChild(toggleEl);
     tagEl.appendChild(innerEl);
-    if (inheritanceButtonEl) tagEl.appendChild(inheritanceButtonEl);
     if (scrollBottomButtonEl) tagEl.appendChild(scrollBottomButtonEl);
     if (pinButtonEl) tagEl.appendChild(pinButtonEl);
     tagEl.appendChild(flairOuterEl);
@@ -381,7 +352,7 @@ export class TagPaneBehavior {
       rerender: () => options.view?.requestRender?.() ?? this.refreshAllTagViews(),
     };
     const browseData = !isVirtual && (options.browseData || this.getTagBrowseData(tagValue));
-    if ((browseData?.hasActiveInheritance ?? browseData?.inheritanceEnabled) && browseData.inheritanceTree) {
+    if (browseData?.hasActiveInheritance && browseData.inheritanceTree) {
       this.renderTagInheritanceBrowseTree(listEl, browseData.inheritanceTree, renderOptions);
     } else {
       this.renderInlineTagNoteTree(listEl, files, tagValue, isVirtual, renderOptions);

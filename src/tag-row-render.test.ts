@@ -20,9 +20,7 @@ function makeItem(overrides: AnyRecord = {}): AnyRecord {
     files,
     exactCount: 2,
     inheritedCount: 0,
-    inheritanceEnabled: false,
     hasInheritance: false,
-    hasFreeInheritance: false,
     hasActiveInheritance: false,
     sourcesByPath: new Map(),
     inheritanceTree: null,
@@ -148,34 +146,12 @@ describe('标签行 · 计数文案', () => {
   });
 });
 
-describe('标签行 · 继承开关按钮', () => {
-  it('只有存在自由继承分支时出现', () => {
-    expect(render(makeBehavior(), makeItem()).rowEl.querySelector('.puffs-tag-inheritance-button')).toBeNull();
-    expect(render(makeBehavior(), makeItem({ hasFreeInheritance: true })).rowEl
-      .querySelector('.puffs-tag-inheritance-button')).not.toBeNull();
-  });
-
-  it('虚拟标签不出现', () => {
-    const { rowEl } = render(makeBehavior(), makeItem({ isVirtual: true, hasFreeInheritance: true }));
-    expect(rowEl.querySelector('.puffs-tag-inheritance-button')).toBeNull();
-  });
-
-  it('is-active 与提示文案跟随继承开启状态', () => {
-    const off = render(makeBehavior(), makeItem({ hasFreeInheritance: true, inheritanceEnabled: false })).rowEl
-      .querySelector('.puffs-tag-inheritance-button') as HTMLElement;
-    expect(off.classList.contains('is-active')).toBe(false);
-    expect(off.getAttribute('aria-label')).toBe('显示后代标签笔记');
-
-    const on = render(makeBehavior(), makeItem({ hasFreeInheritance: true, inheritanceEnabled: true })).rowEl
-      .querySelector('.puffs-tag-inheritance-button') as HTMLElement;
-    expect(on.classList.contains('is-active')).toBe(true);
-    expect(on.getAttribute('aria-label')).toBe('隐藏后代标签笔记');
-  });
-
-  it('用 git-merge 图标', () => {
-    const { rowEl } = render(makeBehavior(), makeItem({ hasFreeInheritance: true }));
-    const svg = rowEl.querySelector('.puffs-tag-inheritance-button svg.svg-icon');
-    expect(svg?.getAttribute('class')).toContain('lucide-git-merge');
+describe('标签行 · 不再有继承开关按钮', () => {
+  it('任何标签行都不渲染继承开关 —— 该功能已随 enabledParents 一并移除', () => {
+    expect(render(makeBehavior(), makeItem()).rowEl
+      .querySelector('.puffs-tag-inheritance-button')).toBeNull();
+    expect(render(makeBehavior(), makeItem({ hasInheritance: true, hasActiveInheritance: true })).rowEl
+      .querySelector('.puffs-tag-inheritance-button')).toBeNull();
   });
 });
 
@@ -227,50 +203,18 @@ describe('标签行 · 回底与置顶按钮', () => {
   });
 });
 
-describe('标签行 · 父标签的展开/排序合一按钮', () => {
-  const orderableItem = (extra: AnyRecord = {}) =>
-    makeItem({ hasInheritance: true, inheritanceEnabled: true, ...extra });
-
-  it('可排序父标签的折叠箭头升级为可聚焦按钮', () => {
-    const { rowEl } = render(makeBehavior(), orderableItem());
-    const toggleEl = rowEl.querySelector('.puffs-tag-list-toggle') as HTMLElement;
-
-    expect(toggleEl.classList.contains('puffs-tag-order-parent-button')).toBe(true);
-    expect(toggleEl.getAttribute('role')).toBe('button');
-    expect(toggleEl.tabIndex).toBe(0);
-    expect(toggleEl.hasAttribute('aria-hidden')).toBe(false);
-    expect(toggleEl.dataset.puffsTagOrderTag).toBe('#读书');
-    expect(toggleEl.dataset.puffsSurface).toBe('sidebar');
-    expect(toggleEl.dataset.puffsHasChildren).toBe('true');
-  });
-
-  it('dataset.puffsExpanded 跟随展开态', () => {
-    expect((render(makeBehavior(), orderableItem()).rowEl
-      .querySelector('.puffs-tag-list-toggle') as HTMLElement).dataset.puffsExpanded).toBe('false');
-    expect((render(makeBehavior(['#读书']), orderableItem()).rowEl
-      .querySelector('.puffs-tag-list-toggle') as HTMLElement).dataset.puffsExpanded).toBe('true');
-  });
-
-  it('继承关闭或虚拟标签时不升级，保持纯装饰箭头', () => {
-    for (const item of [
-      orderableItem({ inheritanceEnabled: false }),
-      orderableItem({ isVirtual: true }),
-      makeItem(),
-    ]) {
-      const toggleEl = render(makeBehavior(), item).rowEl.querySelector('.puffs-tag-list-toggle') as HTMLElement;
-      expect(toggleEl.classList.contains('puffs-tag-order-parent-button')).toBe(false);
-      expect(toggleEl.getAttribute('aria-hidden')).toBe('true');
-    }
-  });
-
-  it('升级后仍绑定展开回调（长按才进排序）', () => {
-    const behavior = makeBehavior();
-    let bound = 0;
-    behavior.bindTagHierarchyControlButton = () => {
-      bound += 1;
-    };
-    render(behavior, orderableItem());
-    expect(bound).toBe(1);
+describe('标签行 · 折叠箭头是纯装饰', () => {
+  // 子标签排序已搬进管理子标签弹窗，箭头不再兼任排序入口
+  it.each([
+    ['有子标签的父标签', { hasInheritance: true }],
+    ['虚拟标签', { isVirtual: true, hasInheritance: true }],
+    ['普通标签', {}],
+  ])('%s：不升级为可聚焦按钮', (_label, extra) => {
+    const toggleEl = render(makeBehavior(), makeItem(extra as AnyRecord)).rowEl
+      .querySelector('.puffs-tag-list-toggle') as HTMLElement;
+    expect(toggleEl.classList.contains('puffs-tag-order-parent-button')).toBe(false);
+    expect(toggleEl.getAttribute('aria-hidden')).toBe('true');
+    expect(toggleEl.dataset.puffsTagOrderTag).toBeUndefined();
   });
 });
 

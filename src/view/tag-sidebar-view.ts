@@ -337,7 +337,6 @@ class PuffsTagSidebarView extends ItemView {
       this.noteCardSearchState
     );
     this.updateToolbarState(items.display, items.matching);
-    plugin.scheduleTagOrderModeVisibilityReconcile();
 
     // 换了搜索条件时回到顶部；否则保持用户原来的滚动位置与焦点
     const shouldResetScroll = this.searchQuery !== this.lastRenderedSearchQuery
@@ -661,15 +660,6 @@ class PuffsTagSidebarView extends ItemView {
       return;
     }
 
-    const inheritanceButtonEl = target.closest('.puffs-tag-inheritance-button');
-    if (inheritanceButtonEl) {
-      stop();
-      plugin.toggleTagInheritance(inheritanceButtonEl.dataset.puffsTag).catch((error: any) => {
-        console.error('[Puffs Tag Enhance] Failed to toggle tag inheritance:', error);
-      });
-      return;
-    }
-
     const scrollBottomEl = target.closest('.puffs-tag-scroll-bottom-button');
     if (scrollBottomEl) {
       stop();
@@ -700,8 +690,6 @@ class PuffsTagSidebarView extends ItemView {
       return;
     }
 
-    if (target.closest('.puffs-tag-order-parent-button')) return;
-
     const noteCardEl = target.closest('.puffs-tag-note-card');
     if (noteCardEl) {
       stop();
@@ -712,7 +700,6 @@ class PuffsTagSidebarView extends ItemView {
     const tagEl = target.closest('.tag-pane-tag[data-puffs-tag]');
     if (!tagEl) return;
     stop();
-    if (plugin.isTagOrderModeActive(tagEl.dataset.puffsTag)) plugin.exitTagOrderMode(false);
     plugin.toggleTagExpansion(tagEl.dataset.puffsTag, this);
   }
 

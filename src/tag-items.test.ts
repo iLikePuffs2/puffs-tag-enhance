@@ -20,9 +20,7 @@ function makeBrowseData(tag: string, fileCount = 1, extra: Record<string, unknow
     inheritedFiles: [],
     exactCount: files.length,
     inheritedCount: 0,
-    inheritanceEnabled: false,
     hasInheritance: false,
-    hasFreeInheritance: false,
     hasActiveInheritance: false,
     sourcesByPath: new Map(),
     inheritanceTree: null,
@@ -111,10 +109,9 @@ describe('标签项装配 · 两边共同的行为', () => {
 });
 
 describe('标签项装配 · 两边的差异（阶段 3 合并时需消除）', () => {
-  it('差异一：侧边栏透传完整 browseData 字段，标签系统页缺 5 个', () => {
+  it('差异一：侧边栏透传完整 browseData 字段，标签系统页缺 3 个', () => {
     const tags = ['#读书'];
     const browse = () => makeBrowseData('#读书', 2, {
-      hasFreeInheritance: true,
       hasActiveInheritance: true,
       inheritanceTree: { tag: '#读书' },
     });
@@ -122,16 +119,14 @@ describe('标签项装配 · 两边的差异（阶段 3 合并时需消除）', 
     const sidebarItem = makeSidebarBehavior(tags, browse).getListModeItems({}, '', false)[0] as Record<string, unknown>;
     const shelfItem = makeShelfBehavior(tags, browse).getTagShelfItems('', false)[0] as Record<string, unknown>;
 
-    // 侧边栏：字段齐全，渲染层才能画出继承开关与继承树
-    expect(sidebarItem.hasFreeInheritance).toBe(true);
+    // 侧边栏：字段齐全，渲染层才能画出继承树
     expect(sidebarItem.hasActiveInheritance).toBe(true);
     expect(sidebarItem.inheritanceTree).toEqual({ tag: '#读书' });
     expect(sidebarItem.browseData).toBeDefined();
     expect(sidebarItem.fixedSearchTags).toEqual([]);
 
-    // 标签系统页：这 5 个字段全部缺失 —— 所以该页永远画不出继承开关按钮。
+    // 标签系统页：这 3 个字段全部缺失 —— 所以该页永远画不出继承树。
     // 这是双份实现跑偏的实证，合并后应与上面一致。
-    expect(shelfItem.hasFreeInheritance).toBeUndefined();
     expect(shelfItem.hasActiveInheritance).toBeUndefined();
     expect(shelfItem.inheritanceTree).toBeUndefined();
     expect(shelfItem.browseData).toBeUndefined();

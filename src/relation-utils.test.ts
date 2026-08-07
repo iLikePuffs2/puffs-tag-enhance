@@ -7,7 +7,6 @@ import {
   buildVisibleHierarchyForest,
   buildTagInheritanceGroupTree,
   getHierarchySearchKeywordError,
-  mergeInheritedPaths,
   moveHierarchyNavigation,
   normalizeHierarchySearchKeyword,
   parseHierarchySearch,
@@ -38,42 +37,16 @@ describe('关系 DAG', () => {
 });
 
 describe('标签继承合并', () => {
-  it('父精确笔记优先、子分支有序、路径去重后应用排除', () => {
-    const result = mergeInheritedPaths(
-      ['exact.md', 'shared.md'],
-      [
-        { source: '#子一', paths: ['one.md', 'shared.md', 'excluded.md'] },
-        { source: '#子二', paths: ['two.md', 'one.md'] },
-      ],
-      ['excluded.md']
-    );
-    expect(result.inheritedPaths).toEqual(['one.md', 'two.md']);
-    expect(result.sourcesByPath.get('one.md')).toEqual(['#子一', '#子二']);
-    expect(result.sourcesByPath.get('shared.md')).toEqual(['#子一']);
-  });
-
-  it('选择名单只放行指定自由路径且固定分支始终放行', () => {
-    const result = mergeInheritedPaths(
-      [],
-      [
-        { source: '#自由', paths: ['选择.md', '未选.md'] },
-        { source: '#固定', paths: ['固定.md'], fixed: true },
-      ],
-      [],
-      ['选择.md']
-    );
-    expect(result.inheritedPaths).toEqual(['选择.md', '固定.md']);
-
+  it('排除名单挡下自由分支的路径，固定分支始终放行', () => {
     const tree = buildTagInheritanceGroupTree(
       '#父',
       { '#父': ['#自由', '#固定'] },
-      { '#父': [], '#自由': ['选择.md', '未选.md'], '#固定': ['固定.md'] },
-      [],
-      new Set(['#固定']),
-      ['选择.md']
+      { '#父': [], '#自由': ['保留.md', '排除.md'], '#固定': ['固定.md'] },
+      ['排除.md'],
+      new Set(['#固定'])
     );
     expect(tree?.children.map((child) => [child.tag, child.paths]))
-      .toEqual([['#自由', ['选择.md']], ['#固定', ['固定.md']]]);
+      .toEqual([['#自由', ['保留.md']], ['#固定', ['固定.md']]]);
   });
 
   it('按标签关系递归构建分组、保留跨组重复并统计子树去重数量', () => {

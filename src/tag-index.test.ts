@@ -55,7 +55,7 @@ function makeBehavior(options: {
     tagBoundNoteByTag: {},
     newNotePosition,
     pinnedTag: null,
-    relations: { tagInheritance: { childrenByParent: {}, enabledParents: [] } },
+    relations: { tagInheritance: { childrenByParent: {} } },
   };
   behavior.tagFileIndex = new Map();
   behavior.expandedTags = new Set<string>();

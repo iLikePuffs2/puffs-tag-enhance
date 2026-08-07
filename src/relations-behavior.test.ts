@@ -12,13 +12,11 @@ function createBehavior(noteHierarchy: any, exclusions: Record<string, string[]>
       version: 1,
       tagInheritance: {
         childrenByParent: {},
-        enabledParents: [],
         excludedPathsByParentChild: Object.fromEntries(Object.entries(exclusions).map(([parent, paths]) => [
           parent,
           { '#子': paths },
         ])),
         modeByParentChild: {},
-        includedPathsByParentChild: {},
         fixedParentByChild: {},
       },
       noteHierarchy,
@@ -157,10 +155,8 @@ describe('子标签手动排序', () => {
         '#父': ['#少', '#多', '#继承'],
         '#继承': ['#后代'],
       },
-      enabledParents: ['#继承'],
       excludedPathsByParentChild: { '#继承': { '#后代': ['后代/排除.md'] } },
       modeByParentChild: {},
-      includedPathsByParentChild: {},
       fixedParentByChild: {},
     };
     const files = (paths: string[]) => paths.map((path) => new (TFile as any)(path));
@@ -190,7 +186,7 @@ describe('子标签手动排序', () => {
     ]);
 
     expect(behavior.initializeTagInheritanceOrder()).toBe(true);
-    expect(behavior.settings.relations.version).toBe(6);
+    expect(behavior.settings.relations.version).toBe(7);
     expect(behavior.settings.relations.tagInheritance.childrenByParent).toEqual({
       '#父': ['#多', '#少'],
       '#另一父': ['#多', '#少'],
@@ -261,7 +257,7 @@ describe('批量父子关系', () => {
     behavior.collapsedInlineHierarchyBranches = new Set();
     behavior.inlineHierarchyExpansionVersion = 0;
     behavior.getTagBrowseData = () => ({
-      inheritanceEnabled: true,
+      hasActiveInheritance: true,
       inheritanceTree: {
         tag: '#爱情',
         paths: ['原生.md'],
@@ -392,10 +388,8 @@ describe('批量父子关系', () => {
     const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
     behavior.settings.relations.tagInheritance = {
       childrenByParent: { '#旧父': ['#子'], '#保留父': ['#其他'] },
-      enabledParents: ['#旧父', '#保留父'],
       excludedPathsByParentChild: { '#旧父': { '#子': ['旧.md'] }, '#保留父': { '#其他': ['保留.md'] } },
       modeByParentChild: {},
-      includedPathsByParentChild: {},
       fixedParentByChild: {},
     };
     behavior.sortTagsByVisibleCount = (tags: string[]) => [...tags].sort();
@@ -404,10 +398,8 @@ describe('批量父子关系', () => {
     await behavior.setInheritanceParents('#子', ['#新父']);
     expect(behavior.settings.relations.tagInheritance).toEqual({
       childrenByParent: { '#保留父': ['#其他'], '#新父': ['#子'] },
-      enabledParents: ['#保留父', '#新父'],
       excludedPathsByParentChild: { '#保留父': { '#其他': ['保留.md'] } },
       modeByParentChild: {},
-      includedPathsByParentChild: {},
       fixedParentByChild: {},
     });
     expect(behavior.refreshHierarchyViews).toHaveBeenCalledOnce();
@@ -425,10 +417,8 @@ describe('批量父子关系', () => {
         '#父': ['#旧子'],
         '#旧子': ['#孙'],
       },
-      enabledParents: ['#父', '#旧子'],
       excludedPathsByParentChild: { '#旧子': { '#孙': ['排除.md'] } },
       modeByParentChild: {},
-      includedPathsByParentChild: {},
       fixedParentByChild: {},
     };
     behavior.collapsedInlineHierarchyBranches = new Set([
@@ -445,10 +435,8 @@ describe('批量父子关系', () => {
         '#父': ['#新子'],
         '#新子': ['#孙'],
       },
-      enabledParents: ['#父', '#新子'],
       excludedPathsByParentChild: { '#新子': { '#孙': ['排除.md'] } },
       modeByParentChild: {},
-      includedPathsByParentChild: {},
       fixedParentByChild: {},
     });
     expect(behavior.collapsedInlineHierarchyBranches).toEqual(new Set([
@@ -483,23 +471,20 @@ describe('批量父子关系', () => {
     expect(tagEl.dataset).not.toHaveProperty('puffsTag');
   });
 
-  it('新父标签默认启用，已有父标签保留手动关闭状态', async () => {
+  it('建立父子关系后继承立即生效，无需再开开关', async () => {
     const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
     behavior.refreshHierarchyViews = vi.fn();
 
     await behavior.setInheritanceChildren('#父', ['#子']);
-    expect(behavior.settings.relations.tagInheritance.enabledParents).toEqual(['#父']);
-
-    behavior.settings.relations.tagInheritance.enabledParents = [];
-    await behavior.setInheritanceChildren('#父', ['#子', '#另一个']);
-    expect(behavior.settings.relations.tagInheritance.enabledParents).toEqual([]);
+    expect(behavior.settings.relations.tagInheritance.childrenByParent['#父']).toEqual(['#子']);
+    // 继承开关已移除，邻接表里出现即生效
+    expect(behavior.getSortedTagInheritanceAdjacency()['#父']).toEqual(['#子']);
 
     await behavior.setInheritanceChildren('#父', []);
-    await behavior.setInheritanceChildren('#父', ['#子']);
-    expect(behavior.settings.relations.tagInheritance.enabledParents).toEqual(['#父']);
+    expect(behavior.getSortedTagInheritanceAdjacency()['#父']).toBeUndefined();
   });
 
-  it('新父标签默认启用的保存失败时完整回滚', async () => {
+  it('保存失败时完整回滚', async () => {
     const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
     behavior.refreshHierarchyViews = vi.fn();
     const snapshot = structuredClone(behavior.settings.relations.tagInheritance);
@@ -510,7 +495,7 @@ describe('批量父子关系', () => {
     expect(behavior.refreshHierarchyViews).not.toHaveBeenCalled();
   });
 
-  it('新增关系默认为全部继承，切换该关系后从当前可见集合开始', async () => {
+  it('新增关系默认为继承，可切换为交集', async () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), [
       '父.md', '子一.md', '子二.md',
     ]) as any;
@@ -520,25 +505,22 @@ describe('批量父子关系', () => {
     ]);
 
     await behavior.setInheritanceChildren('#父', ['#子']);
-
     expect(behavior.getTagInheritanceMode('#父', '#子')).toBe('all');
-    await behavior.setTagInheritanceMode('#父', '#子', 'selected');
-    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual(['子一.md', '子二.md']);
+
+    await behavior.setTagInheritanceMode('#父', '#子', 'intersection');
+    expect(behavior.getTagInheritanceMode('#父', '#子')).toBe('intersection');
   });
 
-  it('选择继承按路径去重并保留全部来源，固定路径始终显示', async () => {
+  it('候选按路径去重并保留全部来源，固定路径始终显示', async () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), [
       '父.md', '选中.md', '未选.md', '共享.md', '固定.md',
     ]) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = {
       '#父': ['#子一', '#子二', '#父-固定'],
     };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#父'];
-    behavior.settings.relations.tagInheritance.modeByParentChild = {
-      '#父': { '#子一': 'selected', '#子二': 'selected' },
-    };
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = {
-      '#父': { '#子一': ['选中.md', '共享.md'], '#子二': [] },
+    // 「未选.md」现在靠排除名单藏起来，不再需要白名单
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = {
+      '#父': { '#子二': ['未选.md', '共享.md'] },
     };
     behavior.settings.relations.tagInheritance.fixedParentByChild = { '#父-固定': '#父' };
     behavior.tagFileIndex = new Map([
@@ -557,96 +539,50 @@ describe('批量父子关系', () => {
       .toEqual(['父.md', '选中.md', '共享.md', '固定.md']);
   });
 
-  it('切换模式保持当前可见集合，之后的新笔记遵循目标模式', async () => {
+  it('切到交集会清空该边的排除名单', async () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), [
-      '一.md', '二.md', '新增.md',
+      '一.md', '二.md',
     ]) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#父'];
     behavior.settings.relations.tagInheritance.excludedPathsByParentChild = { '#父': { '#子': ['二.md'] } };
     behavior.tagFileIndex = new Map([['#子', [
       behavior.app.vault.getAbstractFileByPath('一.md'),
       behavior.app.vault.getAbstractFileByPath('二.md'),
     ]]]);
 
-    await behavior.setTagInheritanceMode('#父', '#子', 'selected');
-    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual(['一.md']);
-    expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['一.md']);
-
-    behavior.tagFileIndex.get('#子').push(behavior.app.vault.getAbstractFileByPath('新增.md'));
-    expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['一.md']);
-
-    await behavior.setTagInheritanceMode('#父', '#子', 'all');
-    expect(behavior.settings.relations.tagInheritance.excludedPathsByParentChild['#父']['#子']).toEqual(['二.md', '新增.md']);
-    expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['一.md']);
+    await behavior.setTagInheritanceMode('#父', '#子', 'intersection');
+    expect(behavior.getExcludedInheritedPaths('#父', '#子')).toEqual([]);
+    // 交集边不再向上传继承笔记，成员改由两标签的共同笔记实时算出
+    expect(behavior.getTagBrowseData('#父').inheritedFiles).toEqual([]);
   });
 
   it('模式切换保存失败时完整回滚', async () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), ['一.md']) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#父'];
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = { '#父': { '#子': ['一.md'] } };
     behavior.tagFileIndex = new Map([['#子', [behavior.app.vault.getAbstractFileByPath('一.md')]]]);
     behavior.saveSettings.mockRejectedValueOnce(new Error('失败'));
 
-    await expect(behavior.setTagInheritanceMode('#父', '#子', 'selected')).rejects.toThrow('失败');
+    await expect(behavior.setTagInheritanceMode('#父', '#子', 'intersection')).rejects.toThrow('失败');
     expect(behavior.getTagInheritanceMode('#父', '#子')).toBe('all');
-    expect(behavior.settings.relations.tagInheritance.includedPathsByParentChild).toEqual({});
+    expect(behavior.getExcludedInheritedPaths('#父', '#子')).toEqual(['一.md']);
   });
 
-  it('继承名单跟随笔记路径变更并使用短菜单文案', () => {
+  it('排除名单跟随笔记路径变更并使用短菜单文案', () => {
     const behavior = createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }) as any;
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = { '#父': { '#子': ['旧.md', '删除.md'] } };
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = { '#父': { '#子': ['旧.md', '删除.md'] } };
     behavior.handleRelationFileRename(new (TFile as any)('目录/新.md'), '旧.md');
     behavior.handleRelationFileDelete(new (TFile as any)('删除.md'));
 
-    expect(behavior.settings.relations.tagInheritance.includedPathsByParentChild).toEqual({ '#父': { '#子': ['目录/新.md'] } });
+    expect(behavior.settings.relations.tagInheritance.excludedPathsByParentChild).toEqual({ '#父': { '#子': ['目录/新.md'] } });
     expect(behavior.getInheritedFileRemovalTitle('#很长的父标签')).toBe('从 很长的父标签 中排除');
   });
 
-  it('v4 父级模式和名单迁移到每条直接子关系并按分支清理', () => {
-    const behavior = Object.create(RelationsBehavior.prototype) as any;
-    behavior.settings = {
-      relations: {
-        version: 4,
-        tagInheritance: {
-          childrenByParent: { '#父': ['#子一', '#子二'] },
-          enabledParents: ['#父'],
-          excludedPathsByParent: { '#父': ['一.md', '二.md', '无关.md'] },
-          modeByParent: { '#父': 'selected' },
-          includedPathsByParent: { '#父': ['一.md', '二.md', '共享.md', '无关.md'] },
-          fixedParentByChild: {},
-        },
-        noteHierarchy: { childrenByParentPath: {}, displayNamesByParentPath: {} },
-      },
-    };
-    behavior.normalizeRelationSettings(behavior.settings.relations);
-    const files = ['一.md', '二.md', '共享.md'].map((path) => new (TFile as any)(path));
-    behavior.tagFileIndex = new Map([
-      ['#子一', [files[0], files[2]]],
-      ['#子二', [files[1], files[2]]],
-    ]);
-
-    expect(behavior.initializeTagInheritanceOrder()).toBe(true);
-    expect(behavior.settings.relations.version).toBe(6);
-    expect(behavior.settings.relations.tagInheritance.modeByParentChild).toEqual({
-      '#父': { '#子一': 'selected', '#子二': 'selected' },
-    });
-    expect(behavior.settings.relations.tagInheritance.includedPathsByParentChild).toEqual({
-      '#父': { '#子一': ['一.md', '共享.md'], '#子二': ['二.md', '共享.md'] },
-    });
-    expect(behavior.settings.relations.tagInheritance.excludedPathsByParentChild).toEqual({
-      '#父': { '#子一': ['一.md'], '#子二': ['二.md'] },
-    });
-  });
-
-  it('不同直接子关系独立过滤，多来源按任一允许显示且右键排除一次写入全部来源', async () => {
+  it('不同直接子关系独立过滤，右键排除一次写入全部来源', async () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), [
       '甲.md', '乙.md', '共享.md',
     ]) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子一', '#子二'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#父'];
-    behavior.settings.relations.tagInheritance.modeByParentChild = { '#父': { '#子一': 'selected' } };
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = { '#父': { '#子一': ['甲.md', '共享.md'] } };
     behavior.settings.relations.tagInheritance.excludedPathsByParentChild = { '#父': { '#子二': ['乙.md'] } };
     behavior.tagFileIndex = new Map([
       ['#子一', ['甲.md', '共享.md'].map((path) => behavior.app.vault.getAbstractFileByPath(path))],
@@ -654,174 +590,94 @@ describe('批量父子关系', () => {
     ]);
 
     expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['甲.md', '共享.md']);
+    // 共享.md 来自两条边，右键排除要一次写进两条边、只落盘一次
     await behavior.setInheritedFileVisible('#父', '共享.md', false);
-    expect(behavior.getIncludedInheritedPaths('#父', '#子一')).toEqual(['甲.md']);
+    expect(behavior.getExcludedInheritedPaths('#父', '#子一')).toEqual(['共享.md']);
     expect(behavior.getExcludedInheritedPaths('#父', '#子二')).toEqual(['乙.md', '共享.md']);
     expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['甲.md']);
     expect(behavior.saveSettings).toHaveBeenCalledOnce();
   });
 
-  it('深层笔记由下游放行决定，祖先白名单不再记录它们', async () => {
+  it('深层新增的笔记默认冒到祖先，无需在祖先侧做任何登记', () => {
+    const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), [
+      '孙一.md', '孙二.md',
+    ]) as any;
+    behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子'], '#子': ['#孙'] };
+    behavior.tagFileIndex = new Map([['#孙', [behavior.app.vault.getAbstractFileByPath('孙一.md')]]]);
+
+    expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['孙一.md']);
+
+    // 给最深处新增一篇，祖先侧不做任何改动就该看得到 —— 这是单名单化最直接的收益
+    behavior.tagFileIndex.get('#孙').push(behavior.app.vault.getAbstractFileByPath('孙二.md'));
+    expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['孙一.md', '孙二.md']);
+  });
+
+  it('在祖先侧排除一篇只影响祖先，不影响中间层', async () => {
+    const paths = ['甲.md', '乙.md', '丙.md'];
+    const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), paths) as any;
+    behavior.settings.relations.tagInheritance.childrenByParent = { '#爱情': ['#亲昵'], '#亲昵': ['#言语'] };
+    behavior.tagFileIndex = new Map([
+      ['#言语', paths.map((path) => behavior.app.vault.getAbstractFileByPath(path))],
+    ]);
+
+    expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path)).toEqual(paths);
+
+    await behavior.setInheritedFileVisibleForEdge('#爱情', '#亲昵', '丙.md', false);
+    expect(behavior.getExcludedInheritedPaths('#爱情', '#亲昵')).toEqual(['丙.md']);
+    expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path)).toEqual(['甲.md', '乙.md']);
+    expect(behavior.getTagBrowseData('#亲昵').inheritedFiles.map((file: any) => file.path)).toEqual(paths);
+  });
+
+  it('恢复一篇笔记会清掉整条路径上每一层的排除记录', async () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), ['孙.md']) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子'], '#子': ['#孙'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#父', '#子'];
-    behavior.settings.relations.tagInheritance.modeByParentChild = {
-      '#父': { '#子': 'selected' },
-      '#子': { '#孙': 'selected' },
-    };
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = {
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = {
       '#父': { '#子': ['孙.md'] },
       '#子': { '#孙': ['孙.md'] },
     };
     behavior.tagFileIndex = new Map([['#孙', [behavior.app.vault.getAbstractFileByPath('孙.md')]]]);
 
-    expect(behavior.getInheritanceCandidates('#父', '#子').map((candidate: any) => candidate.path)).toEqual(['孙.md']);
-    expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['孙.md']);
-    await behavior.setIncludedInheritedPaths('#子', '#孙', []);
-    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual([]);
-    expect(behavior.getInheritanceCandidates('#父', '#子')).toEqual([]);
     expect(behavior.getTagBrowseData('#父').inheritedFiles).toEqual([]);
 
-    // 孙.md 不是 #子 的直接笔记，祖先白名单对它不起作用，reconcile 也会把这条死数据清掉；
-    // 下游一放行，祖先下立刻恢复可见，不需要回到祖先边二次勾选
-    await behavior.setIncludedInheritedPaths('#子', '#孙', ['孙.md']);
-    expect(behavior.getInheritanceCandidates('#父', '#子').map((candidate: any) => candidate.path)).toEqual(['孙.md']);
-    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual([]);
-    expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['孙.md']);
-  });
-
-  it('三层选择继承下，下游新放行的笔记在祖先下立即可见，祖先只能逐篇排除', async () => {
-    const paths = ['甲.md', '乙.md', '丙.md', '丁.md'];
-    const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), paths) as any;
-    behavior.settings.relations.tagInheritance.childrenByParent = { '#爱情': ['#亲昵'], '#亲昵': ['#言语'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#爱情', '#亲昵'];
-    behavior.settings.relations.tagInheritance.modeByParentChild = {
-      '#爱情': { '#亲昵': 'selected' },
-      '#亲昵': { '#言语': 'selected' },
-    };
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = {
-      '#爱情': { '#亲昵': ['甲.md'] },
-      '#亲昵': { '#言语': ['甲.md'] },
-    };
-    behavior.tagFileIndex = new Map([
-      ['#言语', paths.map((path) => behavior.app.vault.getAbstractFileByPath(path))],
-    ]);
-
-    expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path)).toEqual(['甲.md']);
-
-    // 在「亲昵」为「言语」新勾选三张，无需回到「爱情」二次勾选。
-    // 「爱情→亲昵」的白名单只管 #亲昵 自己的笔记，这些孙笔记不进也不该进这份名单。
-    await behavior.setIncludedInheritedPaths('#亲昵', '#言语', paths);
-    expect(behavior.getIncludedInheritedPaths('#爱情', '#亲昵')).toEqual([]);
-    expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path)).toEqual(paths);
-    expect(behavior.getTagBrowseData('#亲昵').inheritedFiles.map((file: any) => file.path)).toEqual(paths);
-
-    // 事后在「爱情」单独取消一张：写进「爱情→亲昵」的黑名单，只影响爱情，不影响亲昵
-    await behavior.setInheritedFileVisibleForEdge('#爱情', '#亲昵', '丙.md', false);
-    expect(behavior.getExcludedInheritedPaths('#爱情', '#亲昵')).toEqual(['丙.md']);
-    expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path))
-      .toEqual(['甲.md', '乙.md', '丁.md']);
-    expect(behavior.getTagBrowseData('#亲昵').inheritedFiles.map((file: any) => file.path)).toEqual(paths);
-  });
-
-  it('祖先边为全部继承时，下游新放行会移出祖先黑名单', async () => {
-    const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), ['孙.md']) as any;
-    behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子'], '#子': ['#孙'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#父', '#子'];
-    behavior.settings.relations.tagInheritance.modeByParentChild = { '#子': { '#孙': 'selected' } };
-    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = { '#父': { '#子': ['孙.md'] } };
-    behavior.tagFileIndex = new Map([['#孙', [behavior.app.vault.getAbstractFileByPath('孙.md')]]]);
-
-    expect(behavior.getTagBrowseData('#父').inheritedFiles).toEqual([]);
-    await behavior.setIncludedInheritedPaths('#子', '#孙', ['孙.md']);
+    // 只在最深那条边恢复，祖先边上的排除记录也要一并摘掉，否则还是冒不上去
+    await behavior.setInheritedFileVisibleForEdge('#子', '#孙', '孙.md', true);
+    expect(behavior.getExcludedInheritedPaths('#子', '#孙')).toEqual([]);
     expect(behavior.getExcludedInheritedPaths('#父', '#子')).toEqual([]);
     expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['孙.md']);
   });
 
-  it('下游取消放行不会向上传播，祖先保持自身名单', async () => {
-    const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), ['甲.md', '乙.md']) as any;
-    behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子'], '#子': ['#孙'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#父', '#子'];
-    behavior.settings.relations.tagInheritance.modeByParentChild = {
-      '#父': { '#子': 'selected' },
-      '#子': { '#孙': 'selected' },
-    };
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = {
-      '#父': { '#子': ['甲.md', '乙.md'] },
-      '#子': { '#孙': ['甲.md', '乙.md'] },
-    };
-    behavior.tagFileIndex = new Map([
-      ['#孙', ['甲.md', '乙.md'].map((path) => behavior.app.vault.getAbstractFileByPath(path))],
-    ]);
-
-    await behavior.setIncludedInheritedPaths('#子', '#孙', ['甲.md']);
-    // 乙.md 在下游被取消，祖先下随之消失；祖先白名单里的孙笔记是死数据，被 reconcile 清空
-    expect(behavior.getIncludedInheritedPaths('#父', '#子')).toEqual([]);
-    expect(behavior.getTagBrowseData('#父').inheritedFiles.map((file: any) => file.path)).toEqual(['甲.md']);
-  });
-
-  it('v5 名单升级时按下游放行范围从后向前清理', () => {
-    const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), [
-      '保留.md', '清理一.md', '清理二.md',
-    ]) as any;
-    behavior.settings.relations.version = 5;
-    behavior.settings.relations.tagInheritance.childrenByParent = { '#爱情': ['#亲昵'], '#亲昵': ['#言语'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#爱情', '#亲昵'];
-    behavior.settings.relations.tagInheritance.modeByParentChild = {
-      '#爱情': { '#亲昵': 'selected' },
-      '#亲昵': { '#言语': 'selected' },
-    };
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = {
-      '#爱情': { '#亲昵': ['保留.md', '清理一.md', '清理二.md'] },
-      '#亲昵': { '#言语': ['保留.md'] },
-    };
-    behavior.tagFileIndex = new Map([['#言语', ['保留.md', '清理一.md', '清理二.md']
-      .map((path) => behavior.app.vault.getAbstractFileByPath(path))]]);
-
-    expect(behavior.initializeTagInheritanceOrder()).toBe(true);
-    expect(behavior.settings.relations.version).toBe(6);
-    // 三条都是 #言语 的笔记、不是 #亲昵 的直接笔记，整份跨层白名单都是死数据
-    expect(behavior.getIncludedInheritedPaths('#爱情', '#亲昵')).toEqual([]);
-    expect(behavior.getTagBrowseData('#爱情').inheritedFiles.map((file: any) => file.path)).toEqual(['保留.md']);
-  });
-
-  it('多路径内部逐层取交集，路径之间任一完整放行即可显示', () => {
+  it('多路径逐层判定，任一条完整放行即可显示', () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), ['共享.md']) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = {
       '#根': ['#左', '#右'], '#左': ['#叶'], '#右': ['#叶'],
     };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#根', '#左', '#右'];
-    behavior.settings.relations.tagInheritance.modeByParentChild = {
-      '#根': { '#左': 'selected', '#右': 'selected' },
-      '#左': { '#叶': 'selected' }, '#右': { '#叶': 'selected' },
-    };
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = {
-      '#根': { '#左': ['共享.md'], '#右': ['共享.md'] },
-      '#右': { '#叶': ['共享.md'] },
+    // 左路被拦下，右路通畅 —— 只要有一条路走得通就显示
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = {
+      '#左': { '#叶': ['共享.md'] },
     };
     behavior.tagFileIndex = new Map([['#叶', [behavior.app.vault.getAbstractFileByPath('共享.md')]]]);
 
     expect(behavior.getInheritanceCandidates('#根', '#左')).toEqual([]);
     expect(behavior.getInheritanceCandidates('#根', '#右').map((candidate: any) => candidate.path)).toEqual(['共享.md']);
     expect(behavior.getTagBrowseData('#根').inheritedFiles.map((file: any) => file.path)).toEqual(['共享.md']);
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild['#右']['#叶'] = [];
+
+    // 把右路也拦下，两条路都不通，笔记消失
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild['#右'] = { '#叶': ['共享.md'] };
     expect(behavior.getTagBrowseData('#根').inheritedFiles).toEqual([]);
   });
 
   it('固定边只豁免自身，混合路径仍受普通边过滤', () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), ['固定后代.md']) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = { '#根': ['#自由'], '#自由': ['#固定'] };
-    behavior.settings.relations.tagInheritance.enabledParents = ['#根', '#自由'];
     behavior.settings.relations.tagInheritance.fixedParentByChild = { '#固定': '#自由' };
-    behavior.settings.relations.tagInheritance.modeByParentChild = { '#根': { '#自由': 'selected' } };
     behavior.tagFileIndex = new Map([['#固定', [behavior.app.vault.getAbstractFileByPath('固定后代.md')]]]);
 
     const candidate = behavior.getInheritanceCandidates('#根', '#自由')[0];
     expect(candidate.path).toBe('固定后代.md');
     expect(candidate.fixed).toBe(false);
-    // 上层的白名单不拦深层笔记，但上层的黑名单仍然拦得住 —— 固定边只豁免它自己那一段
     expect(behavior.getTagBrowseData('#根').inheritedFiles.map((file: any) => file.path)).toEqual(['固定后代.md']);
     expect(behavior.isFixedInheritedFileForTag('#根', '固定后代.md')).toBe(false);
+    // 上层的排除名单仍然拦得住 —— 固定边只豁免它自己那一段
     behavior.settings.relations.tagInheritance.excludedPathsByParentChild = { '#根': { '#自由': ['固定后代.md'] } };
     expect(behavior.getTagBrowseData('#根').inheritedFiles).toEqual([]);
 
@@ -831,21 +687,16 @@ describe('批量父子关系', () => {
     expect(behavior.isFixedInheritedFileForTag('#根', '固定后代.md')).toBe(true);
   });
 
-  it('下游保存失败时回滚下游修改和祖先名单清理', async () => {
+  it('可见性写入保存失败时完整回滚', async () => {
     const behavior = attachFiles(createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }), ['孙.md']) as any;
     behavior.settings.relations.tagInheritance.childrenByParent = { '#父': ['#子'], '#子': ['#孙'] };
-    behavior.settings.relations.tagInheritance.modeByParentChild = {
-      '#父': { '#子': 'selected' }, '#子': { '#孙': 'selected' },
-    };
-    behavior.settings.relations.tagInheritance.includedPathsByParentChild = {
-      '#父': { '#子': ['孙.md'] }, '#子': { '#孙': ['孙.md'] },
-    };
+    behavior.settings.relations.tagInheritance.excludedPathsByParentChild = { '#子': { '#孙': ['孙.md'] } };
     behavior.tagFileIndex = new Map([['#孙', [behavior.app.vault.getAbstractFileByPath('孙.md')]]]);
     behavior.saveSettings.mockRejectedValueOnce(new Error('失败'));
 
-    await expect(behavior.setIncludedInheritedPaths('#子', '#孙', [])).rejects.toThrow('失败');
-    expect(behavior.settings.relations.tagInheritance.includedPathsByParentChild).toEqual({
-      '#父': { '#子': ['孙.md'] }, '#子': { '#孙': ['孙.md'] },
+    await expect(behavior.setInheritedFileVisibleForEdge('#子', '#孙', '孙.md', true)).rejects.toThrow('失败');
+    expect(behavior.settings.relations.tagInheritance.excludedPathsByParentChild).toEqual({
+      '#子': { '#孙': ['孙.md'] },
     });
   });
 
@@ -1086,14 +937,13 @@ describe('固定子标签', () => {
     expect(behavior.getInheritanceParents('#冒险-结束')).toEqual(['#秘境']);
   });
 
-  it('加载 v2 数据时清理不满足规则的固定映射并升级到 v6', () => {
+  it('加载 v2 数据时清理不满足规则的固定映射并升级到最新版本', () => {
     const behavior = Object.create(RelationsBehavior.prototype) as any;
     behavior.settings = {
       relations: {
         version: 2,
         tagInheritance: {
           childrenByParent: { '#秘境': ['#秘境-开始', '#其他-结束'] },
-          enabledParents: [],
           excludedPathsByParent: {},
           fixedParentByChild: {
             '#秘境-开始': '#秘境',
@@ -1110,10 +960,10 @@ describe('固定子标签', () => {
       '#秘境-开始': '#秘境',
     });
     expect(behavior.initializeTagInheritanceOrder()).toBe(true);
-    expect(behavior.settings.relations.version).toBe(6);
+    expect(behavior.settings.relations.version).toBe(7);
   });
 
-  it('关闭普通继承时只归入固定分支且固定笔记覆盖排除', () => {
+  it('固定边豁免排除名单，自由边照常受排除', () => {
     const behavior = attachFiles(
       createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }),
       ['父.md', '子.md', '自由.md']
@@ -1131,14 +981,11 @@ describe('固定子标签', () => {
       '#秘境': { '#秘境-开始': ['子.md'], '#自由': ['自由.md'] },
     };
 
-    let browseData = behavior.getTagBrowseData('#秘境');
+    // 子.md 虽在排除名单里，但走的是固定边，仍然可见；自由.md 被自由边的排除挡下
+    const browseData = behavior.getTagBrowseData('#秘境');
     expect(browseData.files.map((file: any) => file.path)).toEqual(['父.md', '子.md']);
-    expect(browseData.hasFreeInheritance).toBe(true);
     expect(behavior.isFixedInheritedFileForTag('#秘境', '子.md')).toBe(true);
-
-    behavior.settings.relations.tagInheritance.enabledParents = ['#秘境'];
-    browseData = behavior.getTagBrowseData('#秘境');
-    expect(browseData.files.map((file: any) => file.path)).toEqual(['父.md', '子.md']);
+    // 被排除的笔记仍记录来源，便于在弹窗里恢复
     expect(browseData.sourcesByPath.get('自由.md')).toEqual(['#自由']);
   });
 
@@ -1146,7 +993,7 @@ describe('固定子标签', () => {
     const behavior = Object.create(TagPaneBehavior.prototype) as any;
     const parentBrowse = {
       files: [{ path: '父.md' }, { path: '子.md' }], exactCount: 1, inheritedCount: 1,
-      inheritanceEnabled: false, hasInheritance: true, hasFreeInheritance: false,
+      hasInheritance: true,
       hasActiveInheritance: true, sourcesByPath: new Map(), inheritanceTree: {},
     };
     const filteredBrowse = {
@@ -1303,7 +1150,7 @@ describe('搜索态标签列表性能', () => {
       browseCalls += 1;
       return {
         files: [{ path: `${tag}.md` }], exactCount: 1, inheritedCount: 0,
-        inheritanceEnabled: false, hasInheritance: false, hasFreeInheritance: false,
+        hasInheritance: false,
         hasActiveInheritance: false, sourcesByPath: new Map(), inheritanceTree: null,
       };
     };
@@ -1314,5 +1161,314 @@ describe('搜索态标签列表性能', () => {
 
     expect(items.map((item: any) => item.tag)).toEqual(['#目标']);
     expect(browseCalls).toBe(1);
+  });
+});
+
+describe('v6 -> v7 迁移：选择继承改写成排除名单', () => {
+  // #父 ─继承→ #子 ─继承→ #孙
+  // 迁移前 #父→#子 是「选择继承」：白名单只放行 子1；深层的 孙2 由排除名单藏起来
+  function createMigrationBehavior(overrides: any = {}) {
+    const behavior = Object.create(RelationsBehavior.prototype) as any;
+    const paths = ['父.md', '子1.md', '子2.md', '子3.md', '孙1.md', '孙2.md'];
+    const files = new Map(paths.map((path) => [path, new (TFile as any)(path)]));
+    behavior.app = { vault: { getAbstractFileByPath: (path: string) => files.get(path) || null } };
+    behavior.tagFileIndex = new Map([
+      ['#父', [files.get('父.md')]],
+      ['#子', [files.get('子1.md'), files.get('子2.md'), files.get('子3.md')]],
+      ['#孙', [files.get('孙1.md'), files.get('孙2.md')]],
+    ]);
+    behavior.settings = {
+      relations: {
+        version: 6,
+        tagInheritance: {
+          childrenByParent: { '#父': ['#子'], '#子': ['#孙'] },
+          excludedPathsByParentChild: { '#父': { '#子': ['孙2.md'] } },
+          modeByParentChild: { '#父': { '#子': 'selected' } },
+          includedPathsByParentChild: { '#父': { '#子': ['子1.md'] } },
+          fixedParentByChild: {},
+          ...overrides,
+        },
+        noteHierarchy: { childrenByParentPath: {}, displayNamesByParentPath: {} },
+      },
+    };
+    behavior.saveSettings = vi.fn();
+    behavior.refreshHierarchyViews = vi.fn();
+    return behavior;
+  }
+
+  const visiblePaths = (behavior: any, tag: string) =>
+    behavior.computeTagBrowseData(tag).files.map((file: any) => file.path);
+
+  // 这个期望值是删除白名单读取链之前、用旧语义实测出来的：
+  // #父 看得到 父.md（精确）+ 子1.md（白名单放行）+ 孙1.md（深层未被排除），
+  // 子2/子3 不在白名单、孙2.md 在排除名单里。迁移必须原样重现这个集合。
+  it('迁移后的可见笔记与旧语义完全一致', () => {
+    const behavior = createMigrationBehavior();
+    behavior.initializeTagInheritanceOrder();
+
+    expect(visiblePaths(behavior, '#父')).toEqual(['父.md', '子1.md', '孙1.md']);
+  });
+
+  it('白名单退场，未放行的笔记落进排除名单', () => {
+    const behavior = createMigrationBehavior();
+    behavior.initializeTagInheritanceOrder();
+    const inheritance = behavior.settings.relations.tagInheritance;
+
+    expect(inheritance.includedPathsByParentChild).toBeUndefined();
+    expect(inheritance.modeByParentChild).toEqual({});
+    expect([...inheritance.excludedPathsByParentChild['#父']['#子']].sort())
+      .toEqual(['子2.md', '子3.md', '孙2.md']);
+    expect(behavior.settings.relations.version).toBe(7);
+  });
+
+  it('白名单为空的边视为误设，直接转成普通继承而不是全部排除', () => {
+    const behavior = createMigrationBehavior({
+      includedPathsByParentChild: { '#父': { '#子': [] } },
+      excludedPathsByParentChild: {},
+    });
+    behavior.initializeTagInheritanceOrder();
+    const inheritance = behavior.settings.relations.tagInheritance;
+
+    expect(inheritance.excludedPathsByParentChild).toEqual({});
+    expect(visiblePaths(behavior, '#父')).toEqual(['父.md', '子1.md', '子2.md', '子3.md', '孙1.md', '孙2.md']);
+  });
+
+  it('固定边的模式与名单一并清空', () => {
+    const behavior = createMigrationBehavior({
+      childrenByParent: { '#父': ['#父-子'] },
+      fixedParentByChild: { '#父-子': '#父' },
+      modeByParentChild: { '#父': { '#父-子': 'selected' } },
+      includedPathsByParentChild: { '#父': { '#父-子': ['子1.md'] } },
+      excludedPathsByParentChild: { '#父': { '#父-子': ['子2.md'] } },
+    });
+    behavior.initializeTagInheritanceOrder();
+    const inheritance = behavior.settings.relations.tagInheritance;
+
+    expect(inheritance.modeByParentChild).toEqual({});
+    expect(inheritance.excludedPathsByParentChild).toEqual({});
+  });
+
+  it('迁移幂等：再跑一次不改变结果', () => {
+    const behavior = createMigrationBehavior();
+    behavior.initializeTagInheritanceOrder();
+    const snapshot = JSON.stringify(behavior.settings.relations);
+
+    expect(behavior.initializeTagInheritanceOrder()).toBe(false);
+    expect(JSON.stringify(behavior.settings.relations)).toBe(snapshot);
+  });
+});
+
+describe('交集标签', () => {
+  // #宗门 与 #战争 绑交集；#宗门 另有继承子标签 #内门
+  function createIntersectionBehavior() {
+    const paths = ['宗门一.md', '宗门二.md', '共有.md', '战争独有.md', '内门一.md', '内门战争.md'];
+    const behavior = attachFiles(
+      createBehavior({ childrenByParentPath: {}, displayNamesByParentPath: {} }),
+      paths
+    ) as any;
+    const fileFor = (path: string) => behavior.app.vault.getAbstractFileByPath(path);
+    behavior.tagFileIndex = new Map([
+      ['#宗门', [fileFor('宗门一.md'), fileFor('宗门二.md'), fileFor('共有.md')]],
+      ['#战争', [fileFor('共有.md'), fileFor('战争独有.md'), fileFor('内门战争.md')]],
+      ['#内门', [fileFor('内门一.md'), fileFor('内门战争.md')]],
+    ]);
+    behavior.settings.relations.tagInheritance.childrenByParent = {
+      '#宗门': ['#内门', '#战争'],
+      '#战争': ['#宗门'],
+    };
+    behavior.settings.relations.tagInheritance.modeByParentChild = {
+      '#宗门': { '#战争': 'intersection' },
+      '#战争': { '#宗门': 'intersection' },
+    };
+    return behavior;
+  }
+
+  const groupsOf = (tree: any) => (tree?.children || [])
+    .map((child: any) => [child.tag, child.isIntersection ? '交集' : '继承', child.paths]);
+
+  it('交集组的成员是两标签的共同原生笔记', () => {
+    const behavior = createIntersectionBehavior();
+    expect(behavior.getIntersectionGroupPaths('#宗门', '#战争')).toEqual(['共有.md']);
+    expect(behavior.getIntersectionGroupPaths('#战争', '#宗门')).toEqual(['共有.md']);
+  });
+
+  it('两个方向都挂出交集组，显示是对称的', () => {
+    const behavior = createIntersectionBehavior();
+    expect(groupsOf(behavior.getTagBrowseData('#宗门').inheritanceTree))
+      .toContainEqual(['#战争', '交集', ['共有.md']]);
+    expect(groupsOf(behavior.getTagBrowseData('#战争').inheritanceTree))
+      .toEqual([['#宗门', '交集', ['共有.md']]]);
+  });
+
+  it('交集笔记从「原生」组扣掉，但顶层计数不变', () => {
+    const behavior = createIntersectionBehavior();
+    const browseData = behavior.getTagBrowseData('#宗门');
+
+    // 原生组只剩两篇，共有.md 挪进了交集组
+    expect(browseData.inheritanceTree.paths).toEqual(['宗门一.md', '宗门二.md']);
+    // 计数完全不受影响：交集笔记本来就是精确笔记
+    expect(browseData.exactCount).toBe(3);
+    expect(browseData.files.map((file: any) => file.path))
+      .toEqual(['宗门一.md', '宗门二.md', '共有.md', '内门一.md', '内门战争.md']);
+  });
+
+  it('交集边对继承笔记零贡献 —— 战争独有的笔记不会冒到宗门', () => {
+    const behavior = createIntersectionBehavior();
+    expect(behavior.getTagBrowseData('#宗门').inheritedFiles.map((file: any) => file.path))
+      .toEqual(['内门一.md', '内门战争.md']);
+  });
+
+  it('继承来的笔记留在血缘分组里，不进交集组', () => {
+    const behavior = createIntersectionBehavior();
+    // 内门战争.md 同时有 #内门 和 #战争，但它靠继承冒到宗门、不是宗门的原生笔记
+    const groups = groupsOf(behavior.getTagBrowseData('#宗门').inheritanceTree);
+    expect(groups).toContainEqual(['#内门', '继承', ['内门一.md', '内门战争.md']]);
+    expect(behavior.getIntersectionGroupPaths('#宗门', '#战争')).not.toContain('内门战争.md');
+  });
+
+  it('交集组是叶子，不递归对方的子标签', () => {
+    const behavior = createIntersectionBehavior();
+    behavior.settings.relations.tagInheritance.childrenByParent['#战争'].push('#战役');
+    behavior.tagFileIndex.set('#战役', [behavior.app.vault.getAbstractFileByPath('战争独有.md')]);
+
+    const intersectionNode = behavior.getTagBrowseData('#宗门').inheritanceTree.children
+      .find((child: any) => child.isIntersection);
+    expect(intersectionNode.children).toEqual([]);
+  });
+
+  it('交集组与继承子分组按弹窗里的排序混排', () => {
+    const behavior = createIntersectionBehavior();
+    expect(groupsOf(behavior.getTagBrowseData('#宗门').inheritanceTree).map((g: any) => g[0]))
+      .toEqual(['#内门', '#战争']);
+
+    // 把交集排到前面
+    behavior.settings.relations.tagInheritance.childrenByParent['#宗门'] = ['#战争', '#内门'];
+    expect(groupsOf(behavior.getTagBrowseData('#宗门').inheritanceTree).map((g: any) => g[0]))
+      .toEqual(['#战争', '#内门']);
+  });
+
+  it('交集为空时不挂出空组', () => {
+    const behavior = createIntersectionBehavior();
+    behavior.tagFileIndex.set('#战争', [behavior.app.vault.getAbstractFileByPath('战争独有.md')]);
+    expect(groupsOf(behavior.getTagBrowseData('#宗门').inheritanceTree).map((g: any) => g[0]))
+      .toEqual(['#内门']);
+  });
+
+  it('交集签名跟随对方标签的笔记集合变化', () => {
+    const behavior = createIntersectionBehavior();
+    const before = behavior.getTagBrowseData('#宗门').intersectionSignature;
+
+    // 给宗门二.md 补上 #战争 标签：宗门自己的 files 与计数都没变，只有交集组变了
+    behavior.tagFileIndex.get('#战争').push(behavior.app.vault.getAbstractFileByPath('宗门二.md'));
+    const after = behavior.getTagBrowseData('#宗门').intersectionSignature;
+    expect(after).not.toBe(before);
+  });
+
+  it('展开/收起的 key 收集包含交集组，且与同名子标签分组不撞车', () => {
+    const behavior = createIntersectionBehavior();
+    behavior.collapsedInlineHierarchyBranches = new Set();
+    const keys = behavior.getTagInheritanceGroupKeys('#宗门');
+
+    expect(keys.some((key: string) => key.includes('tag-intersection') && key.endsWith('#战争'))).toBe(true);
+    expect(keys.some((key: string) => key.includes('tag-group') && key.endsWith('#内门'))).toBe(true);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('对账时不会把成对的交集边当成环削掉', () => {
+    const behavior = createIntersectionBehavior();
+    behavior.reconcileRelationCycles();
+
+    expect(behavior.settings.relations.tagInheritance.childrenByParent['#宗门']).toContain('#战争');
+    expect(behavior.settings.relations.tagInheritance.childrenByParent['#战争']).toEqual(['#宗门']);
+  });
+
+  it('从继承切到交集时成对写入，并清掉两侧排除名单', async () => {
+    const behavior = createIntersectionBehavior();
+    const inheritance = behavior.settings.relations.tagInheritance;
+    inheritance.childrenByParent = { '#宗门': ['#内门', '#战争'] };
+    inheritance.modeByParentChild = {};
+    inheritance.excludedPathsByParentChild = {
+      '#宗门': { '#战争': ['旧排除.md'] },
+      '#战争': { '#宗门': ['反向旧排除.md'] },
+    };
+
+    await behavior.setTagInheritanceMode('#宗门', '#战争', 'intersection');
+
+    expect(inheritance.childrenByParent['#宗门']).toEqual(['#内门', '#战争']);
+    expect(inheritance.childrenByParent['#战争']).toEqual(['#宗门']);
+    expect(inheritance.modeByParentChild).toEqual({
+      '#宗门': { '#战争': 'intersection' },
+      '#战争': { '#宗门': 'intersection' },
+    });
+    expect(inheritance.excludedPathsByParentChild).toEqual({});
+    expect(behavior.saveSettings).toHaveBeenCalledOnce();
+  });
+
+  it('切回继承时只保留当前方向及排序位置，并且只保存一次', async () => {
+    const behavior = createIntersectionBehavior();
+    const inheritance = behavior.settings.relations.tagInheritance;
+
+    await behavior.setTagInheritanceMode('#宗门', '#战争', 'all');
+
+    expect(inheritance.childrenByParent['#宗门']).toEqual(['#内门', '#战争']);
+    expect(inheritance.childrenByParent['#战争']).toBeUndefined();
+    expect(inheritance.modeByParentChild).toEqual({});
+    expect(behavior.saveSettings).toHaveBeenCalledOnce();
+  });
+
+  it('从任一子标签列表移除交集伙伴时两侧一起删除', async () => {
+    const behavior = createIntersectionBehavior();
+    const inheritance = behavior.settings.relations.tagInheritance;
+
+    await behavior.setInheritanceChildren('#宗门', ['#内门']);
+
+    expect(inheritance.childrenByParent['#宗门']).toEqual(['#内门']);
+    expect(inheritance.childrenByParent['#战争']).toBeUndefined();
+    expect(inheritance.modeByParentChild).toEqual({});
+  });
+
+  it('管理继承父标签不会删掉或改写交集伙伴', async () => {
+    const behavior = createIntersectionBehavior();
+    const inheritance = behavior.settings.relations.tagInheritance;
+
+    await behavior.setInheritanceParents('#宗门', ['#上级']);
+
+    expect(inheritance.childrenByParent['#上级']).toContain('#宗门');
+    expect(inheritance.childrenByParent['#宗门']).toContain('#战争');
+    expect(inheritance.childrenByParent['#战争']).toEqual(['#宗门']);
+    expect(behavior.isIntersectionEdge('#宗门', '#战争')).toBe(true);
+  });
+
+  it('交集伙伴不能再从父标签入口绑定为继承边', async () => {
+    const behavior = createIntersectionBehavior();
+
+    await expect(behavior.setInheritanceParents('#宗门', ['#战争']))
+      .rejects.toThrow('已有关联');
+  });
+
+  it('半条交集边降级为普通继承，孤立标记被清理', () => {
+    const behavior = createIntersectionBehavior();
+    const inheritance = behavior.settings.relations.tagInheritance;
+    delete inheritance.childrenByParent['#战争'];
+
+    expect(behavior.reconcileIntersectionPairs()).toBe(true);
+    expect(inheritance.childrenByParent['#宗门']).toContain('#战争');
+    expect(inheritance.modeByParentChild).toEqual({});
+    expect(behavior.getTagInheritanceMode('#宗门', '#战争')).toBe('all');
+  });
+
+  it('交集写入失败与切回继承失败都会整体回滚四张表', async () => {
+    const behavior = createIntersectionBehavior();
+    const before = JSON.stringify(behavior.settings.relations.tagInheritance);
+    behavior.saveSettings = vi.fn().mockRejectedValue(new Error('失败'));
+
+    await expect(behavior.setTagInheritanceMode('#宗门', '#战争', 'all')).rejects.toThrow('失败');
+    expect(JSON.stringify(behavior.settings.relations.tagInheritance)).toBe(before);
+
+    behavior.settings.relations.tagInheritance.childrenByParent = { '#宗门': ['#战争'] };
+    behavior.settings.relations.tagInheritance.modeByParentChild = {};
+    const beforeBinding = JSON.stringify(behavior.settings.relations.tagInheritance);
+    await expect(behavior.setTagInheritanceMode('#宗门', '#战争', 'intersection')).rejects.toThrow('失败');
+    expect(JSON.stringify(behavior.settings.relations.tagInheritance)).toBe(beforeBinding);
   });
 });

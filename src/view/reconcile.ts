@@ -156,10 +156,11 @@ export function tagRowSignature(
     String(files.length),
     String(item.exactCount ?? ''),
     String(item.inheritedCount ?? ''),
-    item.inheritanceEnabled ? '1' : '0',
     item.hasInheritance ? '1' : '0',
-    item.hasFreeInheritance ? '1' : '0',
     item.hasActiveInheritance ? '1' : '0',
+    // 交集组的内容取决于对方标签的笔记集合，而那不改变本行的 files 与计数。
+    // 少了这一项，「某篇笔记新加了对方标签」时旧 DOM 会被复用、交集组显示陈旧内容。
+    String(item.intersectionSignature ?? ''),
     ((item.fixedSearchTags as string[] | undefined) || []).join(','),
     context.pinned ? '1' : '0',
     context.expanded ? '1' : '0',

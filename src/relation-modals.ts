@@ -1,5 +1,13 @@
 import { Modal, Notice, TFile, setIcon } from "obsidian";
-import { getTagDisplayName, isNestedTag, normalizeTag } from "./models";
+import {
+  DEFAULT_MOVE_NOTE_DOWN_HOTKEY,
+  DEFAULT_MOVE_NOTE_UP_HOTKEY,
+  getTagDisplayName,
+  isNestedTag,
+  normalizeHotkeyKey,
+  normalizeTag,
+  parseHotkeyText,
+} from "./models";
 
 function getDirectionalInputSide(activeSide: any, key: any, visibleSides: any) {
   if (!Array.isArray(visibleSides) || visibleSides.length < 2) return null;
@@ -51,39 +59,6 @@ function getTagRelationCandidates(tagValues: any, query: any, canUse: (tag: stri
     .filter((tag) => !isNestedTag(tag) && canUse(tag))
     .filter((tag) => getTagDisplayName(tag).toLowerCase().includes(term))
     .sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), 'zh-Hans-CN'));
-}
-
-function groupExcludedPathsBySource(
-  paths: string[],
-  sourcesByPath: Map<string, string[]>,
-  orderedSources: string[] = []
-) {
-  const normalizedPaths = Array.from<any>(new Set((paths || []).filter(Boolean)));
-  const discoveredSources = [];
-  const seenSources = new Set();
-  for (const source of orderedSources || []) {
-    const tag = normalizeTag(source);
-    if (!tag || seenSources.has(tag)) continue;
-    seenSources.add(tag);
-    discoveredSources.push(tag);
-  }
-  for (const path of normalizedPaths) {
-    for (const source of sourcesByPath.get(path) || []) {
-      const tag = normalizeTag(source);
-      if (!tag || seenSources.has(tag)) continue;
-      seenSources.add(tag);
-      discoveredSources.push(tag);
-    }
-  }
-  const groups: any[] = discoveredSources
-    .map((source) => ({
-      source,
-      paths: normalizedPaths.filter((path) => (sourcesByPath.get(path) || []).includes(source)),
-    }))
-    .filter((group) => group.paths.length > 0);
-  const unknownPaths = normalizedPaths.filter((path) => !(sourcesByPath.get(path) || []).length);
-  if (unknownPaths.length) groups.push({ source: null, paths: unknownPaths });
-  return groups;
 }
 
 function filterInheritanceCandidates(candidates: any, query: any, getAliases: (file: TFile) => string[] = () => []) {
@@ -226,8 +201,6 @@ class TagInheritanceModal extends Modal {
   activeChild: any;
   children: any;
   childrenListEl: any;
-  exclusionGroupsEl: any;
-  exclusionsSectionEl: any;
   inputEl: any;
   isComposing: any;
   isSubmitting: any;
@@ -262,8 +235,6 @@ class TagInheritanceModal extends Modal {
     this.inputEl = null;
     this.picker = null;
     this.childrenListEl = null;
-    this.exclusionsSectionEl = null;
-    this.exclusionGroupsEl = null;
     this.selectionSectionEl = null;
     this.selectionTitleEl = null;
     this.selectionSummaryEl = null;
@@ -285,6 +256,7 @@ class TagInheritanceModal extends Modal {
       cls: 'puffs-relation-modal-title puffs-tag-rename-title',
     });
     this.searchHostEl = this.contentEl.createDiv({ cls: 'puffs-relation-tag-search' });
+
     this.inputEl = this.searchHostEl.createEl('input', { type: 'search', cls: 'puffs-relation-input' });
     this.inputEl.value = this.query;
     this.picker = createTagCandidatePicker({
@@ -293,6 +265,7 @@ class TagInheritanceModal extends Modal {
       getCandidates: (query: any) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
         tag !== this.parentTag &&
         !this.children.includes(tag) &&
+        !this.plugin.areTagsRelated(this.parentTag, tag) &&
         !(this.relationMode === 'parents' && this.plugin.isFixedChild(this.parentTag)) &&
         !(this.relationMode === 'children' && this.plugin.isFixedChild(tag)) &&
         !this.plugin.wouldCreateTagInheritanceCycle(
@@ -308,19 +281,15 @@ class TagInheritanceModal extends Modal {
     });
 
     this.childrenListEl = this.contentEl.createDiv({ cls: 'puffs-relation-child-list' });
-    this.exclusionsSectionEl = this.contentEl.createDiv({ cls: 'puffs-relation-exclusions' });
-    this.exclusionsSectionEl.createEl('h4', { text: '已排除笔记' });
-    this.exclusionGroupsEl = this.exclusionsSectionEl.createDiv({ cls: 'puffs-relation-exclusion-groups' });
     this.buildInheritanceSelectionSection();
     this.renderChildren();
-    this.renderExclusionGroups();
     this.renderInheritanceSelection();
 
     this.modalEl.addEventListener('keydown', (event) => {
-      const { parent, child } = this.getActiveEdge();
+      if (this.handleChildOrderHotkey(event)) return;
+      // Ctrl+F 只在勾选面板可见时接管，判据与 renderInheritanceSelection 保持一致
       if (
-        !this.activeChild ||
-        this.plugin.getTagInheritanceMode(parent, child) !== 'selected' ||
+        this.selectionSectionEl?.classList.contains('is-hidden') !== false ||
         !(event.ctrlKey || event.metaKey) ||
         event.key.toLowerCase() !== 'f'
       ) return;
@@ -363,11 +332,15 @@ class TagInheritanceModal extends Modal {
     this.syncMutationState();
     try {
       await this.plugin.setTagInheritanceMode(parent, child, mode);
+      // 交集不是父子关系；从「管理父标签」里切成交集后，该行应立即退出父标签列表。
+      if (this.relationMode === 'parents' && mode === 'intersection') {
+        this.children = this.children.filter((tag: any) => tag !== relatedTag);
+        if (this.activeChild === relatedTag) this.activeChild = this.children[0] || null;
+      }
       this.renderChildren();
-      this.renderExclusionGroups();
       this.renderInheritanceSelection();
     } catch (error) {
-      new Notice(error && error.message ? error.message : '切换继承模式失败');
+      new Notice(error && error.message ? error.message : '切换模式失败');
     } finally {
       this.isSubmitting = false;
       this.syncMutationState();
@@ -378,8 +351,59 @@ class TagInheritanceModal extends Modal {
     if (!child || !this.children.includes(child)) return;
     this.activeChild = child;
     this.renderChildren();
-    this.renderExclusionGroups();
     this.renderInheritanceSelection();
+  }
+
+  /** 父标签方向按笔记数量自动排序，手动排序只在子标签方向成立。 */
+  canReorderChildren() {
+    return this.relationMode === 'children';
+  }
+
+  /** 逐格上下移动选中的子标签。 */
+  async moveActiveChild(direction: any) {
+    if (!this.canReorderChildren() || !this.activeChild || this.isSubmitting) return false;
+    const next = [...this.children];
+    const index = next.indexOf(this.activeChild);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= next.length) return false;
+    [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+    return await this.persistChildren(next);
+  }
+
+  /** 把选中的子标签移到目标行下方。与 interactions.ts 的 reorderChildTag 同一算法。 */
+  async moveActiveChildAfter(targetTag: any) {
+    if (!this.canReorderChildren() || !this.activeChild || this.isSubmitting) return false;
+    if (!targetTag || targetTag === this.activeChild) return false;
+    const next = [...this.children];
+    const movingIndex = next.indexOf(this.activeChild);
+    const targetIndex = next.indexOf(targetTag);
+    // 已经紧跟在目标下方时无需写入
+    if (movingIndex < 0 || targetIndex < 0 || movingIndex === targetIndex + 1) return false;
+    next.splice(movingIndex, 1);
+    next.splice(next.indexOf(targetTag) + 1, 0, this.activeChild);
+    return await this.persistChildren(next);
+  }
+
+  /** 复用笔记排序的上下移动快捷键配置。 */
+  handleChildOrderHotkey(event: any) {
+    if (!this.canReorderChildren() || !this.activeChild || event.isComposing) return false;
+    const matches = (settingValue: any, fallback: any) => {
+      const hotkey = parseHotkeyText(settingValue, fallback);
+      if (normalizeHotkeyKey(event.key) !== hotkey.key) return false;
+      const wanted = new Set(hotkey.modifiers);
+      return (wanted.has('Ctrl') || wanted.has('Mod')) === (event.ctrlKey || event.metaKey) &&
+        wanted.has('Shift') === event.shiftKey &&
+        wanted.has('Alt') === event.altKey;
+    };
+    const settings = this.plugin?.settings || {};
+    let direction = 0;
+    if (matches(settings.moveNoteUpHotkey, DEFAULT_MOVE_NOTE_UP_HOTKEY)) direction = -1;
+    else if (matches(settings.moveNoteDownHotkey, DEFAULT_MOVE_NOTE_DOWN_HOTKEY)) direction = 1;
+    if (!direction) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    void this.moveActiveChild(direction);
+    return true;
   }
 
   buildInheritanceSelectionSection() {
@@ -417,8 +441,21 @@ class TagInheritanceModal extends Modal {
       if (!rowEl) {
         rowEl = this.childrenListEl.createDiv({ cls: 'puffs-relation-child-row' });
         rowEl.dataset.puffsTag = child;
-        const iconEl = rowEl.createSpan({ cls: 'puffs-relation-child-icon' });
-        setIcon(iconEl, 'tag');
+        if (this.canReorderChildren()) {
+          // 子标签排序的抓手。选中它就等于选中这一行，与下方面板共用同一个 activeChild
+          const orderButton = rowEl.createEl('button', {
+            cls: 'puffs-relation-child-order-button',
+            attr: { 'aria-label': '选中后可调整顺序' },
+          });
+          setIcon(orderButton, 'grip-vertical');
+          orderButton.addEventListener('click', (event: any) => {
+            event.stopPropagation();
+            this.selectActiveChild(rowEl.dataset.puffsTag);
+          });
+        } else {
+          const iconEl = rowEl.createSpan({ cls: 'puffs-relation-child-icon' });
+          setIcon(iconEl, 'tag');
+        }
         rowEl.createSpan({ cls: 'puffs-relation-manage-name' });
         rowEl.createSpan({ cls: 'puffs-relation-child-count' });
         const modeButton = rowEl.createEl('button', {
@@ -431,11 +468,12 @@ class TagInheritanceModal extends Modal {
           const edge = this.getEdge(relatedTag);
           if (this.plugin.isFixedTagEdge(edge.parent, edge.child)) {
             this.renderChildren();
-            this.renderExclusionGroups();
             this.renderInheritanceSelection();
             return;
           }
-          const nextMode = this.plugin.getTagInheritanceMode(edge.parent, edge.child) === 'selected' ? 'all' : 'selected';
+          const nextMode = this.plugin.getTagInheritanceMode(edge.parent, edge.child) === 'intersection'
+            ? 'all'
+            : 'intersection';
           void this.changeInheritanceMode(relatedTag, nextMode);
         });
         rowEl.addEventListener('click', (event: any) => {
@@ -453,12 +491,24 @@ class TagInheritanceModal extends Modal {
             void this.removeChild(child);
           }).open();
         });
+        // 右键另一行：把当前选中的子标签移到该行下方
+        rowEl.addEventListener('contextmenu', (event: any) => {
+          if (!this.canReorderChildren() || !this.activeChild) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void this.moveActiveChildAfter(rowEl.dataset.puffsTag);
+        });
       }
-      rowEl.querySelector('.puffs-relation-manage-name').textContent = getTagDisplayName(child);
+      // parents 模式这一列是父标签，简称口径只在子标签方向成立
+      rowEl.querySelector('.puffs-relation-manage-name').textContent = this.relationMode === 'parents'
+        ? getTagDisplayName(child)
+        : this.plugin.getRelativeChildDisplayName(this.parentTag, child);
       rowEl.querySelector('.puffs-relation-child-count').textContent = String(this.plugin.getTagVisibleNoteCount(child));
       rowEl.classList.toggle('is-active', child === this.activeChild);
       rowEl.setAttribute('role', 'button');
       rowEl.setAttribute('aria-pressed', String(child === this.activeChild));
+      rowEl.querySelector('.puffs-relation-child-order-button')
+        ?.classList.toggle('is-selected', child === this.activeChild);
       this.syncInheritanceModeButton(rowEl, child);
       this.syncFixedRelationButton(rowEl, child);
       this.childrenListEl.appendChild(rowEl);
@@ -487,10 +537,10 @@ class TagInheritanceModal extends Modal {
       button.disabled = true;
       return;
     }
-    const mode = this.plugin.getTagInheritanceMode(parent, child);
+    const intersection = this.plugin.getTagInheritanceMode(parent, child) === 'intersection';
     button.empty();
-    setIcon(button, mode === 'selected' ? 'list-checks' : 'layers');
-    button.setAttribute('aria-label', `当前为${mode === 'selected' ? '选择' : '全部'}继承`);
+    setIcon(button, intersection ? 'blend' : 'layers');
+    button.setAttribute('aria-label', intersection ? '当前为交集' : '当前为继承');
     button.disabled = this.isSubmitting;
   }
 
@@ -544,7 +594,6 @@ class TagInheritanceModal extends Modal {
     try {
       await this.plugin.setFixedTagRelation(parent, child, nextFixed);
       this.renderChildren();
-      this.renderExclusionGroups();
       this.renderInheritanceSelection();
       this.picker?.render();
     } catch (error) {
@@ -580,7 +629,6 @@ class TagInheritanceModal extends Modal {
         await this.plugin.setInheritanceChildren(this.parentTag, orderedChildren);
       }
       this.updateChildren(orderedChildren);
-      this.renderExclusionGroups();
       this.renderInheritanceSelection();
       return true;
     } catch (error) {
@@ -637,7 +685,7 @@ class TagInheritanceModal extends Modal {
     }
   }
 
-  // 复选框的含义统一为「这篇笔记在这条边上可见吗」，至于落到白名单还是黑名单由存储层分流
+  // 复选框的含义统一为「这篇笔记在这条边上可见吗」：未勾选项存进唯一的排除名单。
   async toggleInheritanceCandidate(path: any, visible: any) {
     await this.persistInheritanceSelection([{ path, visible: !!visible }]);
   }
@@ -650,18 +698,27 @@ class TagInheritanceModal extends Modal {
     await this.persistInheritanceSelection(entries);
   }
 
+  /**
+   * 继承笔记勾选面板。
+   *
+   * 常驻显示（不再依赖模式）：列出这条边上的全部继承候选，默认全勾，
+   * 取消勾选即写进排除名单、重新勾上即恢复。交集边的成员是实时算出来的，
+   * 没有可维护的名单，整块隐藏。
+   */
   renderInheritanceSelection() {
     if (!this.selectionSectionEl || !this.selectionGroupsEl || !this.selectionSummaryEl) return;
     const { parent, child } = this.getActiveEdge();
-    const selectedMode = !!this.activeChild && this.plugin.getTagInheritanceMode(parent, child) === 'selected';
-    this.selectionSectionEl.classList.toggle('is-hidden', !selectedMode);
-    if (!selectedMode) return;
+    const hidden = !this.activeChild ||
+      this.plugin.getTagInheritanceMode(parent, child) === 'intersection' ||
+      this.plugin.isFixedTagEdge(parent, child);
+    this.selectionSectionEl.classList.toggle('is-hidden', hidden);
+    if (hidden) return;
     if (this.selectionTitleEl) {
       this.selectionTitleEl.textContent = `继承笔记（${getTagDisplayName(parent)} ← ${getTagDisplayName(child)}）`;
     }
     const candidates = this.plugin.getInheritanceCandidates(parent, child);
     const freeCandidates = candidates.filter((candidate: any) => !candidate.fixed);
-    // 勾选态按「这条边上是否可见」算，深层笔记的可见性来自黑名单而非白名单
+    // 勾选态就是「这条边上是否可见」：自由候选减去排除名单
     const selectedPaths = this.plugin.collectVisiblePathsForEdge(parent, child);
     const selectedCount = freeCandidates.filter((candidate: any) => selectedPaths.has(candidate.path)).length;
     this.selectionSummaryEl.textContent = `已选 ${selectedCount} / ${freeCandidates.length}`;
@@ -757,71 +814,6 @@ class TagInheritanceModal extends Modal {
     }
     for (const groupEl of existingGroups.values()) groupEl.remove();
     this.selectionGroupsEl.scrollTop = scrollTop;
-  }
-
-  renderExclusionGroups() {
-    if (!this.exclusionsSectionEl || !this.exclusionGroupsEl) return;
-    const { parent, child } = this.getActiveEdge();
-    if (!this.activeChild || this.plugin.getTagInheritanceMode(parent, child) !== 'all') {
-      this.exclusionsSectionEl.classList.add('is-hidden');
-      return;
-    }
-    const exclusions = this.plugin.getExcludedInheritedPaths(parent, child);
-    this.exclusionsSectionEl.classList.toggle('is-hidden', exclusions.length === 0);
-    this.exclusionGroupsEl.empty();
-    if (!exclusions.length) return;
-    const candidatesByPath = new Map(this.plugin.getInheritanceCandidates(parent, child)
-      .map((candidate: any) => [candidate.path, candidate]));
-    const sourcesByPath: Map<any, any> = new Map(exclusions.map((path: any) => [path, (candidatesByPath.get(path) as any)?.sources || []]));
-    const groups = groupExcludedPathsBySource(
-      exclusions,
-      sourcesByPath,
-      [child, ...this.plugin.getTagDescendants(child)]
-    );
-    for (const group of groups) {
-      const groupEl = this.exclusionGroupsEl.createDiv({ cls: 'puffs-relation-exclusion-group' });
-      groupEl.dataset.puffsSource = group.source || '';
-      const headingEl = groupEl.createDiv({ cls: 'puffs-relation-exclusion-heading' });
-      if (group.source) {
-        const iconEl = headingEl.createSpan({ cls: 'puffs-relation-exclusion-icon' });
-        setIcon(iconEl, 'tag');
-      }
-      headingEl.createSpan({ text: group.source ? getTagDisplayName(group.source) : '来源未知' });
-      const listEl = groupEl.createDiv({ cls: 'puffs-relation-exclusion-list' });
-      for (const path of group.paths) {
-        const rowEl = listEl.createDiv({ cls: 'puffs-relation-manage-row' });
-        rowEl.dataset.puffsPath = path;
-        const file: any = this.app.vault.getAbstractFileByPath(path);
-        rowEl.createSpan({ text: file && file.basename ? file.basename : path, cls: 'puffs-relation-manage-name' });
-        const restoreButton = rowEl.createEl('button', { text: '恢复' });
-        restoreButton.addEventListener('click', async () => {
-          if (restoreButton.disabled) return;
-          restoreButton.disabled = true;
-          try {
-            await this.plugin.restoreInheritedFile(parent, path, child);
-            this.removeExcludedPath(path);
-          } catch (error) {
-            console.error('[Puffs Tag Enhance] Failed to restore inherited note:', error);
-            new Notice('恢复继承笔记失败');
-            restoreButton.disabled = false;
-          }
-        });
-      }
-    }
-  }
-
-  removeExcludedPath(path: any) {
-    if (!this.exclusionGroupsEl || !this.exclusionsSectionEl) return;
-    for (const rowEl of Array.from<any>(this.exclusionGroupsEl.querySelectorAll('.puffs-relation-manage-row'))) {
-      if (rowEl.dataset.puffsPath === path) rowEl.remove();
-    }
-    for (const groupEl of Array.from<any>(this.exclusionGroupsEl.querySelectorAll('.puffs-relation-exclusion-group'))) {
-      if (!groupEl.querySelector('.puffs-relation-manage-row')) groupEl.remove();
-    }
-    this.exclusionsSectionEl.classList.toggle(
-      'is-hidden',
-      !this.exclusionGroupsEl.querySelector('.puffs-relation-manage-row')
-    );
   }
 }
 
@@ -1405,6 +1397,5 @@ export {
   getNoteRelationSubmitError,
   getTagRelationCandidates,
   filterInheritanceCandidates,
-  groupExcludedPathsBySource,
   groupInheritanceCandidates,
 };

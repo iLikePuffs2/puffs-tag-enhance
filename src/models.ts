@@ -62,13 +62,12 @@ const DEFAULT_SETTINGS = {
   // 一次性布局迁移标记：把核心插件的标签页换成自绘视图后置位
   sidebarLayoutMigrated: false,
   relations: {
-    version: 6,
+    // 与 relations.ts 的 RELATIONS_VERSION 保持一致
+    version: 7,
     tagInheritance: {
       childrenByParent: {},
-      enabledParents: [],
       excludedPathsByParentChild: {},
       modeByParentChild: {},
-      includedPathsByParentChild: {},
       fixedParentByChild: {},
     },
     noteHierarchy: {

@@ -196,37 +196,6 @@ export class OrderControllerBehavior {
     if (noteItemEl) noteItemEl.classList.toggle('is-order-selected', isSelected);
   }
 
-  syncTagOrderButtonSelection(buttonEl: any) {
-    if (!buttonEl) return;
-    const parentTag = normalizeTag(buttonEl.dataset.puffsTagOrderParent);
-    const tag = normalizeTag(buttonEl.dataset.puffsTagOrderTag);
-    const hasChildren = buttonEl.dataset.puffsHasChildren === 'true';
-    const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
-    const isSelected = this.isTagOrderTargetSelected(
-      parentTag,
-      tag
-    );
-    const isModeParent = hasChildren && this.isTagOrderModeActive(tag);
-    const isExpanded = buttonEl.dataset.puffsExpanded === 'true';
-    buttonEl.classList.toggle('is-sort-mode', isSortMode);
-    buttonEl.classList.toggle('is-selected', isSelected);
-    buttonEl.classList.toggle('is-order-mode-parent', isModeParent);
-    buttonEl.setAttribute('aria-pressed', String(isSelected || isModeParent));
-    if (isSortMode) {
-      setIcon(buttonEl, 'grip-vertical');
-      buttonEl.classList.remove('is-collapsed');
-    } else {
-      setIcon(buttonEl, 'right-triangle');
-      buttonEl.classList.toggle('is-collapsed', !isExpanded);
-    }
-    buttonEl.setAttribute('aria-expanded', String(isExpanded));
-    const rowEl = buttonEl.closest('.puffs-inheritance-tag-group-row');
-    if (rowEl) {
-      rowEl.classList.toggle('is-order-selected', isSelected);
-      rowEl.classList.toggle('is-order-mode-parent', isModeParent);
-    }
-  }
-
   bindOrderControlButton(buttonEl: any, isSelected: any, toggleExpansion: any, toggleOrder: any) {
     if (!buttonEl) return () => {};
     let longPressTimer: any = null;
@@ -294,95 +263,10 @@ export class OrderControllerBehavior {
     );
   }
 
-  bindTagHierarchyControlButton(buttonEl: any, toggleExpansion: any) {
-    if (!buttonEl) return () => {};
-    let longPressTimer: any = null;
-    let suppressNextClick = false;
-
-    const clearLongPressTimer = () => {
-      if (!longPressTimer) return;
-      globalThis.clearTimeout(longPressTimer);
-      longPressTimer = null;
-    };
-    const onPointerDown = (event: any) => {
-      const parentTag = buttonEl.dataset.puffsTagOrderParent;
-      const tag = buttonEl.dataset.puffsTagOrderTag;
-      const isSortMode = !!parentTag && this.isTagOrderModeActive(parentTag);
-      if (event.button !== 0 || isSortMode || buttonEl.dataset.puffsHasChildren !== 'true') return;
-      clearLongPressTimer();
-      suppressNextClick = false;
-      longPressTimer = globalThis.setTimeout(() => {
-        longPressTimer = null;
-        suppressNextClick = true;
-        const wasActive = this.isTagOrderModeActive(tag);
-        this.toggleTagOrderMode(tag, buttonEl.dataset.puffsSurface || '');
-        if (!wasActive && this.isTagOrderModeActive(tag) && buttonEl.dataset.puffsExpanded !== 'true') {
-          toggleExpansion();
-        }
-      }, NOTE_ORDER_LONG_PRESS_MS);
-    };
-    const onPointerUp = () => clearLongPressTimer();
-    const onPointerAbort = () => {
-      clearLongPressTimer();
-      suppressNextClick = false;
-    };
-    const onClick = (event: any) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (suppressNextClick) {
-        suppressNextClick = false;
-        return;
-      }
-      const parentTag = buttonEl.dataset.puffsTagOrderParent;
-      const tag = buttonEl.dataset.puffsTagOrderTag;
-      if (parentTag && this.isTagOrderModeActive(parentTag)) {
-        this.toggleTagOrderTarget(parentTag, tag, buttonEl.dataset.puffsSurface || '');
-        return;
-      }
-      if (this.isTagOrderModeActive(tag)) this.exitTagOrderMode(false);
-      toggleExpansion();
-    };
-
-    buttonEl.addEventListener('pointerdown', onPointerDown);
-    buttonEl.addEventListener('pointerup', onPointerUp);
-    buttonEl.addEventListener('pointerleave', onPointerAbort);
-    buttonEl.addEventListener('pointercancel', onPointerAbort);
-    buttonEl.addEventListener('click', onClick);
-    return () => {
-      clearLongPressTimer();
-      buttonEl.removeEventListener('pointerdown', onPointerDown);
-      buttonEl.removeEventListener('pointerup', onPointerUp);
-      buttonEl.removeEventListener('pointerleave', onPointerAbort);
-      buttonEl.removeEventListener('pointercancel', onPointerAbort);
-      buttonEl.removeEventListener('click', onClick);
-    };
-  }
-
   refreshNoteOrderSelectionState() {
     document.querySelectorAll('.puffs-tag-note-order-button').forEach((buttonEl) => {
       this.syncNoteOrderButtonSelection(buttonEl);
     });
-  }
-
-  refreshTagOrderSelectionState() {
-    document.querySelectorAll('.puffs-tag-order-button, .puffs-tag-order-parent-button').forEach((buttonEl) => {
-      this.syncTagOrderButtonSelection(buttonEl);
-    });
-  }
-
-  scheduleTagOrderModeVisibilityReconcile() {
-    if (!this.activeTagOrderParent || this.tagOrderModeVisibilityTimer) return;
-    this.tagOrderModeVisibilityTimer = globalThis.setTimeout(() => {
-      this.tagOrderModeVisibilityTimer = null;
-      if (!this.activeTagOrderParent) return;
-      const isVisible = Array.from(document.querySelectorAll('.puffs-tag-order-parent-button'))
-        .some((buttonEl: any) =>
-          normalizeTag(buttonEl.dataset.puffsTagOrderTag) === this.activeTagOrderParent &&
-          buttonEl.dataset.puffsExpanded === 'true' &&
-          buttonEl.offsetParent !== null
-        );
-      if (!isVisible) this.exitTagOrderMode();
-    }, 0);
   }
 
   focusSelectedNoteOrderButton() {
@@ -408,22 +292,4 @@ export class OrderControllerBehavior {
     if (buttonEl) buttonEl.focus({ preventScroll: true });
   }
 
-  focusSelectedTagOrderButton() {
-    if (!this.selectedTagOrderTarget) return;
-    const { parentTag, tag, surface } = this.selectedTagOrderTarget;
-    const buttons: any[] = Array.from(document.querySelectorAll('.puffs-tag-order-button'));
-    const buttonEl =
-      buttons.find((button: any) =>
-        button.dataset.puffsTagOrderParent === parentTag &&
-        button.dataset.puffsTagOrderTag === tag &&
-        button.dataset.puffsSurface === surface &&
-        button.offsetParent !== null
-      ) ||
-      buttons.find((button: any) =>
-        button.dataset.puffsTagOrderParent === parentTag &&
-        button.dataset.puffsTagOrderTag === tag &&
-        button.offsetParent !== null
-      );
-    if (buttonEl) buttonEl.focus({ preventScroll: true });
-  }
 }

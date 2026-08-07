@@ -21,13 +21,34 @@ export function wouldCreateDirectedCycle(
   return !parent || !child || parent === child || collectDirectedDescendants(adjacency, child).includes(parent);
 }
 
-export function sanitizeAcyclicAdjacency(value: Record<string, string[]>): Record<string, string[]> {
+/**
+ * 消除持久化数据里的环，保留先出现的边。
+ *
+ * isExemptEdge 命中的边不参与环检测、原样保留 —— 标签交集是对称关系，
+ * 成对存的两条边（A→B 与 B→A）在这张表里天然构成环，但它们不是继承边、
+ * 不会造成递归，必须豁免，否则每次对账都会削掉其中一条。
+ */
+export function sanitizeAcyclicAdjacency(
+  value: Record<string, string[]>,
+  isExemptEdge?: (parent: string, child: string) => boolean
+): Record<string, string[]> {
   const result: Record<string, string[]> = {};
+  const cycleGraph: Record<string, string[]> = {};
+  const keep = (parent: string, child: string) => {
+    if (!result[parent]) result[parent] = [];
+    if (!result[parent].includes(child)) result[parent].push(child);
+  };
   for (const [parent, children] of Object.entries(value || {})) {
     for (const child of Array.isArray(children) ? children : []) {
-      if (!child || wouldCreateDirectedCycle(result, parent, child)) continue;
-      if (!result[parent]) result[parent] = [];
-      if (!result[parent].includes(child)) result[parent].push(child);
+      if (!child) continue;
+      if (isExemptEdge?.(parent, child)) {
+        keep(parent, child);
+        continue;
+      }
+      if (wouldCreateDirectedCycle(cycleGraph, parent, child)) continue;
+      if (!cycleGraph[parent]) cycleGraph[parent] = [];
+      if (!cycleGraph[parent].includes(child)) cycleGraph[parent].push(child);
+      keep(parent, child);
     }
   }
   return result;
@@ -126,53 +147,39 @@ export function buildVisibleHierarchyForest(
   };
 }
 
-export function mergeInheritedPaths(
-  exactPaths: string[],
-  orderedBranches: Array<{ source: string; paths: string[]; fixed?: boolean }>,
-  excludedPaths: string[] = [],
-  includedPaths: string[] | null = null
-): { inheritedPaths: string[]; sourcesByPath: Map<string, string[]> } {
-  const seen = new Set(exactPaths);
-  const excluded = new Set(excludedPaths);
-  const included = includedPaths === null ? null : new Set(includedPaths);
-  const inheritedPaths: string[] = [];
-  const sourcesByPath = new Map<string, string[]>();
-  for (const branch of orderedBranches) {
-    for (const path of branch.paths || []) {
-      const sources = sourcesByPath.get(path) || [];
-      if (!sources.includes(branch.source)) sources.push(branch.source);
-      sourcesByPath.set(path, sources);
-      if (
-        !path ||
-        seen.has(path) ||
-        (!branch.fixed && (included ? !included.has(path) : excluded.has(path)))
-      ) continue;
-      seen.add(path);
-      inheritedPaths.push(path);
-    }
-  }
-  return { inheritedPaths, sourcesByPath };
-}
-
 export type TagInheritanceGroupNode = {
   tag: string;
   paths: string[];
   children: TagInheritanceGroupNode[];
   subtreePaths: string[];
+  /** 交集分组：叶子节点，paths 是实时算出的交集。 */
+  isIntersection?: boolean;
+  /** 交集分组里的笔记仍归属 root（它们本就是 root 的原生笔记），渲染时按这个标签走。 */
+  noteTag?: string;
 };
 
+/** root 层要额外挂上的交集分组。 */
+export type IntersectionGroupInput = { tag: string; paths: string[] };
+
+/**
+ * 按继承关系递归分组。
+ *
+ * intersectionGroups 只在 **root 层**生效：交集组是叶子（不再往下递归对方的子标签），
+ * 它们的笔记从 root 的「原生」组里扣掉，并按 rootChildOrder 与继承子分组混合排序 ——
+ * 两者本就同在 childrenByParent[root] 数组里，顺序由管理弹窗内的排序决定。
+ */
 export function buildTagInheritanceGroupTree(
   rootTag: string,
   childrenByParent: Record<string, string[]>,
   orderedPathsByTag: Record<string, string[]>,
   excludedPaths: string[] = [],
   fixedTags: Set<string> = new Set(),
-  includedPaths: string[] | null = null,
-  isPathVisible?: (tag: string, path: string, lineage: string[]) => boolean
+  isPathVisible?: (tag: string, path: string, lineage: string[]) => boolean,
+  intersectionGroups: IntersectionGroupInput[] = [],
+  rootChildOrder: string[] = []
 ): TagInheritanceGroupNode | null {
   if (!rootTag) return null;
   const excluded = new Set(excludedPaths || []);
-  const included = includedPaths === null ? null : new Set(includedPaths);
   const visit = (tag: string, branch: Set<string>, lineage: string[], isRoot = false): TagInheritanceGroupNode | null => {
     if (!tag || branch.has(tag)) return null;
     const nextBranch = new Set(branch);
@@ -182,7 +189,7 @@ export function buildTagInheritanceGroupTree(
         isRoot ||
         (isPathVisible
           ? isPathVisible(tag, path, lineage)
-          : (fixedTags.has(tag) || (included ? included.has(path) : !excluded.has(path))))
+          : (fixedTags.has(tag) || !excluded.has(path)))
       ));
     const children = (childrenByParent[tag] || [])
       .map((child) => visit(child, nextBranch, [...lineage, child], false))
@@ -193,7 +200,40 @@ export function buildTagInheritanceGroupTree(
     ]));
     return { tag, paths, children, subtreePaths };
   };
-  return visit(rootTag, new Set(), [rootTag], true);
+
+  const root = visit(rootTag, new Set(), [rootTag], true);
+  if (!root) return null;
+
+  const groups = (intersectionGroups || []).filter((group) => group.tag && group.paths?.length);
+  if (!groups.length) return root;
+
+  const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
+  // 交集笔记从「原生」组挪进各自的交集组
+  root.paths = root.paths.filter((path) => !intersectionPaths.has(path));
+  const intersectionNodes: TagInheritanceGroupNode[] = groups.map((group) => ({
+    tag: group.tag,
+    paths: [...group.paths],
+    children: [],
+    subtreePaths: [...group.paths],
+    isIntersection: true,
+    noteTag: rootTag,
+  }));
+
+  // 与继承子分组混排：都按各自标签在 rootChildOrder 里的位置排，未收录的排在最后
+  const orderOf = (node: TagInheritanceGroupNode) => {
+    const index = (rootChildOrder || []).indexOf(node.tag);
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  root.children = [...root.children, ...intersectionNodes]
+    .map((node, index) => ({ node, index }))
+    .sort((a, b) => orderOf(a.node) - orderOf(b.node) || a.index - b.index)
+    .map((entry) => entry.node);
+  // root.paths 被扣掉了交集路径，subtreePaths 必须把它们从交集节点那边并回来
+  root.subtreePaths = Array.from(new Set([
+    ...root.paths,
+    ...root.children.flatMap((child) => child.subtreePaths),
+  ]));
+  return root;
 }
 
 export function compareHierarchyParentItems(

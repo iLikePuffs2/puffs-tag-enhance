@@ -24,52 +24,17 @@ export type Migration = {
 /**
  * 版本 0 -> 1
  *
- * 1. 清理继承名单里的死数据。白名单只在「选择继承」下被读取、黑名单只在「全部继承」
- *    下被读取（见 core/inheritance.ts 的 isInheritanceEdgePathVisible），与当前模式
- *    无关的那一侧从不参与判定。这类残留由早期版本切换模式时未清理另一侧造成。
- *    只在迁移时一次性清掉 —— 不放进日常对账，那会破坏 v4 数据迁移「两侧一并搬迁」
- *    的既有契约。
+ * tagSidebarPreferredFiles 由 { 路径: true } 改为路径数组。值恒为 true，
+ * 对象形态白白多存一份 `:true`。
  *
- * 2. tagSidebarPreferredFiles 由 { 路径: true } 改为路径数组。值恒为 true，
- *    对象形态白白多存一份 `:true`。
+ * 这条迁移原本还负责清理继承名单里的死数据（白名单/黑名单各只在一种模式下被读取，
+ * 另一侧是残留）。白名单在 relations v7 整张表退场后，那段清理已无对象 ——
+ * v7 迁移会按可见集合精确重算排除名单，完全覆盖了它，故一并删除。
  */
 const migrateToV1: Migration = {
   version: 0,
-  description: '清理继承名单死数据、侧边栏偏好改数组',
+  description: '侧边栏偏好改数组',
   migrate(data, { log }) {
-    const inheritance = data?.relations?.tagInheritance;
-    if (inheritance) {
-      let removedEdges = 0;
-      let removedPaths = 0;
-      const isSelected = (parent: string, child: string) =>
-        inheritance.modeByParentChild?.[parent]?.[child] === 'selected';
-      const isFixed = (child: string) => !!inheritance.fixedParentByChild?.[child];
-
-      for (const [key, keepWhenSelected] of [
-        ['includedPathsByParentChild', true],
-        ['excludedPathsByParentChild', false],
-      ] as Array<[string, boolean]>) {
-        const table = inheritance[key];
-        if (!table || typeof table !== 'object') continue;
-        for (const [parent, children] of Object.entries(table)) {
-          if (!children || typeof children !== 'object') continue;
-          for (const child of Object.keys(children as Record<string, unknown>)) {
-            // 固定边两侧名单都不读；其余按当前模式判定该侧是否有效
-            const useful = !isFixed(child) && (isSelected(parent, child) === keepWhenSelected);
-            if (useful) continue;
-            const paths = (children as Record<string, unknown[]>)[child];
-            removedPaths += Array.isArray(paths) ? paths.length : 0;
-            removedEdges += 1;
-            delete (children as Record<string, unknown>)[child];
-          }
-          if (Object.keys(children as Record<string, unknown>).length === 0) delete table[parent];
-        }
-      }
-      if (removedEdges > 0) {
-        log(`清理继承名单死数据：${removedEdges} 条边、${removedPaths} 条路径`);
-      }
-    }
-
     const preferred = data?.tagSidebarPreferredFiles;
     if (preferred && !Array.isArray(preferred) && typeof preferred === 'object') {
       const paths = Object.entries(preferred)

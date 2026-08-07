@@ -51,8 +51,7 @@
 
 .puffs-tag-scroll-bottom-button,
 .puffs-tag-pin-button,
-.puffs-tag-scroll-top-button,
-.puffs-tag-inheritance-button {
+.puffs-tag-scroll-top-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -70,22 +69,19 @@
 
 .puffs-tag-scroll-bottom-button:hover,
 .puffs-tag-pin-button:hover,
-.puffs-tag-scroll-top-button:hover,
-.puffs-tag-inheritance-button:hover {
+.puffs-tag-scroll-top-button:hover {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
 
 .puffs-tag-scroll-bottom-button svg,
 .puffs-tag-pin-button svg,
-.puffs-tag-scroll-top-button svg,
-.puffs-tag-inheritance-button svg {
+.puffs-tag-scroll-top-button svg {
   width: 14px;
   height: 14px;
 }
 
-.puffs-tag-pin-button.is-active,
-.puffs-tag-inheritance-button.is-active {
+.puffs-tag-pin-button.is-active {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
   box-shadow: none;
@@ -239,7 +235,6 @@
 }
 
 .puffs-relation-add-row,
-.puffs-relation-manage-row,
 .puffs-relation-modal-footer {
   display: flex;
   align-items: center;
@@ -256,10 +251,6 @@
   gap: 4px;
   max-height: 46vh;
   overflow-y: auto;
-}
-
-.puffs-relation-exclusions.is-hidden {
-  display: none;
 }
 
 .puffs-inheritance-selection.is-hidden {
@@ -294,9 +285,35 @@
   background: var(--background-modifier-hover);
 }
 
+/* 选中态只用加深的背景色表示；排序按钮自身的高亮是另一半，不再加左侧竖线 */
 .puffs-relation-child-row.is-active {
   background: var(--background-modifier-hover);
-  box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.puffs-relation-child-order-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--clickable-icon-radius);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.puffs-relation-child-order-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.puffs-relation-child-order-button.is-selected {
+  background: color-mix(in srgb, var(--interactive-accent) 16%, transparent);
+  color: var(--interactive-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
 }
 
 .puffs-relation-child-icon,
@@ -350,29 +367,6 @@
   color: var(--text-error);
 }
 
-.puffs-relation-manage-row {
-  min-height: 34px;
-  padding: 4px 6px;
-  border-radius: var(--radius-s);
-  background: var(--background-secondary);
-}
-
-.puffs-relation-exclusions {
-  margin-top: 20px;
-}
-
-.puffs-relation-exclusions > h4 {
-  margin: 0 0 8px;
-}
-
-.puffs-relation-exclusion-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: 46vh;
-  overflow-y: auto;
-}
-
 .puffs-relation-exclusion-heading {
   display: flex;
   align-items: center;
@@ -381,12 +375,6 @@
   color: var(--text-muted);
   font-size: var(--font-ui-small);
   font-weight: 600;
-}
-
-.puffs-relation-exclusion-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
 .puffs-inheritance-selection {
@@ -786,37 +774,6 @@
   min-height: 30px;
   margin-inline-start: 0 !important;
   padding-inline-start: 24px !important;
-}
-
-.puffs-tag-order-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--clickable-icon-radius);
-}
-
-.puffs-tag-order-button.is-selected {
-  background: color-mix(in srgb, var(--interactive-accent) 16%, transparent);
-  color: var(--interactive-accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
-}
-
-.puffs-tag-order-parent-button.is-order-mode-parent {
-  background: color-mix(in srgb, var(--interactive-accent) 16%, transparent);
-  color: var(--interactive-accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
-}
-
-.puffs-tag-order-button svg {
-  width: 14px;
-  height: 14px;
-}
-
-.puffs-inheritance-tag-group-row.is-order-selected {
-  background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
 }
 
 .puffs-inline-hierarchy-child-card {
