@@ -218,7 +218,6 @@ describe('标签行签名', () => {
     expanded: false,
     pinned: false,
     targetPath: '',
-    inlineHierarchyVersion: 0,
     relationVersion: 0,
   };
 
@@ -243,7 +242,6 @@ describe('标签行签名', () => {
     ['展开态', { expanded: true }],
     ['置顶态', { pinned: true }],
     ['定位目标', { targetPath: 'a.md' }],
-    ['内联层级版本', { inlineHierarchyVersion: 1 }],
     ['关系结构版本', { relationVersion: 1 }],
   ])('%s 变化会改变签名', (_label, contextPatch) => {
     expect(tagRowSignature(base, { ...context, ...contextPatch }))

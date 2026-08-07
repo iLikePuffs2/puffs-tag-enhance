@@ -79,6 +79,7 @@ function createOrderModal(children = ['#甲', '#乙', '#丙']) {
   const modal = createRenderModal({
     children: [...children],
     activeChild: children[0],
+    orderTargetChild: null,
     renderExclusionGroups: vi.fn(),
     renderInheritanceSelection: vi.fn(),
     syncMutationState: vi.fn(),
@@ -91,84 +92,120 @@ function createOrderModal(children = ['#甲', '#乙', '#丙']) {
 }
 
 describe('管理子标签弹窗内的排序', () => {
-  it('每行左侧是排序按钮，选中行的按钮高亮', () => {
+  it('默认编辑第一行，但所有排序按钮均未选中', () => {
     const { modal } = createOrderModal();
-    modal.activeChild = '#乙';
     modal.renderChildren();
 
     const buttons = Array.from(
       modal.childrenListEl.querySelectorAll('.puffs-relation-child-order-button')
     ) as HTMLElement[];
     expect(buttons).toHaveLength(3);
-    expect(buttons.map((el) => el.classList.contains('is-selected'))).toEqual([false, true, false]);
-    // 选中行同时有背景色类，不再有蓝色竖线那种第三种标记
+    expect(buttons.map((el) => el.classList.contains('is-selected'))).toEqual([false, false, false]);
+    expect(buttons.map((el) => el.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false']);
     const activeRow = modal.childrenListEl.querySelector('.puffs-relation-child-row.is-active') as HTMLElement;
-    expect(activeRow.dataset.puffsTag).toBe('#乙');
+    expect(activeRow.dataset.puffsTag).toBe('#甲');
   });
 
-  it('点击排序按钮即选中该行', () => {
+  it('编辑行与排序目标独立，重复点击抓手会取消排序选择', () => {
     const { modal } = createOrderModal();
     modal.renderChildren();
+    const secondRow = modal.childrenListEl.querySelectorAll('.puffs-relation-child-row')[1] as HTMLElement;
     const secondButton = modal.childrenListEl
       .querySelectorAll('.puffs-relation-child-order-button')[1] as HTMLElement;
 
     secondButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(modal.activeChild).toBe('#甲');
+    expect(modal.orderTargetChild).toBe('#乙');
+    expect(secondRow.classList.contains('is-active')).toBe(false);
+    expect(secondButton.classList.contains('is-selected')).toBe(true);
+
+    secondRow.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(modal.activeChild).toBe('#乙');
+    expect(modal.orderTargetChild).toBe('#乙');
+
+    secondButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(modal.activeChild).toBe('#乙');
+    expect(modal.orderTargetChild).toBeNull();
   });
 
   it('上下移动逐格调整并按新顺序持久化', async () => {
     const { modal, saved } = createOrderModal();
-    modal.activeChild = '#丙';
+    modal.orderTargetChild = '#丙';
 
-    expect(await modal.moveActiveChild(-1)).toBe(true);
+    expect(await modal.moveOrderTarget(-1)).toBe(true);
     expect(saved.at(-1)).toEqual(['#甲', '#丙', '#乙']);
 
-    expect(await modal.moveActiveChild(-1)).toBe(true);
+    expect(await modal.moveOrderTarget(-1)).toBe(true);
     expect(saved.at(-1)).toEqual(['#丙', '#甲', '#乙']);
   });
 
   it('已在边界时不再移动，也不写入', async () => {
     const { modal, saved } = createOrderModal();
-    modal.activeChild = '#甲';
-    expect(await modal.moveActiveChild(-1)).toBe(false);
+    modal.orderTargetChild = '#甲';
+    expect(await modal.moveOrderTarget(-1)).toBe(false);
     expect(saved).toHaveLength(0);
+  });
+
+  it('未选择排序目标时快捷键与右键移动都不写入', async () => {
+    const { modal, saved } = createOrderModal();
+    expect(await modal.moveOrderTarget(-1)).toBe(false);
+    expect(await modal.moveOrderTargetAfter('#丙')).toBe(false);
+    expect(saved).toHaveLength(0);
+  });
+
+  it('列表刷新只清理已经失效的排序目标，不改变仍有效的编辑行', () => {
+    const { modal } = createOrderModal();
+    modal.activeChild = '#甲';
+    modal.orderTargetChild = '#乙';
+    modal.updateChildren(['#甲', '#丙']);
+    expect(modal.activeChild).toBe('#甲');
+    expect(modal.orderTargetChild).toBeNull();
   });
 
   it('右键另一行把选中项移到它下方', async () => {
     const { modal, saved } = createOrderModal();
-    modal.activeChild = '#甲';
+    modal.orderTargetChild = '#甲';
 
-    expect(await modal.moveActiveChildAfter('#丙')).toBe(true);
+    expect(await modal.moveOrderTargetAfter('#丙')).toBe(true);
     expect(saved.at(-1)).toEqual(['#乙', '#丙', '#甲']);
   });
 
   it('已经紧跟在目标下方时不产生写入', async () => {
     const { modal, saved } = createOrderModal();
-    modal.activeChild = '#乙';
-    expect(await modal.moveActiveChildAfter('#甲')).toBe(false);
+    modal.orderTargetChild = '#乙';
+    expect(await modal.moveOrderTargetAfter('#甲')).toBe(false);
     expect(saved).toHaveLength(0);
   });
 
-  it('复用笔记排序的上下移动快捷键', async () => {
+  it('把笔记排序快捷键注册到 Modal Scope，并移动独立排序目标', async () => {
     const { modal, saved } = createOrderModal();
-    modal.activeChild = '#丙';
+    modal.orderTargetChild = '#丙';
     modal.plugin.settings = {
       moveNoteUpHotkey: 'Alt + Shift + ↑',
       moveNoteDownHotkey: 'Alt + Shift + ↓',
     };
-    const makeEvent = (key: string) => Object.assign(
-      new KeyboardEvent('keydown', { key, altKey: true, shiftKey: true, bubbles: true }),
-      { preventDefault: vi.fn(), stopPropagation: vi.fn() }
-    );
+    const registrations: any[] = [];
+    modal.scope = {
+      register: vi.fn((modifiers, key, handler) => registrations.push({ modifiers, key, handler })),
+    };
+    modal.registerChildOrderHotkeys();
+    expect(registrations.map(({ modifiers, key }) => ({ modifiers, key }))).toEqual([
+      { modifiers: ['Alt', 'Shift'], key: 'ArrowUp' },
+      { modifiers: ['Alt', 'Shift'], key: 'ArrowDown' },
+    ]);
 
-    expect(modal.handleChildOrderHotkey(makeEvent('ArrowUp'))).toBe(true);
+    const event = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    expect(registrations[0].handler(event)).toBe(false);
+    await Promise.resolve();
     await Promise.resolve();
     expect(saved.at(-1)).toEqual(['#甲', '#丙', '#乙']);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
 
-    // 不带修饰键的方向键不归排序管，交给弹窗内其它处理器
-    expect(modal.handleChildOrderHotkey(
-      new KeyboardEvent('keydown', { key: 'ArrowUp' })
-    )).toBe(false);
+    modal.orderTargetChild = null;
+    const idleEvent = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    expect(registrations[1].handler(idleEvent)).toBeUndefined();
+    expect(idleEvent.preventDefault).not.toHaveBeenCalled();
   });
 
   it('管理父标签弹窗不渲染排序按钮 —— 那一列按笔记数量自动排序', () => {

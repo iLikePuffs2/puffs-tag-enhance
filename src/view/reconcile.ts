@@ -144,7 +144,6 @@ export function tagRowSignature(
     expanded: boolean;
     pinned: boolean;
     targetPath: string;
-    inlineHierarchyVersion: number;
     relationVersion: number;
   }
 ): string {
@@ -165,7 +164,6 @@ export function tagRowSignature(
     context.pinned ? '1' : '0',
     context.expanded ? '1' : '0',
     context.targetPath,
-    String(context.inlineHierarchyVersion),
     String(context.relationVersion),
     // 展开时笔记列表参与签名；折叠时不关心，省去大量字符串拼接
     context.expanded ? files.map((file) => file.path).join('\n') : '',

@@ -6,10 +6,17 @@
 // 渲染实现，并改为 keyed 增量重绘。届时这些断言必须依然成立：class 名、dataset、
 // 按钮的出现条件与排列顺序、计数文案，共同决定了用户看到和点到的东西。
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { TFile } from 'obsidian';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TagPaneBehavior } from './tag-pane';
+import { PuffsTagSidebarView } from './view/tag-sidebar-view';
+import { TagTreeRendererBehavior } from './view/tag-tree-renderer';
 
 type AnyRecord = Record<string, unknown>;
+
+function makeTFile(path: string): TFile {
+  return new (TFile as any)(path) as TFile;
+}
 
 function makeItem(overrides: AnyRecord = {}): AnyRecord {
   const files = [{ path: 'a.md' }, { path: 'b.md' }];
@@ -215,6 +222,230 @@ describe('标签行 · 折叠箭头是纯装饰', () => {
     expect(toggleEl.classList.contains('puffs-tag-order-parent-button')).toBe(false);
     expect(toggleEl.getAttribute('aria-hidden')).toBe('true');
     expect(toggleEl.dataset.puffsTagOrderTag).toBeUndefined();
+  });
+});
+
+describe('标签行 · 展开态原地更新', () => {
+  function createSidebarHarness() {
+    const behavior = makeBehavior() as any;
+    behavior.inlineHierarchyExpansionVersion = 0;
+    behavior.relationStructureVersion = 0;
+    behavior.renderNoteList = (treeItemEl: HTMLElement) => {
+      let listEl = treeItemEl.querySelector('.puffs-tag-note-list') as HTMLElement | null;
+      if (!listEl) {
+        listEl = document.createElement('div');
+        listEl.className = 'tree-item-children puffs-tag-note-list';
+        treeItemEl.appendChild(listEl);
+      }
+      listEl.textContent = 'notes';
+    };
+
+    const sidebar = Object.create(PuffsTagSidebarView.prototype) as any;
+    sidebar.plugin = behavior;
+    sidebar.listEl = document.createElement('div');
+    sidebar.tagContainerEl = document.createElement('div');
+    sidebar.tagContainerEl.appendChild(sidebar.listEl);
+    document.body.appendChild(sidebar.tagContainerEl);
+    sidebar.lastRowSignatures = new Map();
+    sidebar.noteCardSearchState = { target: null };
+    return { behavior, sidebar };
+  }
+
+  it('展开和收起复用同一标签行，只增删按钮与笔记列表', () => {
+    const { behavior, sidebar } = createSidebarHarness();
+    const item = makeItem();
+    sidebar.renderTagRows([item], {});
+    const original = sidebar.listEl.firstElementChild as HTMLElement;
+    const originalRow = original.querySelector('.puffs-tag-list-row') as HTMLElement;
+    originalRow.tabIndex = 0;
+    originalRow.focus();
+    sidebar.tagContainerEl.scrollTop = 120;
+
+    behavior.expandedTags.add('#读书');
+    sidebar.renderTagRows([item], {});
+    expect(sidebar.listEl.firstElementChild).toBe(original);
+    expect(document.activeElement).toBe(originalRow);
+    expect(sidebar.tagContainerEl.scrollTop).toBe(120);
+    expect(original.classList.contains('puffs-tag-expanded')).toBe(true);
+    expect(original.querySelector('.puffs-tag-note-list')).not.toBeNull();
+    expect(original.querySelector('.puffs-tag-scroll-bottom-button')).not.toBeNull();
+    expect(original.querySelector('.puffs-tag-pin-button')).not.toBeNull();
+
+    behavior.expandedTags.delete('#读书');
+    sidebar.renderTagRows([item], {});
+    expect(sidebar.listEl.firstElementChild).toBe(original);
+    expect(original.classList.contains('puffs-tag-expanded')).toBe(false);
+    expect(original.querySelector('.puffs-tag-note-list')).toBeNull();
+    expect(original.querySelector('.puffs-tag-scroll-bottom-button')).toBeNull();
+    expect(original.querySelector('.puffs-tag-pin-button')).toBeNull();
+  });
+
+  it('除展开态外的数据变化仍重建标签行', () => {
+    const { sidebar } = createSidebarHarness();
+    const item = makeItem();
+    sidebar.renderTagRows([item], {});
+    const original = sidebar.listEl.firstElementChild;
+
+    sidebar.renderTagRows([{ ...item, displayName: '新的显示名' }], {});
+    expect(sidebar.listEl.firstElementChild).not.toBe(original);
+    expect(sidebar.listEl.querySelector('.tree-item-inner-text')?.textContent).toBe('新的显示名');
+  });
+
+  it('内层展开版本变化不再让顶层标签行失效', () => {
+    const { behavior, sidebar } = createSidebarHarness();
+    const item = makeItem();
+    sidebar.renderTagRows([item], {});
+    const original = sidebar.listEl.firstElementChild;
+
+    behavior.inlineHierarchyExpansionVersion += 1;
+    sidebar.renderTagRows([item], {});
+    expect(sidebar.listEl.firstElementChild).toBe(original);
+  });
+});
+
+function createTreeRendererBehavior() {
+  const behavior = Object.create(TagTreeRendererBehavior.prototype) as any;
+  behavior.collapsedInlineHierarchyBranches = new Set();
+  behavior.inlineHierarchyExpansionVersion = 0;
+  behavior.settings = { scrollTopButtonThreshold: 0 };
+  behavior.getRelativeChildDisplayName = (_parent: string, child: string) => child.replace(/^#/, '');
+  behavior.showTagContextMenu = vi.fn();
+  behavior.toggleInlineHierarchyBranch = (key: string) => {
+    if (behavior.collapsedInlineHierarchyBranches.has(key)) {
+      behavior.collapsedInlineHierarchyBranches.delete(key);
+    } else {
+      behavior.collapsedInlineHierarchyBranches.add(key);
+    }
+    behavior.inlineHierarchyExpansionVersion += 1;
+    return !behavior.collapsedInlineHierarchyBranches.has(key);
+  };
+  behavior.renderInlineTagNoteTree = (hostEl: HTMLElement, files: TFile[]) => {
+    hostEl.empty();
+    for (const file of files) hostEl.createDiv({ text: file.basename, cls: 'mock-note' });
+  };
+  return behavior;
+}
+
+describe('内层继承标签 · 原地展开', () => {
+  it('只增删目标内容，目标行与兄弟分组均保持同一实例', () => {
+    const behavior = createTreeRendererBehavior();
+    const files = new Map([
+      ['初识.md', makeTFile('初识.md')],
+      ['升温.md', makeTFile('升温.md')],
+    ]);
+    behavior.app = { vault: { getAbstractFileByPath: (path: string) => files.get(path) } };
+    const hostEl = document.createElement('div') as any;
+    document.body.appendChild(hostEl);
+    behavior.renderTagInheritanceBrowseTree(hostEl, {
+      tag: '#爱情',
+      paths: [],
+      children: [
+        { tag: '#初识', paths: ['初识.md'], subtreePaths: ['初识.md'], children: [] },
+        { tag: '#升温', paths: ['升温.md'], subtreePaths: ['升温.md'], children: [] },
+      ],
+    });
+
+    const findGroup = (tag: string) => Array.from<HTMLElement>(
+      hostEl.querySelectorAll('.puffs-inheritance-tag-group')
+    ).find((el) => (el.querySelector('.puffs-inheritance-tag-group-row') as HTMLElement | null)
+      ?.dataset.puffsInheritanceTag === tag)!;
+    const first = findGroup('#初识');
+    const target = findGroup('#升温');
+    const targetRow = target.querySelector('.puffs-inheritance-tag-group-row') as HTMLElement;
+    targetRow.focus();
+
+    targetRow.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(findGroup('#初识')).toBe(first);
+    expect(findGroup('#升温')).toBe(target);
+    expect(target.querySelector('.puffs-inheritance-tag-group-content')).toBeNull();
+    expect(targetRow.getAttribute('aria-expanded')).toBe('false');
+
+    targetRow.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(findGroup('#初识')).toBe(first);
+    expect(findGroup('#升温')).toBe(target);
+    expect(target.querySelector('.puffs-inheritance-tag-group-content')).not.toBeNull();
+  });
+
+  it('批量同步复用已有分组节点', () => {
+    const behavior = createTreeRendererBehavior();
+    const file = makeTFile('升温.md');
+    behavior.app = { vault: { getAbstractFileByPath: () => file } };
+    const hostEl = document.createElement('div') as any;
+    behavior.renderTagInheritanceBrowseTree(hostEl, {
+      tag: '#爱情', paths: [],
+      children: [{ tag: '#升温', paths: ['升温.md'], subtreePaths: ['升温.md'], children: [] }],
+    });
+    const group = hostEl.querySelector('.puffs-inheritance-tag-group') as any;
+    const key = group.querySelector('.puffs-inheritance-tag-group-row').dataset.puffsInheritanceGroup;
+
+    behavior.collapsedInlineHierarchyBranches.add(key);
+    behavior.syncInlineHierarchyExpansion(hostEl);
+    expect(hostEl.querySelector('.puffs-inheritance-tag-group')).toBe(group);
+    expect(group.querySelector('.puffs-inheritance-tag-group-content')).toBeNull();
+
+    behavior.collapsedInlineHierarchyBranches.delete(key);
+    behavior.syncInlineHierarchyExpansion(hostEl);
+    expect(hostEl.querySelector('.puffs-inheritance-tag-group')).toBe(group);
+    expect(group.querySelector('.puffs-inheritance-tag-group-content')).not.toBeNull();
+  });
+});
+
+function createInlineNoteBehavior() {
+  const behavior = createTreeRendererBehavior();
+  behavior.renderInlineTagNoteTree = TagTreeRendererBehavior.prototype.renderInlineTagNoteTree;
+  behavior.getNoteHierarchySettings = () => ({ childrenByParentPath: { '父.md': ['子.md'] } });
+  behavior.getInlineHierarchyBranchKey = (tag: string, path: string) => `${tag}\u0000${path}`;
+  behavior.hierarchyBranchContains = () => false;
+  behavior.isInheritedFileForTag = () => false;
+  behavior.isNoteOrderTargetSelected = () => false;
+  behavior.syncNoteOrderButtonSelection = (button: HTMLElement) => {
+    const expanded = button.dataset.puffsExpanded === 'true';
+    button.classList.toggle('is-collapsed', !expanded);
+    button.setAttribute('aria-expanded', String(expanded));
+  };
+  behavior.bindNoteParentControlButton = (button: HTMLElement, toggleExpansion: () => void) => {
+    button.addEventListener('click', toggleExpansion);
+  };
+  behavior.getInlineHierarchyDisplayName = (_tag: string, _parent: string, file: TFile) => file.basename;
+  behavior.openFileInMainWorkspace = vi.fn();
+  behavior.showHierarchyChildMenu = vi.fn();
+  behavior.showNoteCardContextMenu = vi.fn();
+  behavior.toggleNoteOrderTarget = vi.fn();
+  behavior.toggleHierarchyNoteOrderTarget = vi.fn();
+  behavior.scheduleTagTopScroll = vi.fn();
+  return behavior;
+}
+
+describe('内层父子笔记 · 原地展开', () => {
+  it.each([
+    ['组合按钮', false, '.puffs-note-parent-control-button'],
+    ['独立箭头', true, '.puffs-inline-hierarchy-toggle'],
+  ])('%s只更新当前父笔记，兄弟根笔记保持同一实例', (_label, isVirtual, selector) => {
+    const behavior = createInlineNoteBehavior();
+    const hostEl = document.createElement('div') as any;
+    document.body.appendChild(hostEl);
+    behavior.renderInlineTagNoteTree(
+      hostEl,
+      [makeTFile('父.md'), makeTFile('子.md'), makeTFile('旁支.md')],
+      '#读书',
+      isVirtual
+    );
+    const findItem = (path: string) => Array.from<HTMLElement>(
+      hostEl.querySelectorAll('.puffs-tag-note-item')
+    ).find((el) => el.dataset.path === path)!;
+    const parent = findItem('父.md');
+    const sibling = findItem('旁支.md');
+    const control = parent.querySelector(selector) as HTMLElement;
+
+    control.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(findItem('父.md')).toBe(parent);
+    expect(findItem('旁支.md')).toBe(sibling);
+    expect(parent.querySelector('.puffs-inline-hierarchy-children')).toBeNull();
+
+    control.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(findItem('父.md')).toBe(parent);
+    expect(findItem('旁支.md')).toBe(sibling);
+    expect(parent.querySelector('.puffs-inline-hierarchy-children')).not.toBeNull();
   });
 });
 

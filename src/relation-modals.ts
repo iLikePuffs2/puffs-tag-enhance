@@ -4,7 +4,6 @@ import {
   DEFAULT_MOVE_NOTE_UP_HOTKEY,
   getTagDisplayName,
   isNestedTag,
-  normalizeHotkeyKey,
   normalizeTag,
   parseHotkeyText,
 } from "./models";
@@ -204,6 +203,8 @@ class TagInheritanceModal extends Modal {
   inputEl: any;
   isComposing: any;
   isSubmitting: any;
+  childOrderHotkeysRegistered: any;
+  orderTargetChild: any;
   parentTag: any;
   picker: any;
   plugin: any;
@@ -228,9 +229,11 @@ class TagInheritanceModal extends Modal {
       ? plugin.sortTagsByVisibleCount(related)
       : [...related];
     this.activeChild = this.children[0] || null;
+    this.orderTargetChild = null;
     this.query = '';
     this.isComposing = false;
     this.isSubmitting = false;
+    this.childOrderHotkeysRegistered = false;
     this.searchHostEl = null;
     this.inputEl = null;
     this.picker = null;
@@ -245,6 +248,7 @@ class TagInheritanceModal extends Modal {
 
   onOpen() {
     this.modalEl.classList.add('puffs-relation-modal', 'puffs-tag-relation-modal');
+    this.registerChildOrderHotkeys();
     this.buildLayout();
   }
 
@@ -286,7 +290,6 @@ class TagInheritanceModal extends Modal {
     this.renderInheritanceSelection();
 
     this.modalEl.addEventListener('keydown', (event) => {
-      if (this.handleChildOrderHotkey(event)) return;
       // Ctrl+F 只在勾选面板可见时接管，判据与 renderInheritanceSelection 保持一致
       if (
         this.selectionSectionEl?.classList.contains('is-hidden') !== false ||
@@ -336,6 +339,7 @@ class TagInheritanceModal extends Modal {
       if (this.relationMode === 'parents' && mode === 'intersection') {
         this.children = this.children.filter((tag: any) => tag !== relatedTag);
         if (this.activeChild === relatedTag) this.activeChild = this.children[0] || null;
+        if (this.orderTargetChild === relatedTag) this.orderTargetChild = null;
       }
       this.renderChildren();
       this.renderInheritanceSelection();
@@ -359,51 +363,65 @@ class TagInheritanceModal extends Modal {
     return this.relationMode === 'children';
   }
 
-  /** 逐格上下移动选中的子标签。 */
-  async moveActiveChild(direction: any) {
-    if (!this.canReorderChildren() || !this.activeChild || this.isSubmitting) return false;
+  /** 排序抓手与当前编辑行互不影响；再次点击同一抓手会取消排序选择。 */
+  toggleOrderTarget(child: any) {
+    if (!this.canReorderChildren() || !child || !this.children.includes(child)) return;
+    this.orderTargetChild = this.orderTargetChild === child ? null : child;
+    this.renderChildren();
+  }
+
+  /** 逐格上下移动排序目标。 */
+  async moveOrderTarget(direction: any) {
+    if (!this.canReorderChildren() || !this.orderTargetChild || this.isSubmitting) return false;
     const next = [...this.children];
-    const index = next.indexOf(this.activeChild);
+    const index = next.indexOf(this.orderTargetChild);
     const nextIndex = index + direction;
     if (index < 0 || nextIndex < 0 || nextIndex >= next.length) return false;
     [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
     return await this.persistChildren(next);
   }
 
-  /** 把选中的子标签移到目标行下方。与 interactions.ts 的 reorderChildTag 同一算法。 */
-  async moveActiveChildAfter(targetTag: any) {
-    if (!this.canReorderChildren() || !this.activeChild || this.isSubmitting) return false;
-    if (!targetTag || targetTag === this.activeChild) return false;
+  /** 把排序目标移到右键行下方。与 interactions.ts 的笔记排序算法保持一致。 */
+  async moveOrderTargetAfter(targetTag: any) {
+    if (!this.canReorderChildren() || !this.orderTargetChild || this.isSubmitting) return false;
+    if (!targetTag || targetTag === this.orderTargetChild) return false;
     const next = [...this.children];
-    const movingIndex = next.indexOf(this.activeChild);
+    const movingIndex = next.indexOf(this.orderTargetChild);
     const targetIndex = next.indexOf(targetTag);
     // 已经紧跟在目标下方时无需写入
     if (movingIndex < 0 || targetIndex < 0 || movingIndex === targetIndex + 1) return false;
     next.splice(movingIndex, 1);
-    next.splice(next.indexOf(targetTag) + 1, 0, this.activeChild);
+    next.splice(next.indexOf(targetTag) + 1, 0, this.orderTargetChild);
     return await this.persistChildren(next);
   }
 
-  /** 复用笔记排序的上下移动快捷键配置。 */
-  handleChildOrderHotkey(event: any) {
-    if (!this.canReorderChildren() || !this.activeChild || event.isComposing) return false;
-    const matches = (settingValue: any, fallback: any) => {
-      const hotkey = parseHotkeyText(settingValue, fallback);
-      if (normalizeHotkeyKey(event.key) !== hotkey.key) return false;
-      const wanted = new Set(hotkey.modifiers);
-      return (wanted.has('Ctrl') || wanted.has('Mod')) === (event.ctrlKey || event.metaKey) &&
-        wanted.has('Shift') === event.shiftKey &&
-        wanted.has('Alt') === event.altKey;
-    };
+  /**
+   * 复用笔记排序快捷键，但注册在 Modal 自带的 Scope 中。
+   * 这样无论焦点在搜索框、复选框还是排序按钮，事件都会先由当前弹窗处理。
+   */
+  registerChildOrderHotkeys() {
+    if (
+      this.childOrderHotkeysRegistered ||
+      !this.canReorderChildren() ||
+      !this.scope?.register
+    ) return;
+    this.childOrderHotkeysRegistered = true;
     const settings = this.plugin?.settings || {};
-    let direction = 0;
-    if (matches(settings.moveNoteUpHotkey, DEFAULT_MOVE_NOTE_UP_HOTKEY)) direction = -1;
-    else if (matches(settings.moveNoteDownHotkey, DEFAULT_MOVE_NOTE_DOWN_HOTKEY)) direction = 1;
-    if (!direction) return false;
-    event.preventDefault();
-    event.stopPropagation();
-    void this.moveActiveChild(direction);
-    return true;
+    const register = (settingValue: any, fallback: any, direction: any) => {
+      const hotkey = parseHotkeyText(settingValue, fallback);
+      this.scope.register(hotkey.modifiers as any, hotkey.key, (event: any) => {
+        if (!this.orderTargetChild || this.isSubmitting) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void this.moveOrderTarget(direction).catch((error: any) => {
+          console.error('[Puffs Tag Enhance] Failed to move child tag:', error);
+          new Notice('调整子标签顺序失败');
+        });
+        return false;
+      });
+    };
+    register(settings.moveNoteUpHotkey, DEFAULT_MOVE_NOTE_UP_HOTKEY, -1);
+    register(settings.moveNoteDownHotkey, DEFAULT_MOVE_NOTE_DOWN_HOTKEY, 1);
   }
 
   buildInheritanceSelectionSection() {
@@ -442,15 +460,15 @@ class TagInheritanceModal extends Modal {
         rowEl = this.childrenListEl.createDiv({ cls: 'puffs-relation-child-row' });
         rowEl.dataset.puffsTag = child;
         if (this.canReorderChildren()) {
-          // 子标签排序的抓手。选中它就等于选中这一行，与下方面板共用同一个 activeChild
+          // 排序抓手拥有独立选择态，不改变当前用于编辑继承笔记的行。
           const orderButton = rowEl.createEl('button', {
             cls: 'puffs-relation-child-order-button',
-            attr: { 'aria-label': '选中后可调整顺序' },
+            attr: { 'aria-label': '选中该子标签进行排序', 'aria-pressed': 'false' },
           });
           setIcon(orderButton, 'grip-vertical');
           orderButton.addEventListener('click', (event: any) => {
             event.stopPropagation();
-            this.selectActiveChild(rowEl.dataset.puffsTag);
+            this.toggleOrderTarget(rowEl.dataset.puffsTag);
           });
         } else {
           const iconEl = rowEl.createSpan({ cls: 'puffs-relation-child-icon' });
@@ -491,12 +509,12 @@ class TagInheritanceModal extends Modal {
             void this.removeChild(child);
           }).open();
         });
-        // 右键另一行：把当前选中的子标签移到该行下方
+        // 右键另一行：把独立的排序目标移到该行下方
         rowEl.addEventListener('contextmenu', (event: any) => {
-          if (!this.canReorderChildren() || !this.activeChild) return;
+          if (!this.canReorderChildren() || !this.orderTargetChild) return;
           event.preventDefault();
           event.stopPropagation();
-          void this.moveActiveChildAfter(rowEl.dataset.puffsTag);
+          void this.moveOrderTargetAfter(rowEl.dataset.puffsTag);
         });
       }
       // parents 模式这一列是父标签，简称口径只在子标签方向成立
@@ -507,8 +525,14 @@ class TagInheritanceModal extends Modal {
       rowEl.classList.toggle('is-active', child === this.activeChild);
       rowEl.setAttribute('role', 'button');
       rowEl.setAttribute('aria-pressed', String(child === this.activeChild));
-      rowEl.querySelector('.puffs-relation-child-order-button')
-        ?.classList.toggle('is-selected', child === this.activeChild);
+      const orderButton = rowEl.querySelector('.puffs-relation-child-order-button');
+      const isOrderTarget = child === this.orderTargetChild;
+      orderButton?.classList.toggle('is-selected', isOrderTarget);
+      orderButton?.setAttribute('aria-pressed', String(isOrderTarget));
+      orderButton?.setAttribute(
+        'aria-label',
+        isOrderTarget ? '取消该子标签的排序选择' : '选中该子标签进行排序'
+      );
       this.syncInheritanceModeButton(rowEl, child);
       this.syncFixedRelationButton(rowEl, child);
       this.childrenListEl.appendChild(rowEl);
@@ -547,7 +571,7 @@ class TagInheritanceModal extends Modal {
   syncMutationState() {
     if (this.inputEl) this.inputEl.disabled = this.isSubmitting;
     for (const button of this.childrenListEl?.querySelectorAll(
-      '.puffs-relation-child-remove, .puffs-relation-fixed-toggle, .puffs-inheritance-edge-mode'
+      '.puffs-relation-child-remove, .puffs-relation-child-order-button, .puffs-relation-fixed-toggle, .puffs-inheritance-edge-mode'
     ) || []) {
       button.disabled = this.isSubmitting || button.dataset.puffsInheritanceMode === 'fixed';
     }
@@ -610,6 +634,9 @@ class TagInheritanceModal extends Modal {
       : [...nextChildren];
     if (!this.children.includes(this.activeChild)) {
       this.activeChild = this.children[0] || null;
+    }
+    if (!this.children.includes(this.orderTargetChild)) {
+      this.orderTargetChild = null;
     }
     this.renderChildren();
     this.picker?.render();

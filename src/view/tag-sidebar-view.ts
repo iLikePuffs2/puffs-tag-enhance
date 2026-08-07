@@ -376,17 +376,33 @@ class PuffsTagSidebarView extends ItemView {
 
     for (const item of displayItems) {
       const key = String(item.tag);
-      const signature = tagRowSignature(item, {
+      const signatureContext = {
         expanded: plugin.expandedTags.has(item.tag),
         pinned: plugin.settings.pinnedTag === item.tag,
         targetPath: this.noteCardSearchState?.target?.tag === item.tag ? targetPath : '',
-        inlineHierarchyVersion: plugin.inlineHierarchyExpansionVersion || 0,
         relationVersion: plugin.relationStructureVersion || 0,
-      });
+      };
+      const signature = tagRowSignature(item, signatureContext);
       nextSignatures.set(key, signature);
 
       const reusable = existingRows.get(key);
       if (reusable && this.lastRowSignatures.get(key) === signature) {
+        orderedNodes.push(reusable);
+        continue;
+      }
+      // 展开态是唯一变化时原地增删笔记列表，避免整条标签行被替换后闪烁。
+      // 用当前数据 + 旧 DOM 展开态重算旧签名，只有完全命中才允许走这条快速路径；
+      // 计数、文件、关系版本等任何其它变化都会继续走下方的整行重建。
+      const wasExpanded = reusable?.classList.contains('puffs-tag-expanded') === true;
+      if (
+        reusable &&
+        wasExpanded !== signatureContext.expanded &&
+        this.lastRowSignatures.get(key) === tagRowSignature(item, {
+          ...signatureContext,
+          expanded: wasExpanded,
+        })
+      ) {
+        plugin.syncListModeTagExpansion(reusable, item, this, this);
         orderedNodes.push(reusable);
         continue;
       }
@@ -557,7 +573,9 @@ class PuffsTagSidebarView extends ItemView {
     if (inheritanceControl) {
       for (const tag of inheritanceControl.tags) plugin.expandedTags.add(tag);
       plugin.setAllTagInheritanceGroupsExpanded(inheritanceControl.keys, inheritanceControl.shouldExpand);
-      plugin.refreshAllTagViews();
+      // 先让原本折叠的顶层标签挂载内容，再把批量状态原地同步给现有内层分支。
+      this.render();
+      plugin.syncInlineHierarchyExpansion(this.listEl);
       return;
     }
 
@@ -594,6 +612,19 @@ class PuffsTagSidebarView extends ItemView {
     setIcon(buttonEl, shouldExpand ? 'chevrons-up-down' : 'chevrons-down-up');
     buttonEl.setAttribute('aria-label', shouldExpand ? '全部展开' : '全部收起');
     this.setToolbarContextHidden(false);
+  }
+
+  /** 内层分支局部切换后只刷新顶栏按钮语义，不触发标签列表重绘。 */
+  refreshExpandCollapseToolbarState() {
+    const resolved = resolveSearch(this.searchQuery, (query) =>
+      this.plugin.resolvePinnedSearchQuery(query)
+    );
+    if (resolved.id === 'hierarchy') {
+      this.updateHierarchyToolbarState();
+      return;
+    }
+    const items = this.collectItems(resolved);
+    this.updateToolbarState(items.display, items.matching);
   }
 
   updateHierarchyToolbarState() {
@@ -645,7 +676,8 @@ class PuffsTagSidebarView extends ItemView {
     if (inlineToggleEl) {
       stop();
       plugin.toggleInlineHierarchyBranch(inlineToggleEl.dataset.puffsInlineHierarchyBranchKey);
-      plugin.refreshAllTagViews();
+      inlineToggleEl.closest('[data-puffs-inline-expansion-host="true"]')?.puffsSyncExpansion?.();
+      this.refreshExpandCollapseToolbarState();
       return;
     }
 

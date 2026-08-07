@@ -249,6 +249,7 @@ export class TagPaneBehavior {
     const tagEl = document.createElement('div');
     tagEl.className = 'tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row';
     tagEl.dataset.puffsTag = tag;
+    tagEl.setAttribute('aria-expanded', String(isExpanded));
     if (isVirtual) tagEl.dataset.puffsVirtualTag = 'true';
     tagEl.style.marginInlineStart = '0px';
     tagEl.style.setProperty('margin-inline-start', '0px', 'important');
@@ -309,12 +310,64 @@ export class TagPaneBehavior {
         view,
         patch,
         surface: 'sidebar',
-        scrollContainer: listEl,
+        scrollContainer: view?.tagContainerEl || listEl,
         browseData: item.browseData,
       });
     }
 
     listEl.appendChild(treeItemEl);
+  }
+
+
+  /**
+   * 只同步标签行的展开部分，保留标签行本身以及它的 hover / focus 状态。
+   * 数据内容变化仍由侧边栏的签名对账走整行重建；这里仅服务于展开态切换。
+   */
+  syncListModeTagExpansion(treeItemEl: any, item: any, view: any, patch: any) {
+    if (!treeItemEl || !item) return;
+    const { tag, files = [], isVirtual } = item;
+    const isExpanded = this.expandedTags.has(tag);
+    const tagEl = treeItemEl.querySelector('.tag-pane-tag[data-puffs-tag]');
+    if (!tagEl) return;
+
+    treeItemEl.classList.toggle('puffs-tag-expanded', isExpanded);
+    tagEl.setAttribute('aria-expanded', String(isExpanded));
+    tagEl.querySelector('.puffs-tag-list-toggle')?.classList.toggle('is-collapsed', !isExpanded);
+
+    const flairOuterEl = tagEl.querySelector('.tree-item-flair-outer');
+    const syncActionButton = (selector: any, icon: any, enabled: any) => {
+      let buttonEl = tagEl.querySelector(selector);
+      if (!enabled) {
+        buttonEl?.remove();
+        return;
+      }
+      if (!buttonEl) {
+        buttonEl = document.createElement('button');
+        buttonEl.type = 'button';
+        buttonEl.className = `clickable-icon ${selector.slice(1)}`;
+        buttonEl.dataset.puffsTag = tag;
+        setIcon(buttonEl, icon);
+        tagEl.insertBefore(buttonEl, flairOuterEl);
+      }
+    };
+
+    const hasNotes = isExpanded && files.length > 0;
+    syncActionButton('.puffs-tag-scroll-bottom-button', 'arrow-down-to-line', hasNotes);
+    syncActionButton('.puffs-tag-pin-button', 'pin', hasNotes && !isVirtual);
+    tagEl.querySelector('.puffs-tag-pin-button')
+      ?.classList.toggle('is-active', this.settings.pinnedTag === tag);
+
+    if (isExpanded) {
+      this.renderNoteList(treeItemEl, files, tag, isVirtual, {
+        view,
+        patch,
+        surface: 'sidebar',
+        scrollContainer: view?.tagContainerEl || treeItemEl.parentElement,
+        browseData: item.browseData,
+      });
+    } else {
+      this.removeNoteList(treeItemEl);
+    }
   }
 
 
@@ -349,7 +402,7 @@ export class TagPaneBehavior {
       surface: options.surface || 'sidebar',
       targetPath: target?.tag === tagValue ? target.path : '',
       scrollContainer: options.scrollContainer || listEl,
-      rerender: () => options.view?.requestRender?.() ?? this.refreshAllTagViews(),
+      onExpansionChange: () => options.view?.refreshExpandCollapseToolbarState?.(),
     };
     const browseData = !isVirtual && (options.browseData || this.getTagBrowseData(tagValue));
     if (browseData?.hasActiveInheritance && browseData.inheritanceTree) {

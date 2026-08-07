@@ -17,6 +17,16 @@ import { NoteRelationModal } from "../relation-modals";
 export class TagTreeRendererBehavior {
   [key: string]: any;
 
+  /** 把运行时折叠集合批量同步到已经存在的分支节点，不重建它们的父级或兄弟节点。 */
+  syncInlineHierarchyExpansion(rootEl: any) {
+    if (!rootEl) return;
+    const hosts = Array.from<any>(rootEl.querySelectorAll('[data-puffs-inline-expansion-host="true"]'));
+    for (const hostEl of hosts) {
+      if (!rootEl.contains(hostEl)) continue;
+      hostEl.puffsSyncExpansion?.();
+    }
+  }
+
   /** 层级导航要恢复的滚动容器。属于渲染层职责，自 relations.ts 迁入。 */
   getHierarchyNavigationScrollEl(view: any) {
     return view.tagContainerEl || view.containerEl?.querySelector('.tag-container') || null;
@@ -52,24 +62,40 @@ export class TagTreeRendererBehavior {
       tagValue = null
     ) => {
       if (!count) return;
-      const expanded = (!!targetPath && containsTarget) || !collapsed.has(key);
       const itemEl = containerEl.createDiv({ cls: 'tree-item puffs-tag-list-item puffs-inheritance-tag-group' });
+      itemEl.dataset.puffsInlineExpansionHost = 'true';
       const rowEl = itemEl.createDiv({
         cls: 'tree-item-self tag-pane-tag is-clickable mod-collapsible puffs-tag-list-row puffs-inheritance-tag-group-row',
       });
       rowEl.dataset.puffsInheritanceGroup = key;
       if (tagValue) rowEl.dataset.puffsInheritanceTag = tagValue;
-      rowEl.setAttribute('aria-expanded', String(expanded));
       // 子标签排序已搬进管理子标签弹窗，这里只剩纯展开箭头
       const toggleEl = rowEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-tag-list-toggle' });
-      toggleEl.classList.toggle('is-collapsed', !expanded);
       setIcon(toggleEl, 'right-triangle');
       rowEl.createDiv({ text: label, cls: 'tree-item-inner' });
       const flairOuterEl = rowEl.createDiv({ cls: 'tree-item-flair-outer' });
       flairOuterEl.createSpan({ text: String(count), cls: 'tree-item-flair tag-pane-tag-count' });
+      const syncExpansion = () => {
+        const expanded = (!!targetPath && containsTarget) || !collapsed.has(key);
+        rowEl.setAttribute('aria-expanded', String(expanded));
+        toggleEl.classList.toggle('is-collapsed', !expanded);
+        let contentEl = Array.from<any>(itemEl.children).find((el: any) =>
+          el.classList.contains('puffs-inheritance-tag-group-content')
+        );
+        if (!expanded) {
+          contentEl?.remove();
+          return;
+        }
+        if (!contentEl) {
+          contentEl = itemEl.createDiv({ cls: 'tree-item-children puffs-inheritance-tag-group-content' });
+          renderContent(contentEl);
+        }
+      };
+      itemEl.puffsSyncExpansion = syncExpansion;
       rowEl.addEventListener('click', () => {
         this.toggleInlineHierarchyBranch(key);
-        options.rerender?.();
+        syncExpansion();
+        options.onExpansionChange?.();
       });
       if (tagValue) {
         rowEl.addEventListener('contextmenu', (event: any) => {
@@ -78,10 +104,7 @@ export class TagTreeRendererBehavior {
           this.showTagContextMenu(event, tagValue);
         });
       }
-      if (expanded) {
-        const contentEl = itemEl.createDiv({ cls: 'tree-item-children puffs-inheritance-tag-group-content' });
-        renderContent(contentEl);
-      }
+      syncExpansion();
     };
     const renderNode = (containerEl: any, node: any, lineage: any, directParentTag: any) => {
       // 交集组是叶子：不再往下递归对方的子标签，笔记也不算继承来的
@@ -165,6 +188,7 @@ export class TagTreeRendererBehavior {
         cls: `tree-item puffs-tag-note-item${parentPath ? ' puffs-inline-hierarchy-child-item' : ''}`,
       });
       itemEl.dataset.path = file.path;
+      if (children.length) itemEl.dataset.puffsInlineExpansionHost = 'true';
       itemEl.classList.toggle(
         'is-order-selected',
         this.isNoteOrderTargetSelected(tag, file.path, parentPath)
@@ -193,6 +217,7 @@ export class TagTreeRendererBehavior {
       }
       const hasOrderButton = orderButtonEl.isConnected || !!orderButtonEl.parentElement;
       const usesCombinedParentControl = hasOrderButton && children.length > 0 && !isVirtual;
+      let inlineToggleEl: any = null;
       const toggleOrder = () => {
         if (parentPath) this.toggleHierarchyNoteOrderTarget(parentPath, file.path, surface);
         else this.toggleNoteOrderTarget(tag, file.path, surface);
@@ -204,7 +229,8 @@ export class TagTreeRendererBehavior {
         this.syncNoteOrderButtonSelection(orderButtonEl);
         this.bindNoteParentControlButton(orderButtonEl, () => {
           this.toggleInlineHierarchyBranch(branchKey);
-          options.rerender?.();
+          itemEl.puffsSyncExpansion?.();
+          options.onExpansionChange?.();
         }, toggleOrder);
       } else if (hasOrderButton) {
         setIcon(orderButtonEl, 'grip-vertical');
@@ -217,15 +243,16 @@ export class TagTreeRendererBehavior {
       }
 
       if (children.length && !usesCombinedParentControl) {
-        const toggleEl = cardEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-inline-hierarchy-toggle' });
-        toggleEl.dataset.puffsInlineHierarchyBranchKey = branchKey;
-        toggleEl.classList.toggle('is-collapsed', !expanded);
-        setIcon(toggleEl, 'right-triangle');
-        toggleEl.addEventListener('click', (event: any) => {
+        inlineToggleEl = cardEl.createDiv({ cls: 'tree-item-icon collapse-icon puffs-inline-hierarchy-toggle' });
+        inlineToggleEl.dataset.puffsInlineHierarchyBranchKey = branchKey;
+        inlineToggleEl.classList.toggle('is-collapsed', !expanded);
+        setIcon(inlineToggleEl, 'right-triangle');
+        inlineToggleEl.addEventListener('click', (event: any) => {
           event.preventDefault();
           event.stopPropagation();
           this.toggleInlineHierarchyBranch(branchKey);
-          options.rerender?.();
+          itemEl.puffsSyncExpansion?.();
+          options.onExpansionChange?.();
         });
       }
 
@@ -247,9 +274,30 @@ export class TagTreeRendererBehavior {
       });
       renderedCards.push(cardEl);
 
-      if (children.length && expanded) {
-        const childHostEl = itemEl.createDiv({ cls: 'tree-item-children puffs-inline-hierarchy-children' });
-        for (const childPath of children) renderNode(childHostEl, childPath, path, nextBranch);
+      if (children.length) {
+        const syncExpansion = () => {
+          const nextExpanded = forceExpanded || !collapsedBranches.has(branchKey);
+          if (usesCombinedParentControl) {
+            orderButtonEl.dataset.puffsExpanded = String(nextExpanded);
+            this.syncNoteOrderButtonSelection(orderButtonEl);
+          } else {
+            inlineToggleEl?.classList.toggle('is-collapsed', !nextExpanded);
+            inlineToggleEl?.setAttribute('aria-expanded', String(nextExpanded));
+          }
+          let childHostEl = Array.from<any>(itemEl.children).find((el: any) =>
+            el.classList.contains('puffs-inline-hierarchy-children')
+          );
+          if (!nextExpanded) {
+            childHostEl?.remove();
+            return;
+          }
+          if (!childHostEl) {
+            childHostEl = itemEl.createDiv({ cls: 'tree-item-children puffs-inline-hierarchy-children' });
+            for (const childPath of children) renderNode(childHostEl, childPath, path, nextBranch);
+          }
+        };
+        itemEl.puffsSyncExpansion = syncExpansion;
+        syncExpansion();
       }
     };
 
