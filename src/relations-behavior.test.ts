@@ -1374,6 +1374,65 @@ describe('交集标签', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
+  // 深层交集：#门派 继承 #宗门，而 #宗门 自己与 #战争 绑了交集。
+  // 展开 #门派 > 宗门 时应当与顶层展开 #宗门 呈现一致 —— 拆出「原生」与「战争」两组。
+  function createNestedIntersectionBehavior() {
+    const behavior = createIntersectionBehavior();
+    behavior.settings.relations.tagInheritance.childrenByParent['#门派'] = ['#宗门'];
+    return behavior;
+  }
+
+  const findChild = (node: any, tag: string) =>
+    (node?.children || []).find((child: any) => child.tag === tag);
+
+  it('深层节点也拆出自己的交集组', () => {
+    const behavior = createNestedIntersectionBehavior();
+    const tree = behavior.getTagBrowseData('#门派').inheritanceTree;
+    const sectNode = findChild(tree, '#宗门');
+
+    expect(groupsOf(sectNode)).toContainEqual(['#战争', '交集', ['共有.md']]);
+    // 交集笔记从该节点的「原生」组扣掉，但仍留在它的 subtreePaths 里
+    expect(sectNode.paths).toEqual(['宗门一.md', '宗门二.md']);
+    expect(sectNode.subtreePaths).toContain('共有.md');
+  });
+
+  it('深层交集组的笔记归属持有该交集边的标签，而非继承根', () => {
+    const behavior = createNestedIntersectionBehavior();
+    const sectNode = findChild(behavior.getTagBrowseData('#门派').inheritanceTree, '#宗门');
+    const intersectionNode = findChild(sectNode, '#战争');
+
+    expect(intersectionNode.noteTag).toBe('#宗门');
+    expect(intersectionNode.children).toEqual([]);
+  });
+
+  it('深层交集不改变继承根的计数与笔记集合', () => {
+    const behavior = createNestedIntersectionBehavior();
+    const browseData = behavior.getTagBrowseData('#门派');
+
+    expect(browseData.exactCount).toBe(0);
+    expect(browseData.inheritedFiles.map((file: any) => file.path))
+      .toEqual(['宗门一.md', '宗门二.md', '共有.md', '内门一.md', '内门战争.md']);
+  });
+
+  it('展开/收起的 key 收集覆盖深层交集组', () => {
+    const behavior = createNestedIntersectionBehavior();
+    behavior.collapsedInlineHierarchyBranches = new Set();
+    const keys = behavior.getTagInheritanceGroupKeys('#门派');
+
+    // key 带完整血缘，避免 #门派 > 宗门 > 战争 与假想的 #门派 > 战争 撞车
+    expect(keys).toContain(`#门派 tag-intersection #宗门#战争`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('交集签名覆盖深层节点：伙伴笔记集合变化时签名跟着变', () => {
+    const behavior = createNestedIntersectionBehavior();
+    const before = behavior.getTagBrowseData('#门派').intersectionSignature;
+
+    // 宗门二.md 补上 #战争：#门派 的 files 与计数不变，只有深层交集组变了
+    behavior.tagFileIndex.get('#战争').push(behavior.app.vault.getAbstractFileByPath('宗门二.md'));
+    expect(behavior.getTagBrowseData('#门派').intersectionSignature).not.toBe(before);
+  });
+
   it('对账时不会把成对的交集边当成环削掉', () => {
     const behavior = createIntersectionBehavior();
     behavior.reconcileRelationCycles();

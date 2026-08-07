@@ -154,19 +154,24 @@ export type TagInheritanceGroupNode = {
   subtreePaths: string[];
   /** 交集分组：叶子节点，paths 是实时算出的交集。 */
   isIntersection?: boolean;
-  /** 交集分组里的笔记仍归属 root（它们本就是 root 的原生笔记），渲染时按这个标签走。 */
+  /**
+   * 交集分组里的笔记归属**持有这条交集边的那个标签**（即该交集节点的父节点），
+   * 而不是当前展开的根标签 —— 它们本就是那个标签的原生笔记。渲染时按这个标签走，
+   * 这样 `#爱情 > 升温 > 欣赏` 里的卡片与顶层展开 `#升温` 时共用同一份排序与排除名单。
+   */
   noteTag?: string;
 };
 
-/** root 层要额外挂上的交集分组。 */
+/** 某个标签上要额外挂出的交集分组。 */
 export type IntersectionGroupInput = { tag: string; paths: string[] };
 
 /**
  * 按继承关系递归分组。
  *
- * intersectionGroups 只在 **root 层**生效：交集组是叶子（不再往下递归对方的子标签），
- * 它们的笔记从 root 的「原生」组里扣掉，并按 rootChildOrder 与继承子分组混合排序 ——
- * 两者本就同在 childrenByParent[root] 数组里，顺序由管理弹窗内的排序决定。
+ * 交集组在**每一层**生效，不只是 root：任何节点只要自己有交集伙伴，就把交集笔记
+ * 从它的「原生」组里扣掉、另挂成叶子分组（不再往下递归对方的子标签），并按
+ * getChildOrder(tag) 与该节点的继承子分组混合排序 —— 两者本就同在
+ * childrenByParent[tag] 数组里，顺序由管理弹窗内的排序决定。
  */
 export function buildTagInheritanceGroupTree(
   rootTag: string,
@@ -175,8 +180,8 @@ export function buildTagInheritanceGroupTree(
   excludedPaths: string[] = [],
   fixedTags: Set<string> = new Set(),
   isPathVisible?: (tag: string, path: string, lineage: string[]) => boolean,
-  intersectionGroups: IntersectionGroupInput[] = [],
-  rootChildOrder: string[] = []
+  getIntersectionGroups?: (tag: string) => IntersectionGroupInput[],
+  getChildOrder?: (tag: string) => string[]
 ): TagInheritanceGroupNode | null {
   if (!rootTag) return null;
   const excluded = new Set(excludedPaths || []);
@@ -184,16 +189,44 @@ export function buildTagInheritanceGroupTree(
     if (!tag || branch.has(tag)) return null;
     const nextBranch = new Set(branch);
     nextBranch.add(tag);
-    const paths = Array.from(new Set(orderedPathsByTag[tag] || []))
+    let paths = Array.from(new Set(orderedPathsByTag[tag] || []))
       .filter((path) => path && (
         isRoot ||
         (isPathVisible
           ? isPathVisible(tag, path, lineage)
           : (fixedTags.has(tag) || !excluded.has(path)))
       ));
-    const children = (childrenByParent[tag] || [])
+    let children = (childrenByParent[tag] || [])
       .map((child) => visit(child, nextBranch, [...lineage, child], false))
       .filter((child): child is TagInheritanceGroupNode => !!child && child.subtreePaths.length > 0);
+
+    const groups = (getIntersectionGroups?.(tag) || [])
+      .filter((group) => group.tag && group.paths?.length);
+    if (groups.length) {
+      // 交集笔记从本节点的「原生」组挪进各自的交集组
+      const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
+      paths = paths.filter((path) => !intersectionPaths.has(path));
+      const intersectionNodes: TagInheritanceGroupNode[] = groups.map((group) => ({
+        tag: group.tag,
+        paths: [...group.paths],
+        children: [],
+        subtreePaths: [...group.paths],
+        isIntersection: true,
+        noteTag: tag,
+      }));
+      // 与继承子分组混排：都按各自标签在本节点子标签顺序里的位置排，未收录的排在最后
+      const childOrder = getChildOrder?.(tag) || [];
+      const orderOf = (node: TagInheritanceGroupNode) => {
+        const index = childOrder.indexOf(node.tag);
+        return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+      };
+      children = [...children, ...intersectionNodes]
+        .map((node, index) => ({ node, index }))
+        .sort((a, b) => orderOf(a.node) - orderOf(b.node) || a.index - b.index)
+        .map((entry) => entry.node);
+    }
+
+    // paths 可能被扣掉了交集路径，subtreePaths 从交集节点那边并回来
     const subtreePaths = Array.from(new Set([
       ...paths,
       ...children.flatMap((child) => child.subtreePaths),
@@ -201,39 +234,26 @@ export function buildTagInheritanceGroupTree(
     return { tag, paths, children, subtreePaths };
   };
 
-  const root = visit(rootTag, new Set(), [rootTag], true);
-  if (!root) return null;
+  return visit(rootTag, new Set(), [rootTag], true);
+}
 
-  const groups = (intersectionGroups || []).filter((group) => group.tag && group.paths?.length);
-  if (!groups.length) return root;
-
-  const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
-  // 交集笔记从「原生」组挪进各自的交集组
-  root.paths = root.paths.filter((path) => !intersectionPaths.has(path));
-  const intersectionNodes: TagInheritanceGroupNode[] = groups.map((group) => ({
-    tag: group.tag,
-    paths: [...group.paths],
-    children: [],
-    subtreePaths: [...group.paths],
-    isIntersection: true,
-    noteTag: rootTag,
-  }));
-
-  // 与继承子分组混排：都按各自标签在 rootChildOrder 里的位置排，未收录的排在最后
-  const orderOf = (node: TagInheritanceGroupNode) => {
-    const index = (rootChildOrder || []).indexOf(node.tag);
-    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+/**
+ * 全树交集组的内容签名，供增量重绘判定「有没有变」。
+ *
+ * 交集组的成员取决于**伙伴标签**的笔记集合，而那不影响本标签的 files 与计数 ——
+ * 不进签名的话，「某篇笔记新加了伙伴标签」时旧 DOM 会被判无变化而原样复用。
+ * 必须覆盖任意深度的节点：深层节点（如 #爱情 > 升温）的交集组同样会变。
+ */
+export function collectIntersectionSignature(tree: TagInheritanceGroupNode | null): string {
+  const parts: string[] = [];
+  const visit = (node: TagInheritanceGroupNode, lineage: string[]) => {
+    for (const child of node.children) {
+      if (child.isIntersection) parts.push(`${lineage.join('>')}>${child.tag}:${child.paths.join('|')}`);
+      else visit(child, [...lineage, child.tag]);
+    }
   };
-  root.children = [...root.children, ...intersectionNodes]
-    .map((node, index) => ({ node, index }))
-    .sort((a, b) => orderOf(a.node) - orderOf(b.node) || a.index - b.index)
-    .map((entry) => entry.node);
-  // root.paths 被扣掉了交集路径，subtreePaths 必须把它们从交集节点那边并回来
-  root.subtreePaths = Array.from(new Set([
-    ...root.paths,
-    ...root.children.flatMap((child) => child.subtreePaths),
-  ]));
-  return root;
+  if (tree) visit(tree, [tree.tag]);
+  return parts.join(';');
 }
 
 export function compareHierarchyParentItems(

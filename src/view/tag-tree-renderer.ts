@@ -43,8 +43,9 @@ export class TagTreeRendererBehavior {
       const files = node.paths
         .map((path: any) => this.app.vault.getAbstractFileByPath(path))
         .filter((file: any) => file instanceof TFile && file.extension === 'md');
-      // 交集组里的笔记归属根标签（node.noteTag），卡片的 dataset.puffsTag 必须跟着它 ——
-      // 写成对方标签的话，右键「从 X 中排除」、显示名、笔记排序会全部串到对方标签上。
+      // 交集组里的笔记归属**持有这条交集边的那个标签**（node.noteTag），卡片的
+      // dataset.puffsTag 必须跟着它 —— 写成对方标签的话，右键「从 X 中排除」、显示名、
+      // 笔记排序会全部串到对方标签上；写成当前展开的根标签则会与顶层入口分裂成两套存档。
       this.renderInlineTagNoteTree(containerEl, files, node.noteTag || node.tag, false, {
         ...options,
         inheritanceRootTag: rootTag,
@@ -111,9 +112,11 @@ export class TagTreeRendererBehavior {
       if (node.isIntersection) {
         renderGroup(
           containerEl,
-          this.getRelativeChildDisplayName(rootTag, node.tag),
+          this.getRelativeChildDisplayName(directParentTag, node.tag),
           node.paths.length,
-          `${rootTag}\u0000tag-intersection\u0000${node.tag}`,
+          // key 带完整血缘，与 getTagInheritanceGroupKeys 一致 ——
+          // 交集组可能挂在任意深度，只写伙伴标签会让不同层级的同名组撞车
+          `${rootTag}\u0000tag-intersection\u0000${lineage.join('\u0001')}`,
           node.paths.includes(targetPath),
           (contentEl: any) => renderNotes(contentEl, node, false),
           node.tag

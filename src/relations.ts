@@ -21,6 +21,7 @@ import {
   createHierarchyNavigationHistory,
   buildVisibleHierarchyForest,
   buildTagInheritanceGroupTree,
+  collectIntersectionSignature,
   moveHierarchyNavigation,
   parseHierarchySearch,
   parseUnifiedHierarchySearch,
@@ -584,18 +585,14 @@ export class RelationsBehavior {
         parts[0] = newTag;
         changed = true;
       }
-      if (parts[1] === 'tag-group' && parts[2]) {
+      // tag-group 与 tag-intersection 的第三段都是 \u0001 分隔的血缘，逐段替换
+      if ((parts[1] === 'tag-group' || parts[1] === 'tag-intersection') && parts[2]) {
         const lineage = parts[2].split('\u0001');
         const nextLineage = lineage.map((tag) => tag === oldTag ? newTag : tag);
         if (nextLineage.some((tag, index) => tag !== lineage[index])) {
           parts[2] = nextLineage.join('\u0001');
           changed = true;
         }
-      }
-      // 交集组的 key 是「根标签 tag-intersection 伙伴标签」，伙伴改名也要跟着迁
-      if (parts[1] === 'tag-intersection' && parts[2] === oldTag) {
-        parts[2] = newTag;
-        changed = true;
       }
       migrated.add(parts.join('\u0000'));
     }
@@ -1007,16 +1004,22 @@ export class RelationsBehavior {
     // 交集组另起命名空间，避免与同名子标签分组的 key 撞车
     const intersectionPrefix = `${tag}\u0000tag-intersection\u0000`;
     if (tree.paths.length) keys.push(`${prefix}original`);
-    const visit = (node: any, lineage: any) => {
-      const key = `${prefix}${lineage.join('\u0001')}`;
-      keys.push(key);
-      if (node.children.length && node.paths.length) keys.push(`${key}\u0000original`);
-      for (const child of node.children) visit(child, [...lineage, child.tag]);
+    // 交集组可能挂在任意深度的节点上，key 必须带完整血缘 ——
+    // 只写伙伴标签的话，`#爱情 > 升温 > 欣赏` 会与假想的 `#爱情 > 欣赏` 撞车
+    const visitChildren = (children: any, lineage: any) => {
+      for (const child of children) {
+        const childLineage = [...lineage, child.tag];
+        if (child.isIntersection) {
+          keys.push(`${intersectionPrefix}${childLineage.join('\u0001')}`);
+          continue;
+        }
+        const key = `${prefix}${childLineage.join('\u0001')}`;
+        keys.push(key);
+        if (child.children.length && child.paths.length) keys.push(`${key}\u0000original`);
+        visitChildren(child.children, childLineage);
+      }
     };
-    for (const child of tree.children) {
-      if (child.isIntersection) keys.push(`${intersectionPrefix}${child.tag}`);
-      else visit(child, [child.tag]);
-    }
+    visitChildren(tree.children, []);
     return keys;
   }
 
@@ -1634,8 +1637,9 @@ export class RelationsBehavior {
           this.createInheritanceEdgesFromLineage(lineage),
           path
         ),
-        intersectionGroups,
-        this.getInheritanceChildren(tag)
+        // 交集组按标签实时取，任意深度的节点都能挂出自己的交集分组
+        (nodeTag: string) => this.getIntersectionGroups(nodeTag),
+        (nodeTag: string) => this.getInheritanceChildren(nodeTag)
       )
       : null;
     return {
@@ -1652,9 +1656,8 @@ export class RelationsBehavior {
       intersectionGroups,
       // 交集组的内容取决于**对方标签**的笔记集合，而那不会改变本标签的 files 或计数。
       // 不进签名的话，「某篇笔记新加了对方标签」时旧 DOM 会被原样复用、交集组显示陈旧内容。
-      intersectionSignature: intersectionGroups
-        .map((group: any) => `${group.tag}:${group.paths.join('\n')}`)
-        .join(''),
+      // 必须扫全树而不只是根标签 —— 深层节点（如 #爱情 > 升温）的交集组同样会变
+      intersectionSignature: collectIntersectionSignature(inheritanceTree),
       fixedTags,
       fixedPaths,
     };

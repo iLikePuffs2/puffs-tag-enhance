@@ -241,48 +241,55 @@ function buildVisibleHierarchyForest(orderedPaths, adjacency) {
     parentsByChild
   };
 }
-function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByTag, excludedPaths = [], fixedTags = /* @__PURE__ */ new Set(), isPathVisible, intersectionGroups = [], rootChildOrder = []) {
+function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByTag, excludedPaths = [], fixedTags = /* @__PURE__ */ new Set(), isPathVisible, getIntersectionGroups, getChildOrder) {
   if (!rootTag) return null;
   const excluded = new Set(excludedPaths || []);
   const visit = (tag, branch, lineage, isRoot = false) => {
     if (!tag || branch.has(tag)) return null;
     const nextBranch = new Set(branch);
     nextBranch.add(tag);
-    const paths = Array.from(new Set(orderedPathsByTag[tag] || [])).filter((path) => path && (isRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || !excluded.has(path))));
-    const children = (childrenByParent[tag] || []).map((child) => visit(child, nextBranch, [...lineage, child], false)).filter((child) => !!child && child.subtreePaths.length > 0);
+    let paths = Array.from(new Set(orderedPathsByTag[tag] || [])).filter((path) => path && (isRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || !excluded.has(path))));
+    let children = (childrenByParent[tag] || []).map((child) => visit(child, nextBranch, [...lineage, child], false)).filter((child) => !!child && child.subtreePaths.length > 0);
+    const groups = ((getIntersectionGroups == null ? void 0 : getIntersectionGroups(tag)) || []).filter((group) => {
+      var _a;
+      return group.tag && ((_a = group.paths) == null ? void 0 : _a.length);
+    });
+    if (groups.length) {
+      const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
+      paths = paths.filter((path) => !intersectionPaths.has(path));
+      const intersectionNodes = groups.map((group) => ({
+        tag: group.tag,
+        paths: [...group.paths],
+        children: [],
+        subtreePaths: [...group.paths],
+        isIntersection: true,
+        noteTag: tag
+      }));
+      const childOrder = (getChildOrder == null ? void 0 : getChildOrder(tag)) || [];
+      const orderOf = (node) => {
+        const index = childOrder.indexOf(node.tag);
+        return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+      };
+      children = [...children, ...intersectionNodes].map((node, index) => ({ node, index })).sort((a, b) => orderOf(a.node) - orderOf(b.node) || a.index - b.index).map((entry) => entry.node);
+    }
     const subtreePaths = Array.from(/* @__PURE__ */ new Set([
       ...paths,
       ...children.flatMap((child) => child.subtreePaths)
     ]));
     return { tag, paths, children, subtreePaths };
   };
-  const root = visit(rootTag, /* @__PURE__ */ new Set(), [rootTag], true);
-  if (!root) return null;
-  const groups = (intersectionGroups || []).filter((group) => {
-    var _a;
-    return group.tag && ((_a = group.paths) == null ? void 0 : _a.length);
-  });
-  if (!groups.length) return root;
-  const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
-  root.paths = root.paths.filter((path) => !intersectionPaths.has(path));
-  const intersectionNodes = groups.map((group) => ({
-    tag: group.tag,
-    paths: [...group.paths],
-    children: [],
-    subtreePaths: [...group.paths],
-    isIntersection: true,
-    noteTag: rootTag
-  }));
-  const orderOf = (node) => {
-    const index = (rootChildOrder || []).indexOf(node.tag);
-    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  return visit(rootTag, /* @__PURE__ */ new Set(), [rootTag], true);
+}
+function collectIntersectionSignature(tree) {
+  const parts = [];
+  const visit = (node, lineage) => {
+    for (const child of node.children) {
+      if (child.isIntersection) parts.push(`${lineage.join(">")}>${child.tag}:${child.paths.join("|")}`);
+      else visit(child, [...lineage, child.tag]);
+    }
   };
-  root.children = [...root.children, ...intersectionNodes].map((node, index) => ({ node, index })).sort((a, b) => orderOf(a.node) - orderOf(b.node) || a.index - b.index).map((entry) => entry.node);
-  root.subtreePaths = Array.from(/* @__PURE__ */ new Set([
-    ...root.paths,
-    ...root.children.flatMap((child) => child.subtreePaths)
-  ]));
-  return root;
+  if (tree) visit(tree, [tree.tag]);
+  return parts.join(";");
 }
 function compareHierarchyParentItems(left, right) {
   return compareTagItemsByCount(
@@ -3023,9 +3030,11 @@ var TagTreeRendererBehavior = class {
       if (node.isIntersection) {
         renderGroup(
           containerEl,
-          this.getRelativeChildDisplayName(rootTag, node.tag),
+          this.getRelativeChildDisplayName(directParentTag, node.tag),
           node.paths.length,
-          `${rootTag}\0tag-intersection\0${node.tag}`,
+          // key 带完整血缘，与 getTagInheritanceGroupKeys 一致 ——
+          // 交集组可能挂在任意深度，只写伙伴标签会让不同层级的同名组撞车
+          `${rootTag}\0tag-intersection\0${lineage.join("")}`,
           node.paths.includes(targetPath),
           (contentEl) => renderNotes(contentEl, node, false),
           node.tag
@@ -6664,17 +6673,13 @@ var RelationsBehavior = class {
         parts[0] = newTag;
         changed = true;
       }
-      if (parts[1] === "tag-group" && parts[2]) {
+      if ((parts[1] === "tag-group" || parts[1] === "tag-intersection") && parts[2]) {
         const lineage = parts[2].split("");
         const nextLineage = lineage.map((tag) => tag === oldTag ? newTag : tag);
         if (nextLineage.some((tag, index) => tag !== lineage[index])) {
           parts[2] = nextLineage.join("");
           changed = true;
         }
-      }
-      if (parts[1] === "tag-intersection" && parts[2] === oldTag) {
-        parts[2] = newTag;
-        changed = true;
       }
       migrated.add(parts.join("\0"));
     }
@@ -7017,16 +7022,20 @@ var RelationsBehavior = class {
     const prefix = `${tag}\0tag-group\0`;
     const intersectionPrefix = `${tag}\0tag-intersection\0`;
     if (tree.paths.length) keys.push(`${prefix}original`);
-    const visit = (node, lineage) => {
-      const key = `${prefix}${lineage.join("")}`;
-      keys.push(key);
-      if (node.children.length && node.paths.length) keys.push(`${key}\0original`);
-      for (const child of node.children) visit(child, [...lineage, child.tag]);
+    const visitChildren = (children, lineage) => {
+      for (const child of children) {
+        const childLineage = [...lineage, child.tag];
+        if (child.isIntersection) {
+          keys.push(`${intersectionPrefix}${childLineage.join("")}`);
+          continue;
+        }
+        const key = `${prefix}${childLineage.join("")}`;
+        keys.push(key);
+        if (child.children.length && child.paths.length) keys.push(`${key}\0original`);
+        visitChildren(child.children, childLineage);
+      }
     };
-    for (const child of tree.children) {
-      if (child.isIntersection) keys.push(`${intersectionPrefix}${child.tag}`);
-      else visit(child, [child.tag]);
-    }
+    visitChildren(tree.children, []);
     return keys;
   }
   getUniqueSearchInheritanceControl(items, queryValue, expandedTags = this.expandedTags, matchingItems = items) {
@@ -7573,8 +7582,9 @@ var RelationsBehavior = class {
         this.createInheritanceEdgesFromLineage(lineage),
         path
       ),
-      intersectionGroups,
-      this.getInheritanceChildren(tag)
+      // 交集组按标签实时取，任意深度的节点都能挂出自己的交集分组
+      (nodeTag) => this.getIntersectionGroups(nodeTag),
+      (nodeTag) => this.getInheritanceChildren(nodeTag)
     ) : null;
     return {
       tag,
@@ -7590,7 +7600,8 @@ var RelationsBehavior = class {
       intersectionGroups,
       // 交集组的内容取决于**对方标签**的笔记集合，而那不会改变本标签的 files 或计数。
       // 不进签名的话，「某篇笔记新加了对方标签」时旧 DOM 会被原样复用、交集组显示陈旧内容。
-      intersectionSignature: intersectionGroups.map((group) => `${group.tag}:${group.paths.join("\n")}`).join(""),
+      // 必须扫全树而不只是根标签 —— 深层节点（如 #爱情 > 升温）的交集组同样会变
+      intersectionSignature: collectIntersectionSignature(inheritanceTree),
       fixedTags,
       fixedPaths
     };
