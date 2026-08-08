@@ -70,3 +70,17 @@ export function getAvailableSidebarToolbarButtons(
 export function getSidebarToolbarButtonLabel(id: SidebarToolbarButtonId): string {
   return definitionById.get(id)?.label || id;
 }
+
+/**
+ * 标签行、继承分组行、交集组行是否显示回顶/回底这一对按钮。
+ *
+ * 单一判据供三处渲染共用 —— 此前回底按钮只看「展开且有笔记」、回顶按钮才看阈值，
+ * 两处口径不一致，同一个标签会出现「有回底没回顶」。
+ *
+ * 阈值 0（以及负数、NaN 等非法值）表示关闭，与设置面板的说明一致。
+ */
+export function shouldShowScrollButtons(noteCount: number, threshold: unknown): boolean {
+  const limit = Math.floor(Number(threshold));
+  if (!Number.isFinite(limit) || limit <= 0) return false;
+  return noteCount >= limit;
+}

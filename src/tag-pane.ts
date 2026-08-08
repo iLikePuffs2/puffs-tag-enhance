@@ -13,6 +13,7 @@ import {
   normalizeTag,
   parseCurrentNoteTagSearch,
   parseNoteCardSearch,
+  parseSimilarTagSearch,
   splitIntersectionSearchTerms,
   splitUnionSearchTerms,
   tagMatchesAnySearchTerm,
@@ -23,6 +24,7 @@ import { PuffsTagRenameModal } from "./modals";
 import {
   getAvailableSidebarToolbarButtons,
   normalizeSidebarToolbarButtons,
+  shouldShowScrollButtons,
 } from "./sidebar-toolbar";
 
 export class TagPaneBehavior {
@@ -85,21 +87,34 @@ export class TagPaneBehavior {
     queryValue = this.resolvePinnedSearchQuery(this.getTagSearchValue(view)),
     includePinned = true
   ) {
-    const query = getTagFilterQuery(queryValue);
-    const intersectionTerms = splitIntersectionSearchTerms(query);
+    const rawQuery = getTagFilterQuery(queryValue);
+    const intersectionTerms = splitIntersectionSearchTerms(rawQuery);
     if (intersectionTerms) {
       const intersectionItems = this.getIntersectionSearchItems(intersectionTerms);
       return includePinned ? this.prependPinnedTagItem(intersectionItems, queryValue) : intersectionItems;
     }
+
+    // `比赛，`：先按「比赛」筛出命中的标签，再把它们各自的相似组并进来。
+    // 交集与并集优先级更高，因此走到这里时不会与操作符混用。
+    const similarSearch = parseSimilarTagSearch(rawQuery);
+    const query = similarSearch.matched ? similarSearch.baseQuery : rawQuery;
+    const similarTagSet = similarSearch.matched
+      ? this.collectSimilarSearchTags(query)
+      : null;
 
     const unionTerms = splitUnionSearchTerms(query);
     const items: any[] = [];
     const processedTags = new Set();
     const browseDataByTag = new Map();
 
-    const tagMatchesQuery = (tag: any) => unionTerms
-      ? tagMatchesAnySearchTerm(tag, unionTerms)
-      : tagMatchesSearchText(tag, query);
+    const tagMatchesQuery = (tag: any) => {
+      // 相似组内的标签直接放行，不必自己也匹配搜索词
+      const normalizedTag = normalizeTag(tag);
+      if (normalizedTag && similarTagSet?.has(normalizedTag)) return true;
+      return unionTerms
+        ? tagMatchesAnySearchTerm(tag, unionTerms)
+        : tagMatchesSearchText(tag, query);
+    };
     const fixedMatchesByRoot = new Map();
     if (query.trim()) {
       for (const child of Object.keys(this.getTagInheritanceSettings().fixedParentByChild || {})) {
@@ -142,6 +157,7 @@ export class TagPaneBehavior {
         hasInheritance: browseData.hasInheritance,
         hasActiveInheritance: browseData.hasActiveInheritance,
         intersectionSignature: browseData.intersectionSignature,
+        browseSignature: browseData.browseSignature,
         sourcesByPath: browseData.sourcesByPath,
         inheritanceTree: browseData.inheritanceTree,
         fixedSearchTags,
@@ -168,6 +184,21 @@ export class TagPaneBehavior {
     return includePinned ? this.prependPinnedTagItem(items, queryValue) : items;
   }
 
+  /**
+   * `比赛，` 要额外展示的标签集合。
+   *
+   * 先按基础条件找出命中的标签，再把每个命中标签所在的相似组整组并进来。
+   * 于是「比赛」命中后，与它同组的「秘境」「试炼」即便自己不匹配搜索词也会出现。
+   */
+  collectSimilarSearchTags(baseQuery: any) {
+    const result = new Set<string>();
+    for (const tag of this.getLogicalTagSet()) {
+      if (isNestedTag(tag) || !tagMatchesSearchText(tag, baseQuery)) continue;
+      for (const similarTag of this.getSimilarTags(tag)) result.add(similarTag);
+    }
+    return result;
+  }
+
   getIntersectionSearchItems(terms: any) {
     const tags = Array.from(this.tagFileIndex.keys())
       .filter((tag) => !isNestedTag(tag) && (this.tagFileIndex.get(tag) || []).length > 0)
@@ -189,6 +220,9 @@ export class TagPaneBehavior {
         isVirtual: true,
         sourceTags: selectedTags,
         files,
+        // 虚拟标签没有 browseData，指纹直接取交集结果本身，
+        // 使「成员换了人但数量不变」同样触发重建
+        browseSignature: `${combinationId}:${files.map((file: any) => file.path).join('|')}`,
       });
     };
 
@@ -279,21 +313,23 @@ export class TagPaneBehavior {
 
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
-    if (isExpanded && files.length > 0) {
+    // 回底按钮受阈值控制（与行内笔记卡片上的回顶按钮同一判据）；
+    // 置顶按钮与滚动无关，仍是「展开且有笔记」就出现
+    if (isExpanded && shouldShowScrollButtons(files.length, this.settings.scrollTopButtonThreshold)) {
       scrollBottomButtonEl = document.createElement('button');
       scrollBottomButtonEl.type = 'button';
       scrollBottomButtonEl.className = 'clickable-icon puffs-tag-scroll-bottom-button';
       scrollBottomButtonEl.dataset.puffsTag = tag;
+      scrollBottomButtonEl.dataset.puffsScrollAnchor = 'true';
       setIcon(scrollBottomButtonEl, 'arrow-down-to-line');
-
-      if (!isVirtual) {
-        pinButtonEl = document.createElement('button');
-        pinButtonEl.type = 'button';
-        pinButtonEl.className = 'clickable-icon puffs-tag-pin-button';
-        pinButtonEl.dataset.puffsTag = tag;
-        pinButtonEl.classList.toggle('is-active', this.settings.pinnedTag === tag);
-        setIcon(pinButtonEl, 'pin');
-      }
+    }
+    if (isExpanded && files.length > 0 && !isVirtual) {
+      pinButtonEl = document.createElement('button');
+      pinButtonEl.type = 'button';
+      pinButtonEl.className = 'clickable-icon puffs-tag-pin-button';
+      pinButtonEl.dataset.puffsTag = tag;
+      pinButtonEl.classList.toggle('is-active', this.settings.pinnedTag === tag);
+      setIcon(pinButtonEl, 'pin');
     }
 
     innerEl.appendChild(textEl);
@@ -335,7 +371,7 @@ export class TagPaneBehavior {
     tagEl.querySelector('.puffs-tag-list-toggle')?.classList.toggle('is-collapsed', !isExpanded);
 
     const flairOuterEl = tagEl.querySelector('.tree-item-flair-outer');
-    const syncActionButton = (selector: any, icon: any, enabled: any) => {
+    const syncActionButton = (selector: any, icon: any, enabled: any, isScrollAnchor = false) => {
       let buttonEl = tagEl.querySelector(selector);
       if (!enabled) {
         buttonEl?.remove();
@@ -346,13 +382,21 @@ export class TagPaneBehavior {
         buttonEl.type = 'button';
         buttonEl.className = `clickable-icon ${selector.slice(1)}`;
         buttonEl.dataset.puffsTag = tag;
+        if (isScrollAnchor) buttonEl.dataset.puffsScrollAnchor = 'true';
         setIcon(buttonEl, icon);
         tagEl.insertBefore(buttonEl, flairOuterEl);
       }
     };
 
+    // 判据必须与 renderListModeTagItem 完全一致 —— 同一按钮的两条渲染路径，
+    // 漏改一处就会出现「展开态切换后按钮凭空出现或消失」
     const hasNotes = isExpanded && files.length > 0;
-    syncActionButton('.puffs-tag-scroll-bottom-button', 'arrow-down-to-line', hasNotes);
+    syncActionButton(
+      '.puffs-tag-scroll-bottom-button',
+      'arrow-down-to-line',
+      isExpanded && shouldShowScrollButtons(files.length, this.settings.scrollTopButtonThreshold),
+      true
+    );
     syncActionButton('.puffs-tag-pin-button', 'pin', hasNotes && !isVirtual);
     tagEl.querySelector('.puffs-tag-pin-button')
       ?.classList.toggle('is-active', this.settings.pinnedTag === tag);
@@ -453,6 +497,20 @@ export class TagPaneBehavior {
 
   openRenameTagModal(tag: any) {
     new PuffsTagRenameModal(this.app, this, tag).open();
+  }
+
+  /**
+   * 虚拟交集标签的批量操作弹窗。
+   *
+   * 复用同一个弹窗，只是候选池由交集结果直接给出（虚拟标签不在 tagFileIndex 里），
+   * 增删的作用域标签取交集的第一个成员 —— 勾选路径已经把范围收窄到这批笔记。
+   */
+  openVirtualTagRenameModal(item: any) {
+    if (!item || !(item.files || []).length || !(item.sourceTags || []).length) return;
+    new PuffsTagRenameModal(this.app, this, item.tag, {
+      candidateFiles: item.files,
+      sourceTag: item.sourceTags[0],
+    }).open();
   }
 
 

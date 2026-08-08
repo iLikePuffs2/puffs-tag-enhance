@@ -17,10 +17,15 @@ function filterNoteCandidates(candidates: any, query: any, getAliases: (file: TF
 /**
  * 批量操作标签弹窗：在右键的标签下勾选笔记，对这批笔记增标签、删标签或改标签名。
  *
- * 两个作用域概念要分清：
+ * 三个作用域概念要分清：
  * - this.tag —— 右键打开弹窗的那个标签，决定**候选笔记池**（它的直属笔记），全程不变
+ * - this.scopeTag —— 传给增删业务方法的作用域标签。实体标签下等于 this.tag；
+ *   虚拟交集标签没有索引记录，改用它的某个成员标签，否则业务层按虚拟标签名查不到笔记
  * - sourceTagValue —— 仅改名模式使用，决定**改哪个标签名**，可以是任意已有标签
- * 二者刻意解耦：改了源标签不会让已勾选的笔记突然消失。
+ * 三者刻意解耦：改了源标签不会让已勾选的笔记突然消失。
+ *
+ * options 用于 `&` 交集搜索出的虚拟标签卡片：它不在 tagFileIndex 里，
+ * 候选池必须由调用方直接把交集结果传进来。
  */
 class PuffsTagRenameModal extends Modal {
   isSubmitting: any;
@@ -42,18 +47,23 @@ class PuffsTagRenameModal extends Modal {
   modeButtons: any;
   isComposing: any;
   submitHotkeyHandler: any;
+  candidateFiles: any;
+  scopeTag: any;
 
-  constructor(app: any, plugin: any, tag: any) {
+  constructor(app: any, plugin: any, tag: any, options: any = {}) {
     super(app);
     this.plugin = plugin;
-    this.tag = normalizeTag(tag);
+    this.tag = normalizeTag(tag) || String(tag || '');
     this.mode = 'rename';
     this.isSubmitting = false;
     this.isComposing = false;
     // 勾选态只是这一次操作的作用域，不落盘；默认全不选，避免误改整个标签下的笔记
     this.selectedPaths = new Set();
     this.selectionQuery = '';
-    this.sourceTagValue = this.tag;
+    // 虚拟标签场景由调用方给出候选池与作用域标签；实体标签走原有路径
+    this.candidateFiles = options.candidateFiles || null;
+    this.scopeTag = normalizeTag(options.sourceTag) || this.tag;
+    this.sourceTagValue = this.scopeTag;
     this.targetTagValue = '';
     this.noteCandidates = [];
   }
@@ -67,8 +77,16 @@ class PuffsTagRenameModal extends Modal {
     this.renderNoteSelection();
   }
 
-  /** 候选池固定为右键标签的直属笔记，顺序沿用侧边栏的笔记排序。 */
+  /**
+   * 候选池固定为右键标签的直属笔记，顺序沿用侧边栏的笔记排序。
+   *
+   * 虚拟交集标签没有索引记录，候选池由调用方直接传入（顺序即交集卡片里的呈现顺序）。
+   */
   collectNoteCandidates() {
+    if (this.candidateFiles) {
+      return Array.from(new Set(this.candidateFiles))
+        .map((file: any) => ({ path: file.path, file }));
+    }
     const files = Array.from(new Set(this.plugin.tagFileIndex?.get(this.tag) || []));
     return this.plugin.getOrderedFilesForTag(this.tag, files)
       .map((file: any) => ({ path: file.path, file }));
@@ -88,7 +106,7 @@ class PuffsTagRenameModal extends Modal {
     // 源标签：必须是已有标签，因此走候选选择器；仅改名模式可见
     this.sourceFieldEl = fieldsEl.createDiv({ cls: 'puffs-relation-tag-search' });
     this.sourceInputEl = this.sourceFieldEl.createEl('input', { type: 'text', cls: 'puffs-tag-rename-input' });
-    this.sourceInputEl.value = getTagDisplayName(this.tag);
+    this.sourceInputEl.value = getTagDisplayName(this.scopeTag);
     let sourcePicker: any = null;
     sourcePicker = createTagCandidatePicker({
       hostEl: this.sourceFieldEl,
@@ -308,10 +326,12 @@ class PuffsTagRenameModal extends Modal {
     this.isSubmitting = true;
     this.renderNoteSelection();
     try {
+      // 增删传 scopeTag 而非 this.tag：虚拟交集标签名在 tagFileIndex 里查不到笔记。
+      // 业务层只把它当候选池起点，实际作用范围已由 selectedPaths 白名单收窄，语义不变。
       if (this.mode === 'add') {
-        await this.plugin.addTagToTaggedNotes(this.tag, this.targetTagValue, this.selectedPaths);
+        await this.plugin.addTagToTaggedNotes(this.scopeTag, this.targetTagValue, this.selectedPaths);
       } else if (this.mode === 'delete') {
-        await this.plugin.deleteTagFromTaggedNotes(this.tag, this.targetTagValue, this.selectedPaths);
+        await this.plugin.deleteTagFromTaggedNotes(this.scopeTag, this.targetTagValue, this.selectedPaths);
       } else {
         await this.plugin.renameTagInSelectedNotes(this.sourceTagValue, this.targetTagValue, this.selectedPaths);
       }

@@ -12,7 +12,7 @@ import {
   parseCurrentNoteTagSearch,
   parseHotkeyText
 } from "./models";
-import { readPreferredFiles } from "./data/schema";
+import { isPathInDefaultFolders, readPreferredFiles } from "./data/schema";
 
 const LEGACY_TAG_SIDEBAR_COMMAND_ID = 'puffs-immersive-mode:toggle-tag-sidebar';
 
@@ -332,8 +332,37 @@ export class WorkspaceBehavior {
     return readPreferredFiles(this.settings.tagSidebarPreferredFiles);
   }
 
+  /** 默认文件夹里手动切走的那些笔记；这是「只记录例外」的落点。 */
+  getExcludedFileSet() {
+    return readPreferredFiles(this.settings.tagSidebarExcludedFiles);
+  }
+
+  isInTagSidebarDefaultFolder(filePath: any) {
+    return isPathInDefaultFolders(filePath, this.settings.tagSidebarDefaultFolders);
+  }
+
+  /**
+   * 记录用户手动切换侧边栏的结果。
+   *
+   * 默认文件夹内外走两套存储：文件夹内只记录**例外**（切走的那几篇），
+   * 文件夹外沿用原来的白名单。若文件夹内也写白名单，data.json 会把整个
+   * 文件夹的笔记逐篇记一遍 —— 那正是这个功能要避免的。
+   */
   async setTagSidebarPreference(filePath: any, enabled: any) {
     if (!filePath) return;
+
+    if (this.isInTagSidebarDefaultFolder(filePath)) {
+      const excluded = this.getExcludedFileSet();
+      // 文件夹内默认为「开标签面板」，因此 enabled 与「在例外名单里」正好相反
+      if (enabled === !excluded.has(filePath)) return;
+
+      if (enabled) excluded.delete(filePath);
+      else excluded.add(filePath);
+
+      this.settings.tagSidebarExcludedFiles = Array.from(excluded);
+      await this.saveSettings();
+      return;
+    }
 
     const preferred = this.getPreferredFileSet();
     if (enabled === preferred.has(filePath)) return;
@@ -345,8 +374,12 @@ export class WorkspaceBehavior {
     await this.saveSettings();
   }
 
+  /** 三层判定：例外名单 → 默认文件夹 → 原有白名单。 */
   hasTagSidebarPreference(filePath: any) {
-    return !!filePath && this.getPreferredFileSet().has(filePath);
+    if (!filePath) return false;
+    if (this.getExcludedFileSet().has(filePath)) return false;
+    if (this.isInTagSidebarDefaultFolder(filePath)) return true;
+    return this.getPreferredFileSet().has(filePath);
   }
 
   applySidebarPreferenceForCurrentFile() {
@@ -452,14 +485,31 @@ export class WorkspaceBehavior {
     return null;
   }
 
+  /**
+   * 把某条路径在偏好名单里改名或移除。
+   *
+   * 白名单与例外名单两份记录形态相同、维护方式也相同，因此共用这一段；
+   * 各写一遍很容易出现「白名单跟着改了、例外名单还留着旧路径」。
+   * newPath 传 null 表示删除。返回是否发生过改动。
+   */
+  migratePreferenceListPath(settingKey: any, oldPath: any, newPath: any) {
+    const paths = readPreferredFiles(this.settings[settingKey]);
+    if (!paths.has(oldPath)) return false;
+
+    paths.delete(oldPath);
+    if (newPath) paths.add(newPath);
+    this.settings[settingKey] = Array.from(paths);
+    return true;
+  }
+
   handlePreferredFileRename(file: any, oldPath: any) {
     if (!oldPath || !file || !file.path) return;
-    const preferred = this.getPreferredFileSet();
-    if (!preferred.has(oldPath)) return;
 
-    preferred.delete(oldPath);
-    preferred.add(file.path);
-    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
+    const changed = [
+      this.migratePreferenceListPath('tagSidebarPreferredFiles', oldPath, file.path),
+      this.migratePreferenceListPath('tagSidebarExcludedFiles', oldPath, file.path),
+    ].some(Boolean);
+    if (!changed) return;
 
     if (this.currentMainFilePath === oldPath) {
       this.updateCurrentMainFilePath(file.path);
@@ -470,11 +520,13 @@ export class WorkspaceBehavior {
 
   handlePreferredFileDelete(file: any) {
     if (!file || !file.path) return;
-    const preferred = this.getPreferredFileSet();
-    if (!preferred.has(file.path)) return;
 
-    preferred.delete(file.path);
-    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
+    const changed = [
+      this.migratePreferenceListPath('tagSidebarPreferredFiles', file.path, null),
+      this.migratePreferenceListPath('tagSidebarExcludedFiles', file.path, null),
+    ].some(Boolean);
+    if (!changed) return;
+
     if (this.currentMainFilePath === file.path) {
       this.updateCurrentMainFilePath(null);
     }

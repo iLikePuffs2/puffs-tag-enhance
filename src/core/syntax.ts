@@ -56,6 +56,37 @@ export function parseCurrentNoteTagSearch(value: unknown): { matched: boolean } 
 }
 
 /**
+ * `**笔记A`：定位指定笔记所处的全部标签。
+ *
+ * 与 `：：` 是同一族语法 —— 后者跟随当前笔记，本语法按名字模糊匹配指定笔记。
+ * 只有 `**` 而没有笔记名时不成立：那等于「列出全部标签」，与空搜索重复。
+ *
+ * 笔记名里的 `*` 原样保留，模糊匹配由 fileMatchesNoteSearch 负责，
+ * 因此不与 `标签*笔记名` 冲突 —— 后者要求 `*` 恰好出现一次且左侧非空。
+ */
+export function parseNoteTagLocateSearch(value: unknown): { matched: boolean; noteQuery: string } {
+  const text = String(value || '').trim();
+  if (!text.startsWith('**')) return { matched: false, noteQuery: '' };
+
+  const noteQuery = text.slice(2).trim();
+  return noteQuery ? { matched: true, noteQuery } : { matched: false, noteQuery: '' };
+}
+
+/**
+ * `比赛，`：把「比赛」及其相似标签一并搜出来。
+ *
+ * 只认全角逗号（U+FF0C）。半角 `,` 在标签名里更常见，认它会让普通搜索被误判成
+ * 相似组搜索。逗号必须在末尾，且左侧要有条件 —— 只输入一个逗号没有意义。
+ */
+export function parseSimilarTagSearch(value: unknown): { matched: boolean; baseQuery: string } {
+  const text = String(value || '').trim();
+  if (!text.endsWith('，')) return { matched: false, baseQuery: '' };
+
+  const baseQuery = text.slice(0, -1).trim();
+  return baseQuery ? { matched: true, baseQuery } : { matched: false, baseQuery: '' };
+}
+
+/**
  * 笔记名匹配。空查询返回 false —— 与标签匹配的空查询语义相反，
  * "空搜索显示全部标签但不高亮任何笔记"依赖这个不对称。
  */

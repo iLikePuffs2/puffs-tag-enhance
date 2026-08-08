@@ -1,0 +1,17 @@
+# 行尾符统一为 LF。
+# 曾经有文件被编辑器改成 CRLF，git 随即把整个文件当成全量重写 ——
+# 一次 36 行的改动显示成 231 增 197 删，真实改动被淹没。
+* text=auto eol=lf
+
+# main.js 是 esbuild 的打包产物，必须提交（Obsidian 直接加载它），
+# 但它的差异对 review 毫无价值，且体量常常盖过源码改动。
+#
+# linguist-generated 让 GitHub 网页端默认折叠这个文件的 diff。
+# diff=nodiff 让本地 `git diff` 不再打印它的正文，需配套一次性配置（已在本机执行）：
+#
+#   git config diff.nodiff.command "npx --yes true"
+#
+# 注意 `--stat` 的行数仍会计入 main.js —— 统计在 diff 驱动之前算好。
+# 想看纯源码的统计用已配好的别名：`git src` / `git srcstat`。
+# 未配置该驱动的机器上本行不生效，diff 行为与从前一致，不会报错。
+main.js linguist-generated=true diff=nodiff

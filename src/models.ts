@@ -16,6 +16,8 @@ import {
   normalizeSearchTerm,
   parseCurrentNoteTagSearch,
   parseNoteCardSearch,
+  parseNoteTagLocateSearch,
+  parseSimilarTagSearch,
   splitIntersectionSearchTerms,
   splitUnionSearchTerms,
   tagMatchesAnySearchTerm,
@@ -46,6 +48,10 @@ const DEFAULT_SETTINGS = {
   autoSwitchToOutlineEnabled: true,
   freezeSearchWhileComposing: true,
   tagSidebarPreferredFiles: [],
+  // 这些文件夹（含子文件夹）里的笔记默认开标签面板
+  tagSidebarDefaultFolders: [],
+  // 上述文件夹里被手动切走的例外笔记 —— 只记例外，不逐篇记录整个文件夹
+  tagSidebarExcludedFiles: [],
   noteOrderByTag: {},
   noteDisplayNameByTag: {},
   tagBoundNoteByTag: {},
@@ -355,6 +361,8 @@ export {
   parseNoteCardSearch,
   getTagFilterQuery,
   parseCurrentNoteTagSearch,
+  parseNoteTagLocateSearch,
+  parseSimilarTagSearch,
   fileMatchesNoteSearch,
   splitUnionSearchTerms,
   splitIntersectionSearchTerms,

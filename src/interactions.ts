@@ -18,6 +18,14 @@ import {
 } from "./models";
 import { compareTagItemsByCount } from "./relation-utils";
 
+/** `**笔记A` 定位的状态标记，拼上笔记名关键字后作为 noteCardSearchState.query。 */
+const NOTE_TAG_LOCATE_SEARCH_STATE_QUERY = '\u0000note-tag-locate';
+
+/** 定位记录的 key：用 NUL 分隔，标签名或路径里出现普通分隔符时也不会撞车。 */
+function buildNoteCardSearchKey(left: string, right: string): string {
+  return `${left}\u0000${right}`;
+}
+
 // 当前笔记标签定位的状态标记，拼上笔记路径后作为 noteCardSearchState.query，
 // 使切换笔记时被识别为新查询，从而把定位重置到第一个标签
 const CURRENT_NOTE_TAG_SEARCH_STATE_QUERY = '\u0000current-note-tags';
@@ -155,6 +163,10 @@ export class InteractionsBehavior {
       exactCount: browseData.exactCount,
       inheritedCount: browseData.inheritedCount,
       hasInheritance: browseData.hasInheritance,
+      hasActiveInheritance: browseData.hasActiveInheritance,
+      intersectionSignature: browseData.intersectionSignature,
+      browseSignature: browseData.browseSignature,
+      browseData,
     };
   }
 
@@ -247,7 +259,11 @@ export class InteractionsBehavior {
         exactCount: browseData.exactCount,
         inheritedCount: browseData.inheritedCount,
         hasInheritance: browseData.hasInheritance,
+        hasActiveInheritance: browseData.hasActiveInheritance,
         sourcesByPath: browseData.sourcesByPath,
+        intersectionSignature: browseData.intersectionSignature,
+        browseSignature: browseData.browseSignature,
+        browseData,
       }))
       .sort((a, b) => compareTagItemsByCount(
         { count: a.files.length, name: a.displayName },
@@ -261,6 +277,106 @@ export class InteractionsBehavior {
     return file instanceof TFile && file.extension === 'md'
       ? '当前笔记没有标签。'
       : '当前没有打开笔记。';
+  }
+
+  /**
+   * `**笔记A`：按名字模糊匹配笔记，列出这些笔记所属的全部标签。
+   *
+   * 与 getCurrentNoteTagItems 只差「哪些笔记」—— 那边固定是当前笔记，这边是
+   * 模糊匹配的结果集，可能有多篇。空关键字返回空列表，否则会退化成列出全部标签。
+   */
+  getMatchedNoteFilesForLocate(noteQuery: any) {
+    const term = String(noteQuery || '').trim();
+    if (!term) return [];
+
+    return (this.app.vault.getMarkdownFiles() || []).filter((file: any) =>
+      file instanceof TFile &&
+      file.extension === 'md' &&
+      fileMatchesNoteSearch(file, term, this.getNoteAliases(file).join(' '))
+    );
+  }
+
+  getNoteTagLocateItems(noteQuery: any) {
+    const matchedPaths = new Set(
+      this.getMatchedNoteFilesForLocate(noteQuery).map((file: any) => file.path)
+    );
+    if (matchedPaths.size === 0) return [];
+
+    return Array.from(this.getLogicalTagSet())
+      .filter((tag) => !isNestedTag(tag))
+      .map((tag) => ({ tag, browseData: this.getTagBrowseData(tag) }))
+      // 只认直接打了该标签的笔记，与 `：：` 口径一致（仅继承而来的不算「所处标签」）
+      .filter(({ browseData }) =>
+        browseData.exactFiles.some((file: any) => matchedPaths.has(file.path))
+      )
+      .map(({ tag, browseData }) => ({
+        tag,
+        displayName: getTagDisplayName(tag),
+        isVirtual: false,
+        files: browseData.files,
+        exactCount: browseData.exactCount,
+        inheritedCount: browseData.inheritedCount,
+        hasInheritance: browseData.hasInheritance,
+        hasActiveInheritance: browseData.hasActiveInheritance,
+        sourcesByPath: browseData.sourcesByPath,
+        intersectionSignature: browseData.intersectionSignature,
+        browseSignature: browseData.browseSignature,
+        browseData,
+      }))
+      .sort((a, b) => compareTagItemsByCount(
+        { count: a.files.length, name: a.displayName },
+        { count: b.files.length, name: b.displayName }
+      ));
+  }
+
+  /** 每个「标签 × 命中笔记」组合一条记录，供 Enter 循环定位。 */
+  getNoteTagLocateMatches(items: any, noteQuery: any) {
+    const matchedPaths = new Set(
+      this.getMatchedNoteFilesForLocate(noteQuery).map((file: any) => file.path)
+    );
+    if (matchedPaths.size === 0) return [];
+
+    const matches: any[] = [];
+    for (const item of items) {
+      // 顺序以该标签自己的笔记列表为准，与卡片在侧边栏里的呈现顺序一致
+      for (const file of item.files || []) {
+        if (!matchedPaths.has(file.path)) continue;
+        matches.push({ tag: item.tag, path: file.path, key: buildNoteCardSearchKey(item.tag, file.path) });
+      }
+    }
+    return matches;
+  }
+
+  getNoteTagLocateEmptyMessage(noteQuery: any) {
+    return this.getMatchedNoteFilesForLocate(noteQuery).length === 0
+      ? '没有匹配的笔记。'
+      : '该笔记没有标签。';
+  }
+
+  syncNoteTagLocateSearchState(state: any, items: any, noteQuery: any, expandedTags = this.expandedTags) {
+    const matches = this.getNoteTagLocateMatches(items, noteQuery);
+    if (matches.length === 0) {
+      this.clearNoteCardSearchState(state, expandedTags);
+      return null;
+    }
+
+    // 哨兵前缀拼上关键字：换关键字即被识别为新查询，定位重置到第一条
+    const query = buildNoteCardSearchKey(NOTE_TAG_LOCATE_SEARCH_STATE_QUERY, String(noteQuery || ''));
+    const queryChanged = state.query !== query;
+    let activeIndex = queryChanged
+      ? 0
+      : matches.findIndex(
+          (match: any) =>
+            state.target &&
+            match.tag === state.target.tag &&
+            match.path === state.target.path
+        );
+    if (activeIndex < 0) activeIndex = 0;
+
+    state.query = query;
+    state.matches = matches;
+    state.activeIndex = activeIndex;
+    return this.activateNoteCardSearchTarget(state, matches[activeIndex], expandedTags);
   }
 
   getCurrentNoteTagMatches(items: any) {

@@ -45,6 +45,58 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
           });
       });
 
+    new Setting(containerEl)
+      .setName('默认打开标签面板的文件夹')
+      .setDesc('相对 vault 的路径，一行一个，含子文件夹')
+      .addTextArea((text) => {
+        text
+          .setValue((this.plugin.settings.tagSidebarDefaultFolders || []).join('\n'))
+          .setPlaceholder('小说/情节')
+          .onChange(async (value) => {
+            autoGrow();
+            await this.plugin.updateSettings({ tagSidebarDefaultFolders: value });
+          });
+        // 弹性高度：单行时与相邻的普通输入框等高等宽，多行时才向下伸展。
+        // textarea 的默认尺寸由 cols/rows 决定，与主题给 input 的宽度不一致，
+        // 因此这里量一个同栏的普通输入框作为基准，把宽高对齐过去。
+        const inputEl = text.inputEl;
+        const measureSiblingInput = () => {
+          const probe = containerEl.querySelector(
+            '.setting-item-control input[type="text"]'
+          ) as HTMLInputElement | null;
+          return { width: probe?.offsetWidth || 0, height: probe?.offsetHeight || 30 };
+        };
+        const autoGrow = () => {
+          const base = measureSiblingInput();
+          if (base.width) inputEl.style.width = `${base.width}px`;
+
+          // 先还原自然行高再测量，否则上一轮撑高过的行高会污染 scrollHeight
+          inputEl.style.lineHeight = '';
+          inputEl.style.height = 'auto';
+          const style = getComputedStyle(inputEl);
+          // scrollHeight 不含边框，border-box 下要补回来，否则每次测量都少 2px
+          const borderHeight = inputEl.offsetHeight - inputEl.clientHeight;
+          const isSingleLine = inputEl.scrollHeight + borderHeight <= base.height;
+
+          // 单行时把行高撑满内容区，文字才像 input 那样垂直居中 ——
+          // textarea 的行高是固定值（约 16.9px），比 20px 的内容区矮，
+          // 差出的约 3px 全落在文字下方，看起来就是偏上。
+          // 换行后交还自然行高，否则各行之间会被拉开。
+          if (isSingleLine) {
+            const verticalPadding =
+              parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+            inputEl.style.lineHeight = `${base.height - borderHeight - verticalPadding}px`;
+            inputEl.style.height = 'auto';
+          }
+          inputEl.style.height = `${Math.max(base.height, inputEl.scrollHeight + borderHeight)}px`;
+        };
+        inputEl.rows = 1;
+        inputEl.style.resize = 'none';
+        inputEl.style.overflowY = 'hidden';
+        // 面板首次渲染时 textarea 还没进文档、scrollHeight 为 0，排到下一个宏任务再量
+        window.setTimeout(autoGrow, 0);
+      });
+
     const keywordDescription = '固定语法：=；==（当前笔记关系）；=父笔记；==子笔记；=父笔记*子笔记';
     new Setting(containerEl)
       .setName('父子笔记搜索关键字')
@@ -132,8 +184,8 @@ class PuffsTagEnhanceSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('回顶按钮显示阈值')
-      .setDesc('标签的笔记卡片数量达到该值时显示回顶按钮；输入 0 不显示')
+      .setName('回顶/回底按钮显示阈值')
+      .setDesc('标签、继承分组、交集组展开后的笔记数达到该值时显示回顶与回底按钮；输入 0 不显示')
       .addText((text) => {
         text
           .setValue(String(this.plugin.settings.scrollTopButtonThreshold))

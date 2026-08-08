@@ -222,12 +222,12 @@ class TagInheritanceModal extends Modal {
     this.plugin = plugin;
     this.relationMode = relationMode;
     this.parentTag = normalizeTag(subjectTag);
-    const related = relationMode === 'parents'
-      ? plugin.getInheritanceParents(subjectTag)
-      : plugin.getInheritanceChildren(subjectTag);
-    this.children = relationMode === 'parents'
-      ? plugin.sortTagsByVisibleCount(related)
-      : [...related];
+    const related = relationMode === 'similar'
+      ? plugin.getSimilarTagPartners(subjectTag)
+      : relationMode === 'parents'
+        ? plugin.getInheritanceParents(subjectTag)
+        : plugin.getInheritanceChildren(subjectTag);
+    this.children = relationMode === 'children' ? [...related] : plugin.sortTagsByVisibleCount(related);
     this.activeChild = this.children[0] || null;
     this.orderTargetChild = null;
     this.query = '';
@@ -254,9 +254,8 @@ class TagInheritanceModal extends Modal {
 
   buildLayout() {
     this.contentEl.empty();
-    const relationName = this.relationMode === 'parents' ? '父标签' : '子标签';
     this.contentEl.createDiv({
-      text: `管理 ${getTagDisplayName(this.parentTag)} 的${relationName}`,
+      text: this.getModalTitle(),
       cls: 'puffs-relation-modal-title puffs-tag-rename-title',
     });
     this.searchHostEl = this.contentEl.createDiv({ cls: 'puffs-relation-tag-search' });
@@ -266,17 +265,11 @@ class TagInheritanceModal extends Modal {
     this.picker = createTagCandidatePicker({
       hostEl: this.searchHostEl,
       inputEl: this.inputEl,
-      getCandidates: (query: any) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => (
-        tag !== this.parentTag &&
-        !this.children.includes(tag) &&
-        !this.plugin.areTagsRelated(this.parentTag, tag) &&
-        !(this.relationMode === 'parents' && this.plugin.isFixedChild(this.parentTag)) &&
-        !(this.relationMode === 'children' && this.plugin.isFixedChild(tag)) &&
-        !this.plugin.wouldCreateTagInheritanceCycle(
-          this.relationMode === 'parents' ? tag : this.parentTag,
-          this.relationMode === 'parents' ? this.parentTag : tag
-        )
-      )),
+      getCandidates: (query: any) => getTagRelationCandidates(
+        this.plugin.getLogicalTagSet(),
+        query,
+        (tag) => this.isCandidateEligible(tag)
+      ),
       onInput: (value: any) => { this.query = value; },
       onSelect: (tag: any) => {
         void this.addChild(tag);
@@ -285,7 +278,8 @@ class TagInheritanceModal extends Modal {
     });
 
     this.childrenListEl = this.contentEl.createDiv({ cls: 'puffs-relation-child-list' });
-    this.buildInheritanceSelectionSection();
+    // 相似标签没有「继承笔记」的概念，整块勾选区不建
+    if (this.hasInheritanceControls()) this.buildInheritanceSelectionSection();
     this.renderChildren();
     this.renderInheritanceSelection();
 
@@ -314,6 +308,46 @@ class TagInheritanceModal extends Modal {
       this.modalEl.tabIndex = -1;
       this.modalEl.focus();
     }, 0);
+  }
+
+  /**
+   * 是否提供继承特有的控件（继承/交集模式切换、固定子标签、继承笔记勾选区）。
+   *
+   * 相似标签弹窗复用这套骨架但没有这些概念，故由子类关掉。
+   */
+  hasInheritanceControls() {
+    return true;
+  }
+
+  getModalTitle(): string {
+    const relationName = this.relationMode === 'parents' ? '父标签' : '子标签';
+    return `管理 ${getTagDisplayName(this.parentTag)} 的${relationName}`;
+  }
+
+  getEmptyMessage(): string {
+    return this.relationMode === 'parents' ? '暂无父标签' : '暂无子标签';
+  }
+
+  /** 候选是否可选。继承方向要防成环、避开固定关系，相似关系没有这些约束。 */
+  isCandidateEligible(tag: any) {
+    return (
+      tag !== this.parentTag &&
+      !this.children.includes(tag) &&
+      !this.plugin.areTagsRelated(this.parentTag, tag) &&
+      !(this.relationMode === 'parents' && this.plugin.isFixedChild(this.parentTag)) &&
+      !(this.relationMode === 'children' && this.plugin.isFixedChild(tag)) &&
+      !this.plugin.wouldCreateTagInheritanceCycle(
+        this.relationMode === 'parents' ? tag : this.parentTag,
+        this.relationMode === 'parents' ? this.parentTag : tag
+      )
+    );
+  }
+
+  /** 列表里显示的名字。子标签方向用「父标签-子名称」的简称口径，其余用全名。 */
+  getRelatedDisplayName(relatedTag: any) {
+    return this.relationMode === 'parents'
+      ? getTagDisplayName(relatedTag)
+      : this.plugin.getRelativeChildDisplayName(this.parentTag, relatedTag);
   }
 
   getEdge(relatedTag: any) {
@@ -446,7 +480,8 @@ class TagInheritanceModal extends Modal {
 
   renderChildren() {
     if (!this.childrenListEl) return;
-    if (this.relationMode === 'parents') {
+    // 只有子标签方向是手工排序；父标签与相似组都按笔记数量自动排
+    if (this.relationMode !== 'children') {
       this.children = this.plugin.sortTagsByVisibleCount(this.children);
     }
     const existingRows = new Map(
@@ -476,10 +511,11 @@ class TagInheritanceModal extends Modal {
         }
         rowEl.createSpan({ cls: 'puffs-relation-manage-name' });
         rowEl.createSpan({ cls: 'puffs-relation-child-count' });
-        const modeButton = rowEl.createEl('button', {
-          cls: 'clickable-icon puffs-inheritance-edge-mode',
-        });
-        modeButton.addEventListener('click', (event: any) => {
+        // 相似关系没有继承/交集之分，这个切换按钮整个不建
+        const modeButton = this.hasInheritanceControls()
+          ? rowEl.createEl('button', { cls: 'clickable-icon puffs-inheritance-edge-mode' })
+          : null;
+        modeButton?.addEventListener('click', (event: any) => {
           event.stopPropagation();
           const relatedTag = modeButton.dataset.puffsRelatedTag;
           this.activeChild = relatedTag;
@@ -517,10 +553,9 @@ class TagInheritanceModal extends Modal {
           void this.moveOrderTargetAfter(rowEl.dataset.puffsTag);
         });
       }
-      // parents 模式这一列是父标签，简称口径只在子标签方向成立
-      rowEl.querySelector('.puffs-relation-manage-name').textContent = this.relationMode === 'parents'
-        ? getTagDisplayName(child)
-        : this.plugin.getRelativeChildDisplayName(this.parentTag, child);
+      // 简称口径（父标签-子名称）只在子标签方向成立，其余方向显示全名
+      rowEl.querySelector('.puffs-relation-manage-name').textContent =
+        this.getRelatedDisplayName(child);
       rowEl.querySelector('.puffs-relation-child-count').textContent = String(this.plugin.getTagVisibleNoteCount(child));
       rowEl.classList.toggle('is-active', child === this.activeChild);
       rowEl.setAttribute('role', 'button');
@@ -533,15 +568,17 @@ class TagInheritanceModal extends Modal {
         'aria-label',
         isOrderTarget ? '取消该子标签的排序选择' : '选中该子标签进行排序'
       );
-      this.syncInheritanceModeButton(rowEl, child);
-      this.syncFixedRelationButton(rowEl, child);
+      if (this.hasInheritanceControls()) {
+        this.syncInheritanceModeButton(rowEl, child);
+        this.syncFixedRelationButton(rowEl, child);
+      }
       this.childrenListEl.appendChild(rowEl);
       existingRows.delete(child);
     }
     for (const rowEl of existingRows.values()) rowEl.remove();
     if (!this.children.length) {
       this.childrenListEl.createDiv({
-        text: this.relationMode === 'parents' ? '暂无父标签' : '暂无子标签',
+        text: this.getEmptyMessage(),
         cls: 'puffs-relation-empty',
       });
     }
@@ -847,6 +884,74 @@ class TagInheritanceModal extends Modal {
 class ManageParentTagModal extends TagInheritanceModal {
   constructor(app: any, plugin: any, childTag: any) {
     super(app, plugin, childTag, 'parents');
+  }
+}
+
+/**
+ * 管理某个标签的相似标签组。
+ *
+ * 复用管理父标签的弹窗骨架（候选输入框 + 已选列表 + 移除按钮），但去掉三样东西：
+ * 底部的「继承笔记」勾选区、继承/交集模式切换、固定子标签开关 ——
+ * 相似关系是对称无向的，没有方向、没有层级，也就没有这些概念。
+ *
+ * 关系本身对称：给「比赛」绑定「秘境」后，打开「秘境」的弹窗同样能看到「比赛」。
+ */
+class SimilarTagModal extends TagInheritanceModal {
+  constructor(app: any, plugin: any, tagValue: any) {
+    super(app, plugin, tagValue, 'similar');
+  }
+
+  /** 相似组无序，不提供排序抓手。 */
+  canReorderChildren() {
+    return false;
+  }
+
+  /** 相似关系没有继承/交集之分，也没有固定子标签。 */
+  hasInheritanceControls() {
+    return false;
+  }
+
+  getModalTitle() {
+    return `管理 ${getTagDisplayName(this.parentTag)} 的相似标签`;
+  }
+
+  getEmptyMessage() {
+    return '暂无相似标签';
+  }
+
+  /** 候选池排除自己与已在组内的标签；相似关系不成环，无需环检测。 */
+  isCandidateEligible(tag: any) {
+    return tag !== this.parentTag && !this.children.includes(tag);
+  }
+
+  /** 列表里直接显示完整标签名 —— 「父标签-子名称」的简称口径在这里不成立。 */
+  getRelatedDisplayName(relatedTag: any) {
+    return getTagDisplayName(relatedTag);
+  }
+
+  async persistChildren(nextChildren: any) {
+    if (this.isSubmitting) return;
+    this.isSubmitting = true;
+    this.syncMutationState();
+    try {
+      const previous = new Set(this.children);
+      const next = new Set(nextChildren);
+      for (const tag of next) {
+        if (!previous.has(tag)) await this.plugin.addSimilarTag(this.parentTag, tag);
+      }
+      for (const tag of previous) {
+        if (!next.has(tag)) await this.plugin.removeSimilarTag(this.parentTag, tag);
+      }
+      // 以插件侧的实际结果为准：解绑可能让某些成员随之脱离本组
+      this.updateChildren(this.plugin.getSimilarTagPartners(this.parentTag));
+      return true;
+    } catch (error) {
+      new Notice(error && error.message ? error.message : '保存相似标签失败');
+      return false;
+    } finally {
+      this.isSubmitting = false;
+      this.syncMutationState();
+    }
   }
 }
 
@@ -1416,6 +1521,7 @@ class NoteRelationModal extends Modal {
 export {
   ManageParentTagModal,
   NoteRelationModal,
+  SimilarTagModal,
   TagNoteBindingModal,
   TagInheritanceModal,
   getDirectionalInputSide,

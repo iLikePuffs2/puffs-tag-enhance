@@ -2,6 +2,12 @@ import { Notice, TFile } from "obsidian";
 // 继承规则的纯计算已迁入 core/inheritance.ts，这里保留同名方法作为薄委托
 import * as core from "./core/inheritance";
 import {
+  linkSimilarTags,
+  normalizeSimilarTagSettings,
+  resolveSimilarTagGroup,
+  unlinkSimilarTags,
+} from "./core/similar-tags";
+import {
   DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD,
   TAG_SIDEBAR_VIEW_TYPE,
   getTagDisplayName,
@@ -21,6 +27,7 @@ import {
   createHierarchyNavigationHistory,
   buildVisibleHierarchyForest,
   buildTagInheritanceGroupTree,
+  collectBrowseSignature,
   collectIntersectionSignature,
   moveHierarchyNavigation,
   parseHierarchySearch,
@@ -30,8 +37,21 @@ import {
   wouldCreateDirectedCycle,
 } from "./relation-utils";
 
-/** 关系数据结构版本。7：移除「选择继承」白名单，模式的另一端换成「交集」。 */
-const RELATIONS_VERSION = 7;
+/**
+ * 关系数据结构版本。
+ * 7：移除「选择继承」白名单，模式的另一端换成「交集」。
+ * 8：新增 similarTags（相似标签组）。旧数据没有该节时补空对象即可，无需数据搬迁。
+ */
+export const RELATIONS_VERSION = 8;
+
+/**
+ * 「选择继承」白名单退场的那一版。
+ *
+ * 与白名单迁移相关的判断必须钉在这个常量上，而不是跟着 RELATIONS_VERSION 走 ——
+ * 后者每加一个新特性就 +1，写成 `< RELATIONS_VERSION` 会让已经迁移完的 v7 数据
+ * 在升到 v8 时再次被当作「待迁移」，把早已清掉的白名单结构重新造出来。
+ */
+const SELECTED_INHERITANCE_RETIRED_VERSION = 7;
 
 const createEmptyRelations = (): any => ({
   version: RELATIONS_VERSION,
@@ -44,6 +64,9 @@ const createEmptyRelations = (): any => ({
   noteHierarchy: {
     childrenByParentPath: {},
     displayNamesByParentPath: {},
+  },
+  similarTags: {
+    groupsByTag: {},
   },
 });
 
@@ -100,7 +123,7 @@ export class RelationsBehavior {
     // 白名单是 v7 之前「选择继承」的遗留结构。这里必须原样透传到迁移执行为止 ——
     // 本函数跑在 loadSettings 里、早于 tagFileIndex 建立，而等价转换要等索引就绪，
     // 提前丢弃会让那些边退化成「继承 + 空排除名单」= 全部笔记都冒上来。
-    if (result.version < RELATIONS_VERSION) {
+    if (result.version < SELECTED_INHERITANCE_RETIRED_VERSION) {
       result.tagInheritance.includedPathsByParentChild = {};
       copyParentChildPaths('includedPathsByParentChild', 'includedPathsByParentChild');
     }
@@ -113,7 +136,7 @@ export class RelationsBehavior {
           const child = normalizeTag(rawChild);
           // 'selected' 是待迁移的旧值，迁移跑完就不会再出现
           const keep = rawMode === 'intersection' ||
-            (rawMode === 'selected' && result.version < RELATIONS_VERSION);
+            (rawMode === 'selected' && result.version < SELECTED_INHERITANCE_RETIRED_VERSION);
           if (!keep || !(result.tagInheritance.childrenByParent[parent] || []).includes(child)) continue;
           if (!result.tagInheritance.modeByParentChild[parent]) result.tagInheritance.modeByParentChild[parent] = {};
           result.tagInheritance.modeByParentChild[parent][child as any] = rawMode;
@@ -159,6 +182,12 @@ export class RelationsBehavior {
         }
       }
     }
+
+    const similar = source.similarTags && typeof source.similarTags === 'object'
+      ? source.similarTags
+      : {};
+    // 相似组是对称无向的，normalizeSimilarTagSettings 会把半条边补齐成两条
+    result.similarTags.groupsByTag = normalizeSimilarTagSettings(similar.groupsByTag);
 
     this.settings.relations = result;
     // 先把半条交集边降级/清理，再做环检测；否则残缺的交集标记会被误当成普通继承边。
@@ -741,6 +770,62 @@ export class RelationsBehavior {
 
   getInheritanceChildren(tagValue: any) {
     return core.getInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
+  }
+
+  /** 相似标签的邻接表。缺失时补齐，让旧数据无需迁移即可使用。 */
+  getSimilarTagSettings() {
+    if (!this.settings.relations) this.normalizeRelationSettings();
+    const relations = this.settings.relations;
+    if (!relations.similarTags || typeof relations.similarTags !== 'object') {
+      relations.similarTags = { groupsByTag: {} };
+    }
+    if (!relations.similarTags.groupsByTag || typeof relations.similarTags.groupsByTag !== 'object') {
+      relations.similarTags.groupsByTag = {};
+    }
+    return relations.similarTags;
+  }
+
+  /** tag 所在的完整相似组（含自身）。没有任何关系时只有它自己。 */
+  getSimilarTags(tagValue: any) {
+    return resolveSimilarTagGroup(this.getSimilarTagSettings().groupsByTag, tagValue);
+  }
+
+  /** 相似组里除自己以外的成员，供弹窗列表使用。 */
+  getSimilarTagPartners(tagValue: any) {
+    const tag = normalizeTag(tagValue);
+    return this.getSimilarTags(tag).filter((similarTag: any) => similarTag !== tag);
+  }
+
+  async addSimilarTag(tagValue: any, relatedValue: any) {
+    if (!linkSimilarTags(this.getSimilarTagSettings().groupsByTag, tagValue, relatedValue)) return false;
+    await this.saveSettings();
+    this.refreshAllTagViews();
+    return true;
+  }
+
+  async removeSimilarTag(tagValue: any, relatedValue: any) {
+    if (!unlinkSimilarTags(this.getSimilarTagSettings().groupsByTag, tagValue, relatedValue)) return false;
+    await this.saveSettings();
+    this.refreshAllTagViews();
+    return true;
+  }
+
+  /** 标签改名时把相似关系一并迁移，避免留下指向旧名的死边。 */
+  migrateSimilarTags(oldTagValue: any, newTagValue: any) {
+    const oldTag = normalizeTag(oldTagValue);
+    const newTag = normalizeTag(newTagValue);
+    if (!oldTag || !newTag || oldTag === newTag) return false;
+
+    const groups = this.getSimilarTagSettings().groupsByTag;
+    const partners = (groups[oldTag] || []).slice();
+    if (partners.length === 0) return false;
+
+    for (const partner of partners) {
+      unlinkSimilarTags(groups, oldTag, partner);
+      // 改名后的标签接手全部伙伴；伙伴恰好是新标签时 linkSimilarTags 会自行忽略
+      linkSimilarTags(groups, newTag, partner);
+    }
+    return true;
   }
 
   /**
@@ -1658,6 +1743,12 @@ export class RelationsBehavior {
       // 不进签名的话，「某篇笔记新加了对方标签」时旧 DOM 会被原样复用、交集组显示陈旧内容。
       // 必须扫全树而不只是根标签 —— 深层节点（如 #爱情 > 升温）的交集组同样会变
       intersectionSignature: collectIntersectionSignature(inheritanceTree),
+      // 整棵展开树的内容指纹。标签行签名靠它察觉「笔记数没变但成员换了人」以及
+      // 「变化发生在子标签分组内部」两类情况 —— 这正是移除标签后不实时刷新的根因。
+      // 没有继承树时退回本标签自己的可见路径，同样能覆盖成员替换。
+      browseSignature: inheritanceTree
+        ? collectBrowseSignature(inheritanceTree)
+        : `${tag}:${exactPaths.join('|')}!${inheritedPaths.join('|')}`,
       fixedTags,
       fixedPaths,
     };
@@ -1742,6 +1833,8 @@ export class RelationsBehavior {
     inheritance.fixedParentByChild = migratedFixedParents;
     this.reconcileIntersectionPairs();
     this.reconcileRelationCycles();
+    // 相似组与继承是两套独立的关系，改名时同样要迁移，否则会留下指向旧名的死边
+    this.migrateSimilarTags(oldTag, newTag);
     this.migrateInlineTagBranchState(oldTag, newTag);
     if (participatesInInheritance) {
       this.relationStructureVersion = (this.relationStructureVersion || 0) + 1;

@@ -69,6 +69,48 @@ export function migrateSchema(data: any, log: (message: string) => void = () => 
   return true;
 }
 
+/**
+ * 归一化「默认打开标签面板的文件夹」配置。
+ *
+ * 设置面板是多行文本框（一行一个），data.json 里存数组，两种形态都接受。
+ * 反斜杠统一成正斜杠 —— Windows 用户会照着资源管理器的路径粘贴。
+ */
+export function normalizeDefaultFolders(value: unknown): string[] {
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split('\n')
+      : [];
+
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    if (typeof line !== 'string') continue;
+    // 去掉末尾斜杠，让「日记/」与「日记」等价
+    const folder = line.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!folder || seen.has(folder)) continue;
+    seen.add(folder);
+    result.push(folder);
+  }
+  return result;
+}
+
+/**
+ * 笔记是否落在某个「默认打开标签面板」的文件夹内（含子文件夹）。
+ *
+ * 判据是 `路径以 文件夹 + "/" 开头`，而不是单纯的字符串前缀 ——
+ * 后者会让「日记本/今天.md」被「日记」误命中。
+ */
+export function isPathInDefaultFolders(filePath: unknown, folders: unknown): boolean {
+  const path = String(filePath || '').replace(/\\/g, '/');
+  if (!path) return false;
+
+  for (const folder of normalizeDefaultFolders(folders)) {
+    if (path.startsWith(`${folder}/`)) return true;
+  }
+  return false;
+}
+
 /** 侧边栏偏好读取：兼容数组（新）与对象（旧，迁移前的存量）两种形态。 */
 export function readPreferredFiles(value: unknown): Set<string> {
   if (Array.isArray(value)) return new Set(value.filter((path) => typeof path === 'string' && path));

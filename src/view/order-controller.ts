@@ -135,18 +135,41 @@ export class OrderControllerBehavior {
     }, 0);
   }
 
-  scheduleLastNoteCardScroll(containerEl: any, tag: any) {
-    if (!containerEl || !tag) return;
+  /**
+   * 回顶/回底作用的那棵子树。
+   *
+   * 优先从按钮自身向上找最近的 tree-item —— 同一个标签可能同时作为顶层标签行和
+   * 若干继承树里的分组行出现，按 data-puffs-tag 全局查找会命中第一个同名行，
+   * 点击深层分组的按钮却跳到别处。按钮不可用时（如顶栏按钮）再回落到全局查找。
+   */
+  resolveTagScrollScope(containerEl: any, tag: any, buttonEl: any = null) {
+    const anchoredItemEl = buttonEl?.closest?.('.puffs-tag-list-item, .puffs-inheritance-tag-group');
+    if (anchoredItemEl) {
+      return {
+        itemEl: anchoredItemEl,
+        rowEl: anchoredItemEl.querySelector('.puffs-tag-list-row, .puffs-inheritance-tag-group-row'),
+      };
+    }
+    if (!tag) return { itemEl: null, rowEl: null };
+
+    const rowEl: any = Array.from(
+      containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag], [data-puffs-inheritance-tag]')
+    ).find((el: any) => el.dataset.puffsTag === tag || el.dataset.puffsInheritanceTag === tag);
+    return {
+      itemEl: rowEl?.closest('.puffs-tag-list-item, .puffs-inheritance-tag-group') || null,
+      rowEl: rowEl || null,
+    };
+  }
+
+  scheduleLastNoteCardScroll(containerEl: any, tag: any, buttonEl: any = null) {
+    if (!containerEl || (!tag && !buttonEl)) return;
 
     window.setTimeout(() => {
       if (!containerEl.isConnected) return;
 
-      const tagRowEl: any = Array.from(
-        containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
-      ).find((rowEl: any) => rowEl.dataset.puffsTag === tag);
-      const tagItemEl: any = tagRowEl && tagRowEl.closest('.puffs-tag-list-item');
-      const noteCards: any[] = tagItemEl
-        ? Array.from(tagItemEl.querySelectorAll('.puffs-tag-note-card[data-path]'))
+      const { itemEl } = this.resolveTagScrollScope(containerEl, tag, buttonEl);
+      const noteCards: any[] = itemEl
+        ? Array.from(itemEl.querySelectorAll('.puffs-tag-note-card[data-path]'))
         : [];
       const lastCardEl = noteCards[noteCards.length - 1];
       if (!lastCardEl) return;
@@ -155,18 +178,16 @@ export class OrderControllerBehavior {
     }, 0);
   }
 
-  scheduleTagTopScroll(containerEl: any, tag: any) {
-    if (!containerEl || !tag) return;
+  scheduleTagTopScroll(containerEl: any, tag: any, buttonEl: any = null) {
+    if (!containerEl || (!tag && !buttonEl)) return;
 
     window.setTimeout(() => {
       if (!containerEl.isConnected) return;
 
-      const tagRowEl: any = Array.from(
-        containerEl.querySelectorAll('.tag-pane-tag[data-puffs-tag]')
-      ).find((rowEl: any) => rowEl.dataset.puffsTag === tag);
-      if (!tagRowEl) return;
+      const { rowEl } = this.resolveTagScrollScope(containerEl, tag, buttonEl);
+      if (!rowEl) return;
 
-      tagRowEl.scrollIntoView({ block: 'start', inline: 'nearest' });
+      rowEl.scrollIntoView({ block: 'start', inline: 'nearest' });
     }, 0);
   }
 

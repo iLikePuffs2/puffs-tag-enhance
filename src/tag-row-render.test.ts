@@ -37,11 +37,16 @@ function makeItem(overrides: AnyRecord = {}): AnyRecord {
   };
 }
 
-function makeBehavior(expandedTags: string[] = [], pinnedTag: string | null = null) {
+function makeBehavior(
+  expandedTags: string[] = [],
+  pinnedTag: string | null = null,
+  // 阈值 1 = 「只要有笔记就显示」，等价于引入阈值之前的行为，故既有用例无需改动
+  scrollTopButtonThreshold = 1
+) {
   const behavior = Object.create(TagPaneBehavior.prototype) as AnyRecord & {
     renderListModeTagItem: (listEl: HTMLElement, item: AnyRecord, view: unknown, patch: unknown) => void;
   };
-  behavior.settings = { pinnedTag };
+  behavior.settings = { pinnedTag, scrollTopButtonThreshold };
   behavior.expandedTags = new Set(expandedTags);
   behavior.noteListCalls = [];
   // 笔记列表本身另有测试，这里只关心标签行
@@ -210,6 +215,48 @@ describe('标签行 · 回底与置顶按钮', () => {
   });
 });
 
+describe('标签行 · 回底按钮受阈值控制', () => {
+  // 阈值此前只管笔记卡片上的回顶按钮，标签行的回底按钮一律显示，两处口径不一致
+  it('笔记数低于阈值时不出现回底按钮', () => {
+    const { rowEl } = render(makeBehavior(['#读书'], null, 3), makeItem());
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).toBeNull();
+  });
+
+  it('笔记数达到阈值时出现回底按钮', () => {
+    const item = makeItem({ files: [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }], exactCount: 3 });
+    const { rowEl } = render(makeBehavior(['#读书'], null, 3), item);
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).not.toBeNull();
+  });
+
+  it('阈值为 0 时任何标签行都没有回底按钮', () => {
+    const { rowEl } = render(makeBehavior(['#读书'], null, 0), makeItem());
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).toBeNull();
+  });
+
+  it('置顶按钮不受阈值影响 —— 它与滚动无关，只要展开且有笔记就该在', () => {
+    const { rowEl } = render(makeBehavior(['#读书'], null, 99), makeItem());
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).toBeNull();
+    expect(rowEl.querySelector('.puffs-tag-pin-button')).not.toBeNull();
+  });
+
+  it('展开态原地更新走的是另一条渲染路径，同样按阈值增删回底按钮', () => {
+    const behavior = makeBehavior([], null, 3) as any;
+    behavior.renderNoteList = () => undefined;
+    behavior.removeNoteList = () => undefined;
+    const item = makeItem();
+    const { treeItemEl } = render(behavior, item);
+
+    behavior.expandedTags.add('#读书');
+    behavior.syncListModeTagExpansion(treeItemEl, item, null, null);
+    expect(treeItemEl.querySelector('.puffs-tag-scroll-bottom-button')).toBeNull();
+    expect(treeItemEl.querySelector('.puffs-tag-pin-button')).not.toBeNull();
+
+    const bigItem = makeItem({ files: [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }] });
+    behavior.syncListModeTagExpansion(treeItemEl, bigItem, null, null);
+    expect(treeItemEl.querySelector('.puffs-tag-scroll-bottom-button')).not.toBeNull();
+  });
+});
+
 describe('标签行 · 折叠箭头是纯装饰', () => {
   // 子标签排序已搬进管理子标签弹窗，箭头不再兼任排序入口
   it.each([
@@ -366,6 +413,105 @@ describe('内层继承标签 · 原地展开', () => {
     expect(target.querySelector('.puffs-inheritance-tag-group-content')).not.toBeNull();
   });
 
+  it('分组行的笔记数达到阈值时挂出回底按钮，低于阈值则没有', () => {
+    const behavior = createTreeRendererBehavior();
+    behavior.settings.scrollTopButtonThreshold = 2;
+    const files = new Map([
+      ['初识.md', makeTFile('初识.md')],
+      ['升温.md', makeTFile('升温.md')],
+      ['热恋.md', makeTFile('热恋.md')],
+    ]);
+    behavior.app = { vault: { getAbstractFileByPath: (path: string) => files.get(path) } };
+    const hostEl = document.createElement('div') as any;
+    behavior.renderTagInheritanceBrowseTree(hostEl, {
+      tag: '#爱情',
+      paths: [],
+      children: [
+        { tag: '#初识', paths: ['初识.md'], subtreePaths: ['初识.md'], children: [] },
+        {
+          tag: '#升温',
+          paths: ['升温.md', '热恋.md'],
+          subtreePaths: ['升温.md', '热恋.md'],
+          children: [],
+        },
+      ],
+    });
+
+    const rowFor = (tag: string) => Array.from<HTMLElement>(
+      hostEl.querySelectorAll('.puffs-inheritance-tag-group-row')
+    ).find((el) => el.dataset.puffsInheritanceTag === tag)!;
+
+    expect(rowFor('#初识').querySelector('.puffs-tag-scroll-bottom-button')).toBeNull();
+    expect(rowFor('#升温').querySelector('.puffs-tag-scroll-bottom-button')).not.toBeNull();
+  });
+
+  it('分组行折叠时不显示回底按钮，展开后才出现 —— 与顶层标签行行为一致', () => {
+    const behavior = createTreeRendererBehavior();
+    behavior.settings.scrollTopButtonThreshold = 1;
+    const file = makeTFile('升温.md');
+    behavior.app = { vault: { getAbstractFileByPath: () => file } };
+    const hostEl = document.createElement('div') as any;
+    document.body.appendChild(hostEl);
+    behavior.renderTagInheritanceBrowseTree(hostEl, {
+      tag: '#爱情',
+      paths: [],
+      children: [{ tag: '#升温', paths: ['升温.md'], subtreePaths: ['升温.md'], children: [] }],
+    });
+
+    const rowEl = hostEl.querySelector('.puffs-inheritance-tag-group-row') as HTMLElement;
+    // 初始展开
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).not.toBeNull();
+
+    rowEl.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(rowEl.getAttribute('aria-expanded')).toBe('false');
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).toBeNull();
+
+    rowEl.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(rowEl.getAttribute('aria-expanded')).toBe('true');
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).not.toBeNull();
+  });
+
+  it('批量同步展开态时同样增删回底按钮', () => {
+    const behavior = createTreeRendererBehavior();
+    behavior.settings.scrollTopButtonThreshold = 1;
+    const file = makeTFile('升温.md');
+    behavior.app = { vault: { getAbstractFileByPath: () => file } };
+    const hostEl = document.createElement('div') as any;
+    behavior.renderTagInheritanceBrowseTree(hostEl, {
+      tag: '#爱情',
+      paths: [],
+      children: [{ tag: '#升温', paths: ['升温.md'], subtreePaths: ['升温.md'], children: [] }],
+    });
+    const rowEl = hostEl.querySelector('.puffs-inheritance-tag-group-row') as HTMLElement;
+    const key = rowEl.dataset.puffsInheritanceGroup!;
+
+    behavior.collapsedInlineHierarchyBranches.add(key);
+    behavior.syncInlineHierarchyExpansion(hostEl);
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).toBeNull();
+
+    behavior.collapsedInlineHierarchyBranches.delete(key);
+    behavior.syncInlineHierarchyExpansion(hostEl);
+    expect(rowEl.querySelector('.puffs-tag-scroll-bottom-button')).not.toBeNull();
+  });
+
+  it('分组行的回底按钮带滚动锚点，供事件委托在本子树内定位而非全局搜同名标签', () => {
+    const behavior = createTreeRendererBehavior();
+    behavior.settings.scrollTopButtonThreshold = 1;
+    const file = makeTFile('升温.md');
+    behavior.app = { vault: { getAbstractFileByPath: () => file } };
+    const hostEl = document.createElement('div') as any;
+    behavior.renderTagInheritanceBrowseTree(hostEl, {
+      tag: '#爱情',
+      paths: [],
+      children: [{ tag: '#升温', paths: ['升温.md'], subtreePaths: ['升温.md'], children: [] }],
+    });
+
+    const buttonEl = hostEl.querySelector('.puffs-tag-scroll-bottom-button') as HTMLElement;
+    expect(buttonEl.dataset.puffsScrollAnchor).toBe('true');
+    // 锚点存在时不再需要 puffsTag 全局查找，但仍保留标签值供调试与样式
+    expect(buttonEl.closest('.puffs-inheritance-tag-group')).not.toBeNull();
+  });
+
   it('批量同步复用已有分组节点', () => {
     const behavior = createTreeRendererBehavior();
     const file = makeTFile('升温.md');
@@ -446,6 +592,31 @@ describe('内层父子笔记 · 原地展开', () => {
     expect(findItem('父.md')).toBe(parent);
     expect(findItem('旁支.md')).toBe(sibling);
     expect(parent.querySelector('.puffs-inline-hierarchy-children')).not.toBeNull();
+  });
+});
+
+describe('内层笔记卡片 · 回顶按钮', () => {
+  function renderNotes(threshold: number, paths: string[]) {
+    const behavior = createInlineNoteBehavior();
+    behavior.settings.scrollTopButtonThreshold = threshold;
+    behavior.getNoteHierarchySettings = () => ({ childrenByParentPath: {} });
+    const hostEl = document.createElement('div') as any;
+    behavior.renderInlineTagNoteTree(hostEl, paths.map(makeTFile), '#读书', false);
+    return hostEl;
+  }
+
+  it('笔记数低于阈值时最后一张卡片上没有回顶按钮', () => {
+    const hostEl = renderNotes(3, ['a.md', 'b.md']);
+    expect(hostEl.querySelector('.puffs-tag-scroll-top-button')).toBeNull();
+  });
+
+  it('达到阈值时回顶按钮挂在最后一张卡片上，并带滚动锚点', () => {
+    const hostEl = renderNotes(3, ['a.md', 'b.md', 'c.md']);
+    const buttonEl = hostEl.querySelector('.puffs-tag-scroll-top-button') as HTMLElement;
+    expect(buttonEl).not.toBeNull();
+    const itemEl = buttonEl.closest('.puffs-tag-note-item') as HTMLElement | null;
+    expect(itemEl?.dataset.path).toBe('c.md');
+    expect(buttonEl.dataset.puffsScrollAnchor).toBe('true');
   });
 });
 

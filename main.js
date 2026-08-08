@@ -92,6 +92,11 @@ function getSidebarToolbarButtonLabel(id) {
   var _a;
   return ((_a = definitionById.get(id)) == null ? void 0 : _a.label) || id;
 }
+function shouldShowScrollButtons(noteCount, threshold) {
+  const limit = Math.floor(Number(threshold));
+  if (!Number.isFinite(limit) || limit <= 0) return false;
+  return noteCount >= limit;
+}
 
 // src/data/schema.ts
 var CURRENT_SCHEMA_VERSION = 1;
@@ -120,6 +125,27 @@ function migrateSchema(data, log = () => {
   }
   data.schemaVersion = CURRENT_SCHEMA_VERSION;
   return true;
+}
+function normalizeDefaultFolders(value) {
+  const lines = Array.isArray(value) ? value : typeof value === "string" ? value.split("\n") : [];
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const line of lines) {
+    if (typeof line !== "string") continue;
+    const folder = line.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    if (!folder || seen.has(folder)) continue;
+    seen.add(folder);
+    result.push(folder);
+  }
+  return result;
+}
+function isPathInDefaultFolders(filePath, folders) {
+  const path = String(filePath || "").replace(/\\/g, "/");
+  if (!path) return false;
+  for (const folder of normalizeDefaultFolders(folders)) {
+    if (path.startsWith(`${folder}/`)) return true;
+  }
+  return false;
 }
 function readPreferredFiles(value) {
   if (Array.isArray(value)) return new Set(value.filter((path) => typeof path === "string" && path));
@@ -291,6 +317,17 @@ function collectIntersectionSignature(tree) {
   if (tree) visit(tree, [tree.tag]);
   return parts.join(";");
 }
+function collectBrowseSignature(tree) {
+  if (!tree) return "";
+  const parts = [];
+  const visit = (node, lineage) => {
+    const path = lineage.join(">");
+    parts.push(`${node.isIntersection ? "&" : ""}${path}:${node.paths.join("|")}`);
+    for (const child of node.children) visit(child, [...lineage, child.tag]);
+  };
+  visit(tree, [tree.tag]);
+  return parts.join(";");
+}
 function compareHierarchyParentItems(left, right) {
   return compareTagItemsByCount(
     { count: left.directCount, name: left.name },
@@ -376,6 +413,18 @@ function parseCurrentNoteTagSearch(value) {
   const text = String(value || "").trim();
   return { matched: text === "\uFF1A\uFF1A" || text === "::" };
 }
+function parseNoteTagLocateSearch(value) {
+  const text = String(value || "").trim();
+  if (!text.startsWith("**")) return { matched: false, noteQuery: "" };
+  const noteQuery = text.slice(2).trim();
+  return noteQuery ? { matched: true, noteQuery } : { matched: false, noteQuery: "" };
+}
+function parseSimilarTagSearch(value) {
+  const text = String(value || "").trim();
+  if (!text.endsWith("\uFF0C")) return { matched: false, baseQuery: "" };
+  const baseQuery = text.slice(0, -1).trim();
+  return baseQuery ? { matched: true, baseQuery } : { matched: false, baseQuery: "" };
+}
 function fileMatchesNoteSearch(file, value, displayName = "") {
   const term = String(value || "").trim().toLowerCase();
   if (!term) return false;
@@ -444,6 +493,10 @@ var DEFAULT_SETTINGS = {
   autoSwitchToOutlineEnabled: true,
   freezeSearchWhileComposing: true,
   tagSidebarPreferredFiles: [],
+  // 这些文件夹（含子文件夹）里的笔记默认开标签面板
+  tagSidebarDefaultFolders: [],
+  // 上述文件夹里被手动切走的例外笔记 —— 只记例外，不逐篇记录整个文件夹
+  tagSidebarExcludedFiles: [],
   noteOrderByTag: {},
   noteDisplayNameByTag: {},
   tagBoundNoteByTag: {},
@@ -814,6 +867,14 @@ var SEARCH_MODE_SPECS = [
     match: (query) => parseCurrentNoteTagSearch(query).matched
   },
   {
+    // 必须用原始查询并排在 note-card 之前：用户要求本语法不受固定标签影响，
+    // 且若先经过置顶解析，`**笔记A` 会被改写成 `读书**笔记A`（含两个 *），
+    // note-card 的 isValid 不成立、最终落到 plain，定位结果就看不见了
+    id: "note-tag-locate",
+    usesRawQuery: true,
+    match: (query) => parseNoteTagLocateSearch(query).matched
+  },
+  {
     id: "note-card",
     usesRawQuery: false,
     match: (query) => {
@@ -838,6 +899,13 @@ var SEARCH_MODE_SPECS = [
     id: "union",
     usesRawQuery: false,
     match: (query) => splitUnionSearchTerms(getTagFilterQuery(query)) !== null
+  },
+  {
+    // 排在交集与并集之后：`比赛&秘境，` 这类混合输入优先按操作符处理，
+    // 否则两种语法会互相吞掉
+    id: "similar-tags",
+    usesRawQuery: false,
+    match: (query) => parseSimilarTagSearch(getTagFilterQuery(query)).matched
   }
 ];
 function resolveSearch(rawQuery, resolvePinnedQuery = (query) => query) {
@@ -858,15 +926,18 @@ function resolveSearch(rawQuery, resolvePinnedQuery = (query) => query) {
 function buildResult(id, rawQuery, effectiveQuery) {
   var _a;
   const noteCard = parseNoteCardSearch(effectiveQuery);
-  const tagQuery = id === "hierarchy" || id === "current-note-tags" ? effectiveQuery : getTagFilterQuery(effectiveQuery);
-  const unionTerms = splitUnionSearchTerms(tagQuery);
-  const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
+  const usesWholeQueryAsCondition = id === "hierarchy" || id === "current-note-tags" || id === "note-tag-locate";
+  const rawTagQuery = usesWholeQueryAsCondition ? effectiveQuery : getTagFilterQuery(effectiveQuery);
+  const tagQuery = id === "similar-tags" ? parseSimilarTagSearch(rawTagQuery).baseQuery : rawTagQuery;
+  const unionTerms = usesWholeQueryAsCondition ? null : splitUnionSearchTerms(tagQuery);
+  const intersectionTerms = usesWholeQueryAsCondition ? null : splitIntersectionSearchTerms(tagQuery);
+  const noteQuery = id === "note-card" ? (_a = noteCard == null ? void 0 : noteCard.noteQuery) != null ? _a : "" : id === "note-tag-locate" ? parseNoteTagLocateSearch(effectiveQuery).noteQuery : "";
   return {
     id,
     rawQuery,
     effectiveQuery,
     tagQuery,
-    noteQuery: id === "note-card" ? (_a = noteCard == null ? void 0 : noteCard.noteQuery) != null ? _a : "" : "",
+    noteQuery,
     unionTerms,
     intersectionTerms,
     isMultiTag: id === "union" || id === "intersection"
@@ -949,7 +1020,7 @@ function restorePreservedState(scrollEl, root, state) {
   }
 }
 function tagRowSignature(item, context) {
-  var _a, _b, _c, _d, _e;
+  var _a, _b, _c, _d, _e, _f;
   const files = item.files || [];
   const parts = [
     String((_a = item.tag) != null ? _a : ""),
@@ -963,6 +1034,11 @@ function tagRowSignature(item, context) {
     // 交集组的内容取决于对方标签的笔记集合，而那不改变本行的 files 与计数。
     // 少了这一项，「某篇笔记新加了对方标签」时旧 DOM 会被复用、交集组显示陈旧内容。
     String((_e = item.intersectionSignature) != null ? _e : ""),
+    // 整棵展开树的内容指纹（由 computeTagBrowseData 预先算好并随 browseData 缓存）。
+    // 它覆盖两类 files.length 察觉不到的变化：笔记数不变但成员换了人；
+    // 变化发生在子标签分组内部而父标签计数没动。移除笔记标签后不实时刷新即源于此。
+    // 因为是预算好的短串，折叠态也带上它不会重新付出拼接代价。
+    String((_f = item.browseSignature) != null ? _f : ""),
     (item.fixedSearchTags || []).join(","),
     context.pinned ? "1" : "0",
     context.expanded ? "1" : "0",
@@ -1295,6 +1371,10 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
       const matching2 = plugin.getCurrentNoteTagItems();
       return { matching: matching2, display: matching2 };
     }
+    if (resolved.id === "note-tag-locate") {
+      const matching2 = plugin.getNoteTagLocateItems(resolved.noteQuery);
+      return { matching: matching2, display: matching2 };
+    }
     const matching = plugin.getListModeItems(this, resolved.effectiveQuery, false);
     return { matching, display: plugin.prependPinnedTagItem(matching, resolved.rawQuery) };
   }
@@ -1303,6 +1383,11 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     if (resolved.id === "current-note-tags") {
       this.clearAutoExpandedTag();
       plugin.syncCurrentNoteTagSearchState(this.noteCardSearchState, items.matching);
+      return;
+    }
+    if (resolved.id === "note-tag-locate") {
+      this.clearAutoExpandedTag();
+      plugin.syncNoteTagLocateSearchState(this.noteCardSearchState, items.matching, resolved.noteQuery);
       return;
     }
     if (resolved.id === "note-card") {
@@ -1340,6 +1425,9 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
   }
   emptyMessageFor(resolved) {
     if (resolved.id === "current-note-tags") return this.plugin.getCurrentNoteTagEmptyMessage();
+    if (resolved.id === "note-tag-locate") {
+      return this.plugin.getNoteTagLocateEmptyMessage(resolved.noteQuery);
+    }
     return this.searchQuery.trim() ? "\u6CA1\u6709\u5339\u914D\u7684\u6807\u7B7E\u3002" : "\u6682\u65E0\u53EF\u5C55\u793A\u7684\u6807\u7B7E\u3002";
   }
   // --- 父子层级页面 -------------------------------------------------------
@@ -1405,8 +1493,7 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
   toggleAllTags() {
     const plugin = this.plugin;
     const resolved = resolveSearch(this.searchQuery, (query) => plugin.resolvePinnedSearchQuery(query));
-    const matching = resolved.id === "current-note-tags" ? plugin.getCurrentNoteTagItems() : plugin.getListModeItems(this, resolved.effectiveQuery, false);
-    const display = resolved.id === "current-note-tags" ? matching : plugin.prependPinnedTagItem(matching, resolved.rawQuery);
+    const { matching, display } = this.collectItems(resolved);
     if (display.length === 0) return;
     const inheritanceControl = plugin.getUniqueSearchInheritanceControl(
       display,
@@ -1519,13 +1606,13 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
     const scrollBottomEl = target.closest(".puffs-tag-scroll-bottom-button");
     if (scrollBottomEl) {
       stop();
-      plugin.scheduleLastNoteCardScroll(this.listEl, scrollBottomEl.dataset.puffsTag);
+      plugin.scheduleLastNoteCardScroll(this.listEl, scrollBottomEl.dataset.puffsTag, scrollBottomEl);
       return;
     }
     const scrollTopEl = target.closest(".puffs-tag-scroll-top-button");
     if (scrollTopEl) {
       stop();
-      plugin.scheduleTagTopScroll(this.listEl, scrollTopEl.dataset.puffsTag);
+      plugin.scheduleTagTopScroll(this.listEl, scrollTopEl.dataset.puffsTag, scrollTopEl);
       return;
     }
     const orderButtonEl = target.closest(".puffs-tag-note-order-button");
@@ -1566,13 +1653,24 @@ var PuffsTagSidebarView = class extends import_obsidian2.ItemView {
       return;
     }
     const tagEl = target.closest(".tag-pane-tag");
-    if (!tagEl || tagEl.dataset.puffsVirtualTag === "true") return;
-    const tag = this.plugin.findTagForElement(this, tagEl);
+    if (!tagEl || tagEl.dataset.puffsHierarchyGroup === "true") return;
+    const virtualTag = tagEl.dataset.puffsVirtualTag === "true" ? tagEl.dataset.puffsTag : null;
+    const tag = virtualTag || this.plugin.findTagForElement(this, tagEl);
     if (!tag) return;
+    const item = virtualTag ? this.findDisplayItemByTag(virtualTag) : null;
+    if (virtualTag && !item) return;
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    this.plugin.showTagContextMenu(event, tag);
+    this.plugin.showTagContextMenu(event, tag, item);
+  }
+  /** 取当前这轮渲染里某个标签对应的 item（虚拟标签的笔记列表只存在于此）。 */
+  findDisplayItemByTag(tag) {
+    const resolved = resolveSearch(
+      this.searchQuery,
+      (query) => this.plugin.resolvePinnedSearchQuery(query)
+    );
+    return this.collectItems(resolved).display.find((item) => item.tag === tag) || null;
   }
 };
 
@@ -1860,8 +1958,8 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     this.plugin = plugin;
     this.relationMode = relationMode;
     this.parentTag = normalizeTag(subjectTag);
-    const related = relationMode === "parents" ? plugin.getInheritanceParents(subjectTag) : plugin.getInheritanceChildren(subjectTag);
-    this.children = relationMode === "parents" ? plugin.sortTagsByVisibleCount(related) : [...related];
+    const related = relationMode === "similar" ? plugin.getSimilarTagPartners(subjectTag) : relationMode === "parents" ? plugin.getInheritanceParents(subjectTag) : plugin.getInheritanceChildren(subjectTag);
+    this.children = relationMode === "children" ? [...related] : plugin.sortTagsByVisibleCount(related);
     this.activeChild = this.children[0] || null;
     this.orderTargetChild = null;
     this.query = "";
@@ -1886,9 +1984,8 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
   }
   buildLayout() {
     this.contentEl.empty();
-    const relationName = this.relationMode === "parents" ? "\u7236\u6807\u7B7E" : "\u5B50\u6807\u7B7E";
     this.contentEl.createDiv({
-      text: `\u7BA1\u7406 ${getTagDisplayName(this.parentTag)} \u7684${relationName}`,
+      text: this.getModalTitle(),
       cls: "puffs-relation-modal-title puffs-tag-rename-title"
     });
     this.searchHostEl = this.contentEl.createDiv({ cls: "puffs-relation-tag-search" });
@@ -1897,10 +1994,11 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
     this.picker = createTagCandidatePicker({
       hostEl: this.searchHostEl,
       inputEl: this.inputEl,
-      getCandidates: (query) => getTagRelationCandidates(this.plugin.getLogicalTagSet(), query, (tag) => tag !== this.parentTag && !this.children.includes(tag) && !this.plugin.areTagsRelated(this.parentTag, tag) && !(this.relationMode === "parents" && this.plugin.isFixedChild(this.parentTag)) && !(this.relationMode === "children" && this.plugin.isFixedChild(tag)) && !this.plugin.wouldCreateTagInheritanceCycle(
-        this.relationMode === "parents" ? tag : this.parentTag,
-        this.relationMode === "parents" ? this.parentTag : tag
-      )),
+      getCandidates: (query) => getTagRelationCandidates(
+        this.plugin.getLogicalTagSet(),
+        query,
+        (tag) => this.isCandidateEligible(tag)
+      ),
       onInput: (value) => {
         this.query = value;
       },
@@ -1912,7 +2010,7 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
       }
     });
     this.childrenListEl = this.contentEl.createDiv({ cls: "puffs-relation-child-list" });
-    this.buildInheritanceSelectionSection();
+    if (this.hasInheritanceControls()) this.buildInheritanceSelectionSection();
     this.renderChildren();
     this.renderInheritanceSelection();
     this.modalEl.addEventListener("keydown", (event) => {
@@ -1935,6 +2033,32 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
       this.modalEl.tabIndex = -1;
       this.modalEl.focus();
     }, 0);
+  }
+  /**
+   * 是否提供继承特有的控件（继承/交集模式切换、固定子标签、继承笔记勾选区）。
+   *
+   * 相似标签弹窗复用这套骨架但没有这些概念，故由子类关掉。
+   */
+  hasInheritanceControls() {
+    return true;
+  }
+  getModalTitle() {
+    const relationName = this.relationMode === "parents" ? "\u7236\u6807\u7B7E" : "\u5B50\u6807\u7B7E";
+    return `\u7BA1\u7406 ${getTagDisplayName(this.parentTag)} \u7684${relationName}`;
+  }
+  getEmptyMessage() {
+    return this.relationMode === "parents" ? "\u6682\u65E0\u7236\u6807\u7B7E" : "\u6682\u65E0\u5B50\u6807\u7B7E";
+  }
+  /** 候选是否可选。继承方向要防成环、避开固定关系，相似关系没有这些约束。 */
+  isCandidateEligible(tag) {
+    return tag !== this.parentTag && !this.children.includes(tag) && !this.plugin.areTagsRelated(this.parentTag, tag) && !(this.relationMode === "parents" && this.plugin.isFixedChild(this.parentTag)) && !(this.relationMode === "children" && this.plugin.isFixedChild(tag)) && !this.plugin.wouldCreateTagInheritanceCycle(
+      this.relationMode === "parents" ? tag : this.parentTag,
+      this.relationMode === "parents" ? this.parentTag : tag
+    );
+  }
+  /** 列表里显示的名字。子标签方向用「父标签-子名称」的简称口径，其余用全名。 */
+  getRelatedDisplayName(relatedTag) {
+    return this.relationMode === "parents" ? getTagDisplayName(relatedTag) : this.plugin.getRelativeChildDisplayName(this.parentTag, relatedTag);
   }
   getEdge(relatedTag) {
     return this.relationMode === "parents" ? { parent: relatedTag, child: this.parentTag } : { parent: this.parentTag, child: relatedTag };
@@ -2053,7 +2177,7 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
   renderChildren() {
     var _a;
     if (!this.childrenListEl) return;
-    if (this.relationMode === "parents") {
+    if (this.relationMode !== "children") {
       this.children = this.plugin.sortTagsByVisibleCount(this.children);
     }
     const existingRows = new Map(
@@ -2081,10 +2205,8 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
         }
         rowEl.createSpan({ cls: "puffs-relation-manage-name" });
         rowEl.createSpan({ cls: "puffs-relation-child-count" });
-        const modeButton = rowEl.createEl("button", {
-          cls: "clickable-icon puffs-inheritance-edge-mode"
-        });
-        modeButton.addEventListener("click", (event) => {
+        const modeButton = this.hasInheritanceControls() ? rowEl.createEl("button", { cls: "clickable-icon puffs-inheritance-edge-mode" }) : null;
+        modeButton == null ? void 0 : modeButton.addEventListener("click", (event) => {
           event.stopPropagation();
           const relatedTag = modeButton.dataset.puffsRelatedTag;
           this.activeChild = relatedTag;
@@ -2119,7 +2241,7 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
           void this.moveOrderTargetAfter(rowEl.dataset.puffsTag);
         });
       }
-      rowEl.querySelector(".puffs-relation-manage-name").textContent = this.relationMode === "parents" ? getTagDisplayName(child) : this.plugin.getRelativeChildDisplayName(this.parentTag, child);
+      rowEl.querySelector(".puffs-relation-manage-name").textContent = this.getRelatedDisplayName(child);
       rowEl.querySelector(".puffs-relation-child-count").textContent = String(this.plugin.getTagVisibleNoteCount(child));
       rowEl.classList.toggle("is-active", child === this.activeChild);
       rowEl.setAttribute("role", "button");
@@ -2132,15 +2254,17 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
         "aria-label",
         isOrderTarget ? "\u53D6\u6D88\u8BE5\u5B50\u6807\u7B7E\u7684\u6392\u5E8F\u9009\u62E9" : "\u9009\u4E2D\u8BE5\u5B50\u6807\u7B7E\u8FDB\u884C\u6392\u5E8F"
       );
-      this.syncInheritanceModeButton(rowEl, child);
-      this.syncFixedRelationButton(rowEl, child);
+      if (this.hasInheritanceControls()) {
+        this.syncInheritanceModeButton(rowEl, child);
+        this.syncFixedRelationButton(rowEl, child);
+      }
       this.childrenListEl.appendChild(rowEl);
       existingRows.delete(child);
     }
     for (const rowEl of existingRows.values()) rowEl.remove();
     if (!this.children.length) {
       this.childrenListEl.createDiv({
-        text: this.relationMode === "parents" ? "\u6682\u65E0\u7236\u6807\u7B7E" : "\u6682\u65E0\u5B50\u6807\u7B7E",
+        text: this.getEmptyMessage(),
         cls: "puffs-relation-empty"
       });
     }
@@ -2428,6 +2552,56 @@ var TagInheritanceModal = class extends import_obsidian4.Modal {
 var ManageParentTagModal = class extends TagInheritanceModal {
   constructor(app, plugin, childTag) {
     super(app, plugin, childTag, "parents");
+  }
+};
+var SimilarTagModal = class extends TagInheritanceModal {
+  constructor(app, plugin, tagValue) {
+    super(app, plugin, tagValue, "similar");
+  }
+  /** 相似组无序，不提供排序抓手。 */
+  canReorderChildren() {
+    return false;
+  }
+  /** 相似关系没有继承/交集之分，也没有固定子标签。 */
+  hasInheritanceControls() {
+    return false;
+  }
+  getModalTitle() {
+    return `\u7BA1\u7406 ${getTagDisplayName(this.parentTag)} \u7684\u76F8\u4F3C\u6807\u7B7E`;
+  }
+  getEmptyMessage() {
+    return "\u6682\u65E0\u76F8\u4F3C\u6807\u7B7E";
+  }
+  /** 候选池排除自己与已在组内的标签；相似关系不成环，无需环检测。 */
+  isCandidateEligible(tag) {
+    return tag !== this.parentTag && !this.children.includes(tag);
+  }
+  /** 列表里直接显示完整标签名 —— 「父标签-子名称」的简称口径在这里不成立。 */
+  getRelatedDisplayName(relatedTag) {
+    return getTagDisplayName(relatedTag);
+  }
+  async persistChildren(nextChildren) {
+    if (this.isSubmitting) return;
+    this.isSubmitting = true;
+    this.syncMutationState();
+    try {
+      const previous = new Set(this.children);
+      const next = new Set(nextChildren);
+      for (const tag of next) {
+        if (!previous.has(tag)) await this.plugin.addSimilarTag(this.parentTag, tag);
+      }
+      for (const tag of previous) {
+        if (!next.has(tag)) await this.plugin.removeSimilarTag(this.parentTag, tag);
+      }
+      this.updateChildren(this.plugin.getSimilarTagPartners(this.parentTag));
+      return true;
+    } catch (error) {
+      new import_obsidian4.Notice(error && error.message ? error.message : "\u4FDD\u5B58\u76F8\u4F3C\u6807\u7B7E\u5931\u8D25");
+      return false;
+    } finally {
+      this.isSubmitting = false;
+      this.syncMutationState();
+    }
   }
 };
 var TagNoteBindingModal = class extends import_obsidian4.Modal {
@@ -2994,10 +3168,29 @@ var TagTreeRendererBehavior = class {
       rowEl.createDiv({ text: label, cls: "tree-item-inner" });
       const flairOuterEl = rowEl.createDiv({ cls: "tree-item-flair-outer" });
       flairOuterEl.createSpan({ text: String(count), cls: "tree-item-flair tag-pane-tag-count" });
+      const syncScrollBottomButton = (expanded) => {
+        var _a;
+        const existingEl = rowEl.querySelector(".puffs-tag-scroll-bottom-button");
+        const shouldShow = expanded && shouldShowScrollButtons(count, (_a = this.settings) == null ? void 0 : _a.scrollTopButtonThreshold);
+        if (!shouldShow) {
+          existingEl == null ? void 0 : existingEl.remove();
+          return;
+        }
+        if (existingEl) return;
+        const scrollBottomButtonEl = rowEl.createEl("button", {
+          cls: "clickable-icon puffs-tag-scroll-bottom-button",
+          attr: { type: "button", "aria-label": "\u56DE\u5E95" }
+        });
+        if (tagValue) scrollBottomButtonEl.dataset.puffsTag = tagValue;
+        scrollBottomButtonEl.dataset.puffsScrollAnchor = "true";
+        (0, import_obsidian5.setIcon)(scrollBottomButtonEl, "arrow-down-to-line");
+        rowEl.insertBefore(scrollBottomButtonEl, flairOuterEl);
+      };
       const syncExpansion = () => {
         const expanded = !!targetPath && containsTarget || !collapsed.has(key);
         rowEl.setAttribute("aria-expanded", String(expanded));
         toggleEl.classList.toggle("is-collapsed", !expanded);
+        syncScrollBottomButton(expanded);
         let contentEl = Array.from(itemEl.children).find(
           (el) => el.classList.contains("puffs-inheritance-tag-group-content")
         );
@@ -3089,6 +3282,7 @@ var TagTreeRendererBehavior = class {
     for (const child of tree.children) renderNode(hostEl, child, [child.tag], tree.tag);
   }
   renderInlineTagNoteTree(hostEl, files, tagValue, isVirtual = false, options = {}) {
+    var _a;
     hostEl.empty();
     const tag = normalizeTag(tagValue);
     const orderedFiles = Array.from(new Map((files || []).map((file) => [file.path, file])).values());
@@ -3163,9 +3357,9 @@ var TagTreeRendererBehavior = class {
         orderButtonEl.dataset.puffsExpanded = String(expanded);
         this.syncNoteOrderButtonSelection(orderButtonEl);
         this.bindNoteParentControlButton(orderButtonEl, () => {
-          var _a, _b;
+          var _a2, _b;
           this.toggleInlineHierarchyBranch(branchKey);
-          (_a = itemEl.puffsSyncExpansion) == null ? void 0 : _a.call(itemEl);
+          (_a2 = itemEl.puffsSyncExpansion) == null ? void 0 : _a2.call(itemEl);
           (_b = options.onExpansionChange) == null ? void 0 : _b.call(options);
         }, toggleOrder);
       } else if (hasOrderButton) {
@@ -3183,11 +3377,11 @@ var TagTreeRendererBehavior = class {
         inlineToggleEl.classList.toggle("is-collapsed", !expanded);
         (0, import_obsidian5.setIcon)(inlineToggleEl, "right-triangle");
         inlineToggleEl.addEventListener("click", (event) => {
-          var _a, _b;
+          var _a2, _b;
           event.preventDefault();
           event.stopPropagation();
           this.toggleInlineHierarchyBranch(branchKey);
-          (_a = itemEl.puffsSyncExpansion) == null ? void 0 : _a.call(itemEl);
+          (_a2 = itemEl.puffsSyncExpansion) == null ? void 0 : _a2.call(itemEl);
           (_b = options.onExpansionChange) == null ? void 0 : _b.call(options);
         });
       }
@@ -3236,16 +3430,17 @@ var TagTreeRendererBehavior = class {
     };
     const roots = forest.roots.length ? forest.roots : orderedFiles.map((file) => file.path);
     for (const rootPath of roots) renderNode(hostEl, rootPath);
-    if (this.settings.scrollTopButtonThreshold > 0 && orderedFiles.length >= this.settings.scrollTopButtonThreshold && renderedCards.length) {
+    if (shouldShowScrollButtons(orderedFiles.length, (_a = this.settings) == null ? void 0 : _a.scrollTopButtonThreshold) && renderedCards.length) {
       const scrollTopButtonEl = renderedCards[renderedCards.length - 1].createEl("button", {
         cls: "clickable-icon puffs-tag-scroll-top-button"
       });
-      scrollTopButtonEl.dataset.puffsTag = tagValue;
+      if (tagValue) scrollTopButtonEl.dataset.puffsTag = tagValue;
+      scrollTopButtonEl.dataset.puffsScrollAnchor = "true";
       (0, import_obsidian5.setIcon)(scrollTopButtonEl, "arrow-up-to-line");
       scrollTopButtonEl.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        this.scheduleTagTopScroll(options.scrollContainer || hostEl, tagValue);
+        this.scheduleTagTopScroll(options.scrollContainer || hostEl, tagValue, scrollTopButtonEl);
       });
     }
   }
@@ -3533,28 +3728,44 @@ var ContextMenusBehavior = class {
     menu.showAtMouseEvent(event);
     return true;
   }
-  showTagContextMenu(event, tagValue) {
+  /**
+   * 标签行右键菜单。
+   *
+   * item 只在虚拟标签（`&` 交集搜索结果）时必须传：那种标签不在 tagFileIndex 里，
+   * 候选笔记池只能从 item.files 拿。拿不到就不弹菜单，避免打开一个空弹窗。
+   */
+  showTagContextMenu(event, tagValue, item = null) {
+    if (String(tagValue || "").startsWith("intersection:")) {
+      if (!item || !(item.files || []).length || !(item.sourceTags || []).length) return false;
+      const virtualMenu = new import_obsidian6.Menu();
+      virtualMenu.addItem((menuItem) => menuItem.setTitle("\u4FEE\u6539\u6807\u7B7E").setIcon("pencil").onClick(() => this.openVirtualTagRenameModal(item)));
+      virtualMenu.showAtMouseEvent(event);
+      return true;
+    }
     const tag = normalizeTag(tagValue);
     if (!tag) return false;
     const menu = new import_obsidian6.Menu();
-    menu.addItem((item) => item.setTitle("\u4FEE\u6539\u6807\u7B7E").setIcon("pencil").onClick(() => this.openRenameTagModal(tag)));
-    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u7236\u6807\u7B7E").setIcon("corner-left-up").onClick(() => {
+    menu.addItem((item2) => item2.setTitle("\u4FEE\u6539\u6807\u7B7E").setIcon("pencil").onClick(() => this.openRenameTagModal(tag)));
+    menu.addItem((item2) => item2.setTitle("\u76F8\u4F3C\u6807\u7B7E").setIcon("group").onClick(() => {
+      new SimilarTagModal(this.app, this, tag).open();
+    }));
+    menu.addItem((item2) => item2.setTitle("\u7BA1\u7406\u7236\u6807\u7B7E").setIcon("corner-left-up").onClick(() => {
       new ManageParentTagModal(this.app, this, tag).open();
     }));
-    menu.addItem((item) => item.setTitle("\u7BA1\u7406\u5B50\u6807\u7B7E").setIcon("git-fork").onClick(() => {
+    menu.addItem((item2) => item2.setTitle("\u7BA1\u7406\u5B50\u6807\u7B7E").setIcon("git-fork").onClick(() => {
       new TagInheritanceModal(this.app, this, tag).open();
     }));
     menu.addSeparator();
     const boundFile = this.getTagBoundNoteFile(tag);
     if (boundFile) {
-      menu.addItem((item) => item.setTitle("\u6253\u5F00\u7B14\u8BB0").setIcon("file-text").onClick(() => {
+      menu.addItem((item2) => item2.setTitle("\u6253\u5F00\u7B14\u8BB0").setIcon("file-text").onClick(() => {
         this.openFileInMainWorkspace(boundFile);
       }));
-      menu.addItem((item) => item.setTitle("\u6362\u7ED1\u7B14\u8BB0").setIcon("replace").onClick(() => {
+      menu.addItem((item2) => item2.setTitle("\u6362\u7ED1\u7B14\u8BB0").setIcon("replace").onClick(() => {
         new TagNoteBindingModal(this.app, this, tag).open();
       }));
     } else {
-      menu.addItem((item) => item.setTitle("\u7ED1\u5B9A\u7B14\u8BB0").setIcon("link").onClick(() => {
+      menu.addItem((item2) => item2.setTitle("\u7ED1\u5B9A\u7B14\u8BB0").setIcon("link").onClick(() => {
         new TagNoteBindingModal(this.app, this, tag).open();
       }));
     }
@@ -3672,29 +3883,49 @@ var OrderControllerBehavior = class {
       }
     }, 0);
   }
-  scheduleLastNoteCardScroll(containerEl, tag) {
-    if (!containerEl || !tag) return;
+  /**
+   * 回顶/回底作用的那棵子树。
+   *
+   * 优先从按钮自身向上找最近的 tree-item —— 同一个标签可能同时作为顶层标签行和
+   * 若干继承树里的分组行出现，按 data-puffs-tag 全局查找会命中第一个同名行，
+   * 点击深层分组的按钮却跳到别处。按钮不可用时（如顶栏按钮）再回落到全局查找。
+   */
+  resolveTagScrollScope(containerEl, tag, buttonEl = null) {
+    var _a;
+    const anchoredItemEl = (_a = buttonEl == null ? void 0 : buttonEl.closest) == null ? void 0 : _a.call(buttonEl, ".puffs-tag-list-item, .puffs-inheritance-tag-group");
+    if (anchoredItemEl) {
+      return {
+        itemEl: anchoredItemEl,
+        rowEl: anchoredItemEl.querySelector(".puffs-tag-list-row, .puffs-inheritance-tag-group-row")
+      };
+    }
+    if (!tag) return { itemEl: null, rowEl: null };
+    const rowEl = Array.from(
+      containerEl.querySelectorAll(".tag-pane-tag[data-puffs-tag], [data-puffs-inheritance-tag]")
+    ).find((el) => el.dataset.puffsTag === tag || el.dataset.puffsInheritanceTag === tag);
+    return {
+      itemEl: (rowEl == null ? void 0 : rowEl.closest(".puffs-tag-list-item, .puffs-inheritance-tag-group")) || null,
+      rowEl: rowEl || null
+    };
+  }
+  scheduleLastNoteCardScroll(containerEl, tag, buttonEl = null) {
+    if (!containerEl || !tag && !buttonEl) return;
     window.setTimeout(() => {
       if (!containerEl.isConnected) return;
-      const tagRowEl = Array.from(
-        containerEl.querySelectorAll(".tag-pane-tag[data-puffs-tag]")
-      ).find((rowEl) => rowEl.dataset.puffsTag === tag);
-      const tagItemEl = tagRowEl && tagRowEl.closest(".puffs-tag-list-item");
-      const noteCards = tagItemEl ? Array.from(tagItemEl.querySelectorAll(".puffs-tag-note-card[data-path]")) : [];
+      const { itemEl } = this.resolveTagScrollScope(containerEl, tag, buttonEl);
+      const noteCards = itemEl ? Array.from(itemEl.querySelectorAll(".puffs-tag-note-card[data-path]")) : [];
       const lastCardEl = noteCards[noteCards.length - 1];
       if (!lastCardEl) return;
       lastCardEl.scrollIntoView({ block: "center", inline: "nearest" });
     }, 0);
   }
-  scheduleTagTopScroll(containerEl, tag) {
-    if (!containerEl || !tag) return;
+  scheduleTagTopScroll(containerEl, tag, buttonEl = null) {
+    if (!containerEl || !tag && !buttonEl) return;
     window.setTimeout(() => {
       if (!containerEl.isConnected) return;
-      const tagRowEl = Array.from(
-        containerEl.querySelectorAll(".tag-pane-tag[data-puffs-tag]")
-      ).find((rowEl) => rowEl.dataset.puffsTag === tag);
-      if (!tagRowEl) return;
-      tagRowEl.scrollIntoView({ block: "start", inline: "nearest" });
+      const { rowEl } = this.resolveTagScrollScope(containerEl, tag, buttonEl);
+      if (!rowEl) return;
+      rowEl.scrollIntoView({ block: "start", inline: "nearest" });
     }, 0);
   }
   syncNoteOrderButtonSelection(buttonEl) {
@@ -3824,6 +4055,38 @@ var PuffsTagEnhanceSettingTab = class extends import_obsidian8.PluginSettingTab 
         await this.plugin.updateSettings({ freezeSearchWhileComposing: value });
       });
     });
+    new import_obsidian8.Setting(containerEl).setName("\u9ED8\u8BA4\u6253\u5F00\u6807\u7B7E\u9762\u677F\u7684\u6587\u4EF6\u5939").setDesc("\u76F8\u5BF9 vault \u7684\u8DEF\u5F84\uFF0C\u4E00\u884C\u4E00\u4E2A\uFF0C\u542B\u5B50\u6587\u4EF6\u5939").addTextArea((text) => {
+      text.setValue((this.plugin.settings.tagSidebarDefaultFolders || []).join("\n")).setPlaceholder("\u5C0F\u8BF4/\u60C5\u8282").onChange(async (value) => {
+        autoGrow();
+        await this.plugin.updateSettings({ tagSidebarDefaultFolders: value });
+      });
+      const inputEl = text.inputEl;
+      const measureSiblingInput = () => {
+        const probe = containerEl.querySelector(
+          '.setting-item-control input[type="text"]'
+        );
+        return { width: (probe == null ? void 0 : probe.offsetWidth) || 0, height: (probe == null ? void 0 : probe.offsetHeight) || 30 };
+      };
+      const autoGrow = () => {
+        const base = measureSiblingInput();
+        if (base.width) inputEl.style.width = `${base.width}px`;
+        inputEl.style.lineHeight = "";
+        inputEl.style.height = "auto";
+        const style = getComputedStyle(inputEl);
+        const borderHeight = inputEl.offsetHeight - inputEl.clientHeight;
+        const isSingleLine = inputEl.scrollHeight + borderHeight <= base.height;
+        if (isSingleLine) {
+          const verticalPadding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+          inputEl.style.lineHeight = `${base.height - borderHeight - verticalPadding}px`;
+          inputEl.style.height = "auto";
+        }
+        inputEl.style.height = `${Math.max(base.height, inputEl.scrollHeight + borderHeight)}px`;
+      };
+      inputEl.rows = 1;
+      inputEl.style.resize = "none";
+      inputEl.style.overflowY = "hidden";
+      window.setTimeout(autoGrow, 0);
+    });
     const keywordDescription = "\u56FA\u5B9A\u8BED\u6CD5\uFF1A=\uFF1B==\uFF08\u5F53\u524D\u7B14\u8BB0\u5173\u7CFB\uFF09\uFF1B=\u7236\u7B14\u8BB0\uFF1B==\u5B50\u7B14\u8BB0\uFF1B=\u7236\u7B14\u8BB0*\u5B50\u7B14\u8BB0";
     new import_obsidian8.Setting(containerEl).setName("\u7236\u5B50\u7B14\u8BB0\u641C\u7D22\u5173\u952E\u5B57").setDesc(keywordDescription).addText((text) => {
       text.setValue(DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD).setPlaceholder(DEFAULT_NOTE_HIERARCHY_SEARCH_KEYWORD).setDisabled(true);
@@ -3861,7 +4124,7 @@ var PuffsTagEnhanceSettingTab = class extends import_obsidian8.PluginSettingTab 
         await this.plugin.updateSettings({ backupFolderPath: value });
       });
     });
-    new import_obsidian8.Setting(containerEl).setName("\u56DE\u9876\u6309\u94AE\u663E\u793A\u9608\u503C").setDesc("\u6807\u7B7E\u7684\u7B14\u8BB0\u5361\u7247\u6570\u91CF\u8FBE\u5230\u8BE5\u503C\u65F6\u663E\u793A\u56DE\u9876\u6309\u94AE\uFF1B\u8F93\u5165 0 \u4E0D\u663E\u793A").addText((text) => {
+    new import_obsidian8.Setting(containerEl).setName("\u56DE\u9876/\u56DE\u5E95\u6309\u94AE\u663E\u793A\u9608\u503C").setDesc("\u6807\u7B7E\u3001\u7EE7\u627F\u5206\u7EC4\u3001\u4EA4\u96C6\u7EC4\u5C55\u5F00\u540E\u7684\u7B14\u8BB0\u6570\u8FBE\u5230\u8BE5\u503C\u65F6\u663E\u793A\u56DE\u9876\u4E0E\u56DE\u5E95\u6309\u94AE\uFF1B\u8F93\u5165 0 \u4E0D\u663E\u793A").addText((text) => {
       text.setValue(String(this.plugin.settings.scrollTopButtonThreshold)).setPlaceholder(String(DEFAULT_SCROLL_TOP_BUTTON_THRESHOLD)).onChange(async (value) => {
         await this.plugin.updateSettings({ scrollTopButtonThreshold: value });
       });
@@ -3927,6 +4190,8 @@ var PersistenceBehavior = class {
       DEFAULT_MOVE_NOTE_DOWN_HOTKEY
     );
     this.settings.tagSidebarPreferredFiles = Array.from(readPreferredFiles(this.settings.tagSidebarPreferredFiles));
+    this.settings.tagSidebarDefaultFolders = normalizeDefaultFolders(this.settings.tagSidebarDefaultFolders);
+    this.settings.tagSidebarExcludedFiles = Array.from(readPreferredFiles(this.settings.tagSidebarExcludedFiles));
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
@@ -3985,6 +4250,8 @@ var PersistenceBehavior = class {
       DEFAULT_MOVE_NOTE_DOWN_HOTKEY
     );
     this.settings.tagSidebarPreferredFiles = Array.from(readPreferredFiles(this.settings.tagSidebarPreferredFiles));
+    this.settings.tagSidebarDefaultFolders = normalizeDefaultFolders(this.settings.tagSidebarDefaultFolders);
+    this.settings.tagSidebarExcludedFiles = Array.from(readPreferredFiles(this.settings.tagSidebarExcludedFiles));
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
@@ -4126,6 +4393,10 @@ var PersistenceBehavior = class {
 
 // src/interactions.ts
 var import_obsidian10 = require("obsidian");
+var NOTE_TAG_LOCATE_SEARCH_STATE_QUERY = "\0note-tag-locate";
+function buildNoteCardSearchKey(left, right) {
+  return `${left}\0${right}`;
+}
 var CURRENT_NOTE_TAG_SEARCH_STATE_QUERY = "\0current-note-tags";
 var InteractionsBehavior = class {
   getOrderedFilesForTag(tagValue, files) {
@@ -4220,7 +4491,11 @@ var InteractionsBehavior = class {
       files,
       exactCount: browseData.exactCount,
       inheritedCount: browseData.inheritedCount,
-      hasInheritance: browseData.hasInheritance
+      hasInheritance: browseData.hasInheritance,
+      hasActiveInheritance: browseData.hasActiveInheritance,
+      intersectionSignature: browseData.intersectionSignature,
+      browseSignature: browseData.browseSignature,
+      browseData
     };
   }
   prependPinnedTagItem(items, query = "") {
@@ -4286,7 +4561,11 @@ var InteractionsBehavior = class {
       exactCount: browseData.exactCount,
       inheritedCount: browseData.inheritedCount,
       hasInheritance: browseData.hasInheritance,
-      sourcesByPath: browseData.sourcesByPath
+      hasActiveInheritance: browseData.hasActiveInheritance,
+      sourcesByPath: browseData.sourcesByPath,
+      intersectionSignature: browseData.intersectionSignature,
+      browseSignature: browseData.browseSignature,
+      browseData
     })).sort((a, b) => compareTagItemsByCount(
       { count: a.files.length, name: a.displayName },
       { count: b.files.length, name: b.displayName }
@@ -4296,6 +4575,79 @@ var InteractionsBehavior = class {
     const path = this.currentMainFilePath;
     const file = path && this.app.vault.getAbstractFileByPath(path);
     return file instanceof import_obsidian10.TFile && file.extension === "md" ? "\u5F53\u524D\u7B14\u8BB0\u6CA1\u6709\u6807\u7B7E\u3002" : "\u5F53\u524D\u6CA1\u6709\u6253\u5F00\u7B14\u8BB0\u3002";
+  }
+  /**
+   * `**笔记A`：按名字模糊匹配笔记，列出这些笔记所属的全部标签。
+   *
+   * 与 getCurrentNoteTagItems 只差「哪些笔记」—— 那边固定是当前笔记，这边是
+   * 模糊匹配的结果集，可能有多篇。空关键字返回空列表，否则会退化成列出全部标签。
+   */
+  getMatchedNoteFilesForLocate(noteQuery) {
+    const term = String(noteQuery || "").trim();
+    if (!term) return [];
+    return (this.app.vault.getMarkdownFiles() || []).filter(
+      (file) => file instanceof import_obsidian10.TFile && file.extension === "md" && fileMatchesNoteSearch(file, term, this.getNoteAliases(file).join(" "))
+    );
+  }
+  getNoteTagLocateItems(noteQuery) {
+    const matchedPaths = new Set(
+      this.getMatchedNoteFilesForLocate(noteQuery).map((file) => file.path)
+    );
+    if (matchedPaths.size === 0) return [];
+    return Array.from(this.getLogicalTagSet()).filter((tag) => !isNestedTag(tag)).map((tag) => ({ tag, browseData: this.getTagBrowseData(tag) })).filter(
+      ({ browseData }) => browseData.exactFiles.some((file) => matchedPaths.has(file.path))
+    ).map(({ tag, browseData }) => ({
+      tag,
+      displayName: getTagDisplayName(tag),
+      isVirtual: false,
+      files: browseData.files,
+      exactCount: browseData.exactCount,
+      inheritedCount: browseData.inheritedCount,
+      hasInheritance: browseData.hasInheritance,
+      hasActiveInheritance: browseData.hasActiveInheritance,
+      sourcesByPath: browseData.sourcesByPath,
+      intersectionSignature: browseData.intersectionSignature,
+      browseSignature: browseData.browseSignature,
+      browseData
+    })).sort((a, b) => compareTagItemsByCount(
+      { count: a.files.length, name: a.displayName },
+      { count: b.files.length, name: b.displayName }
+    ));
+  }
+  /** 每个「标签 × 命中笔记」组合一条记录，供 Enter 循环定位。 */
+  getNoteTagLocateMatches(items, noteQuery) {
+    const matchedPaths = new Set(
+      this.getMatchedNoteFilesForLocate(noteQuery).map((file) => file.path)
+    );
+    if (matchedPaths.size === 0) return [];
+    const matches = [];
+    for (const item of items) {
+      for (const file of item.files || []) {
+        if (!matchedPaths.has(file.path)) continue;
+        matches.push({ tag: item.tag, path: file.path, key: buildNoteCardSearchKey(item.tag, file.path) });
+      }
+    }
+    return matches;
+  }
+  getNoteTagLocateEmptyMessage(noteQuery) {
+    return this.getMatchedNoteFilesForLocate(noteQuery).length === 0 ? "\u6CA1\u6709\u5339\u914D\u7684\u7B14\u8BB0\u3002" : "\u8BE5\u7B14\u8BB0\u6CA1\u6709\u6807\u7B7E\u3002";
+  }
+  syncNoteTagLocateSearchState(state, items, noteQuery, expandedTags = this.expandedTags) {
+    const matches = this.getNoteTagLocateMatches(items, noteQuery);
+    if (matches.length === 0) {
+      this.clearNoteCardSearchState(state, expandedTags);
+      return null;
+    }
+    const query = buildNoteCardSearchKey(NOTE_TAG_LOCATE_SEARCH_STATE_QUERY, String(noteQuery || ""));
+    const queryChanged = state.query !== query;
+    let activeIndex = queryChanged ? 0 : matches.findIndex(
+      (match) => state.target && match.tag === state.target.tag && match.path === state.target.path
+    );
+    if (activeIndex < 0) activeIndex = 0;
+    state.query = query;
+    state.matches = matches;
+    state.activeIndex = activeIndex;
+    return this.activateNoteCardSearchTarget(state, matches[activeIndex], expandedTags);
   }
   getCurrentNoteTagMatches(items) {
     const path = this.currentMainFilePath;
@@ -4824,8 +5176,31 @@ var WorkspaceBehavior = class {
   getPreferredFileSet() {
     return readPreferredFiles(this.settings.tagSidebarPreferredFiles);
   }
+  /** 默认文件夹里手动切走的那些笔记；这是「只记录例外」的落点。 */
+  getExcludedFileSet() {
+    return readPreferredFiles(this.settings.tagSidebarExcludedFiles);
+  }
+  isInTagSidebarDefaultFolder(filePath) {
+    return isPathInDefaultFolders(filePath, this.settings.tagSidebarDefaultFolders);
+  }
+  /**
+   * 记录用户手动切换侧边栏的结果。
+   *
+   * 默认文件夹内外走两套存储：文件夹内只记录**例外**（切走的那几篇），
+   * 文件夹外沿用原来的白名单。若文件夹内也写白名单，data.json 会把整个
+   * 文件夹的笔记逐篇记一遍 —— 那正是这个功能要避免的。
+   */
   async setTagSidebarPreference(filePath, enabled) {
     if (!filePath) return;
+    if (this.isInTagSidebarDefaultFolder(filePath)) {
+      const excluded = this.getExcludedFileSet();
+      if (enabled === !excluded.has(filePath)) return;
+      if (enabled) excluded.delete(filePath);
+      else excluded.add(filePath);
+      this.settings.tagSidebarExcludedFiles = Array.from(excluded);
+      await this.saveSettings();
+      return;
+    }
     const preferred = this.getPreferredFileSet();
     if (enabled === preferred.has(filePath)) return;
     if (enabled) preferred.add(filePath);
@@ -4833,8 +5208,12 @@ var WorkspaceBehavior = class {
     this.settings.tagSidebarPreferredFiles = Array.from(preferred);
     await this.saveSettings();
   }
+  /** 三层判定：例外名单 → 默认文件夹 → 原有白名单。 */
   hasTagSidebarPreference(filePath) {
-    return !!filePath && this.getPreferredFileSet().has(filePath);
+    if (!filePath) return false;
+    if (this.getExcludedFileSet().has(filePath)) return false;
+    if (this.isInTagSidebarDefaultFolder(filePath)) return true;
+    return this.getPreferredFileSet().has(filePath);
   }
   applySidebarPreferenceForCurrentFile() {
     const requestId = ++this.sidebarSwitchRequestId;
@@ -4909,13 +5288,28 @@ var WorkspaceBehavior = class {
     if (outlineLeaf && outlineLeaf.parent) return outlineLeaf.parent;
     return null;
   }
+  /**
+   * 把某条路径在偏好名单里改名或移除。
+   *
+   * 白名单与例外名单两份记录形态相同、维护方式也相同，因此共用这一段；
+   * 各写一遍很容易出现「白名单跟着改了、例外名单还留着旧路径」。
+   * newPath 传 null 表示删除。返回是否发生过改动。
+   */
+  migratePreferenceListPath(settingKey, oldPath, newPath) {
+    const paths = readPreferredFiles(this.settings[settingKey]);
+    if (!paths.has(oldPath)) return false;
+    paths.delete(oldPath);
+    if (newPath) paths.add(newPath);
+    this.settings[settingKey] = Array.from(paths);
+    return true;
+  }
   handlePreferredFileRename(file, oldPath) {
     if (!oldPath || !file || !file.path) return;
-    const preferred = this.getPreferredFileSet();
-    if (!preferred.has(oldPath)) return;
-    preferred.delete(oldPath);
-    preferred.add(file.path);
-    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
+    const changed = [
+      this.migratePreferenceListPath("tagSidebarPreferredFiles", oldPath, file.path),
+      this.migratePreferenceListPath("tagSidebarExcludedFiles", oldPath, file.path)
+    ].some(Boolean);
+    if (!changed) return;
     if (this.currentMainFilePath === oldPath) {
       this.updateCurrentMainFilePath(file.path);
     }
@@ -4923,10 +5317,11 @@ var WorkspaceBehavior = class {
   }
   handlePreferredFileDelete(file) {
     if (!file || !file.path) return;
-    const preferred = this.getPreferredFileSet();
-    if (!preferred.has(file.path)) return;
-    preferred.delete(file.path);
-    this.settings.tagSidebarPreferredFiles = Array.from(preferred);
+    const changed = [
+      this.migratePreferenceListPath("tagSidebarPreferredFiles", file.path, null),
+      this.migratePreferenceListPath("tagSidebarExcludedFiles", file.path, null)
+    ].some(Boolean);
+    if (!changed) return;
     if (this.currentMainFilePath === file.path) {
       this.updateCurrentMainFilePath(null);
     }
@@ -5688,16 +6083,18 @@ function filterNoteCandidates(candidates, query, getAliases = () => []) {
   });
 }
 var PuffsTagRenameModal = class extends import_obsidian13.Modal {
-  constructor(app, plugin, tag) {
+  constructor(app, plugin, tag, options = {}) {
     super(app);
     this.plugin = plugin;
-    this.tag = normalizeTag(tag);
+    this.tag = normalizeTag(tag) || String(tag || "");
     this.mode = "rename";
     this.isSubmitting = false;
     this.isComposing = false;
     this.selectedPaths = /* @__PURE__ */ new Set();
     this.selectionQuery = "";
-    this.sourceTagValue = this.tag;
+    this.candidateFiles = options.candidateFiles || null;
+    this.scopeTag = normalizeTag(options.sourceTag) || this.tag;
+    this.sourceTagValue = this.scopeTag;
     this.targetTagValue = "";
     this.noteCandidates = [];
   }
@@ -5709,9 +6106,16 @@ var PuffsTagRenameModal = class extends import_obsidian13.Modal {
     this.renderMode("rename");
     this.renderNoteSelection();
   }
-  /** 候选池固定为右键标签的直属笔记，顺序沿用侧边栏的笔记排序。 */
+  /**
+   * 候选池固定为右键标签的直属笔记，顺序沿用侧边栏的笔记排序。
+   *
+   * 虚拟交集标签没有索引记录，候选池由调用方直接传入（顺序即交集卡片里的呈现顺序）。
+   */
   collectNoteCandidates() {
     var _a;
+    if (this.candidateFiles) {
+      return Array.from(new Set(this.candidateFiles)).map((file) => ({ path: file.path, file }));
+    }
     const files = Array.from(new Set(((_a = this.plugin.tagFileIndex) == null ? void 0 : _a.get(this.tag)) || []));
     return this.plugin.getOrderedFilesForTag(this.tag, files).map((file) => ({ path: file.path, file }));
   }
@@ -5726,7 +6130,7 @@ var PuffsTagRenameModal = class extends import_obsidian13.Modal {
     const fieldsEl = this.contentEl.createDiv({ cls: "puffs-tag-rename-fields" });
     this.sourceFieldEl = fieldsEl.createDiv({ cls: "puffs-relation-tag-search" });
     this.sourceInputEl = this.sourceFieldEl.createEl("input", { type: "text", cls: "puffs-tag-rename-input" });
-    this.sourceInputEl.value = getTagDisplayName(this.tag);
+    this.sourceInputEl.value = getTagDisplayName(this.scopeTag);
     let sourcePicker = null;
     sourcePicker = createTagCandidatePicker({
       hostEl: this.sourceFieldEl,
@@ -5928,9 +6332,9 @@ var PuffsTagRenameModal = class extends import_obsidian13.Modal {
     this.renderNoteSelection();
     try {
       if (this.mode === "add") {
-        await this.plugin.addTagToTaggedNotes(this.tag, this.targetTagValue, this.selectedPaths);
+        await this.plugin.addTagToTaggedNotes(this.scopeTag, this.targetTagValue, this.selectedPaths);
       } else if (this.mode === "delete") {
-        await this.plugin.deleteTagFromTaggedNotes(this.tag, this.targetTagValue, this.selectedPaths);
+        await this.plugin.deleteTagFromTaggedNotes(this.scopeTag, this.targetTagValue, this.selectedPaths);
       } else {
         await this.plugin.renameTagInSelectedNotes(this.sourceTagValue, this.targetTagValue, this.selectedPaths);
       }
@@ -5967,17 +6371,24 @@ var TagPaneBehavior = class {
     }
   }
   getListModeItems(view, queryValue = this.resolvePinnedSearchQuery(this.getTagSearchValue(view)), includePinned = true) {
-    const query = getTagFilterQuery(queryValue);
-    const intersectionTerms = splitIntersectionSearchTerms(query);
+    const rawQuery = getTagFilterQuery(queryValue);
+    const intersectionTerms = splitIntersectionSearchTerms(rawQuery);
     if (intersectionTerms) {
       const intersectionItems = this.getIntersectionSearchItems(intersectionTerms);
       return includePinned ? this.prependPinnedTagItem(intersectionItems, queryValue) : intersectionItems;
     }
+    const similarSearch = parseSimilarTagSearch(rawQuery);
+    const query = similarSearch.matched ? similarSearch.baseQuery : rawQuery;
+    const similarTagSet = similarSearch.matched ? this.collectSimilarSearchTags(query) : null;
     const unionTerms = splitUnionSearchTerms(query);
     const items = [];
     const processedTags = /* @__PURE__ */ new Set();
     const browseDataByTag = /* @__PURE__ */ new Map();
-    const tagMatchesQuery = (tag) => unionTerms ? tagMatchesAnySearchTerm(tag, unionTerms) : tagMatchesSearchText(tag, query);
+    const tagMatchesQuery = (tag) => {
+      const normalizedTag = normalizeTag(tag);
+      if (normalizedTag && (similarTagSet == null ? void 0 : similarTagSet.has(normalizedTag))) return true;
+      return unionTerms ? tagMatchesAnySearchTerm(tag, unionTerms) : tagMatchesSearchText(tag, query);
+    };
     const fixedMatchesByRoot = /* @__PURE__ */ new Map();
     if (query.trim()) {
       for (const child of Object.keys(this.getTagInheritanceSettings().fixedParentByChild || {})) {
@@ -6015,6 +6426,7 @@ var TagPaneBehavior = class {
         hasInheritance: browseData.hasInheritance,
         hasActiveInheritance: browseData.hasActiveInheritance,
         intersectionSignature: browseData.intersectionSignature,
+        browseSignature: browseData.browseSignature,
         sourcesByPath: browseData.sourcesByPath,
         inheritanceTree: browseData.inheritanceTree,
         fixedSearchTags,
@@ -6034,6 +6446,20 @@ var TagPaneBehavior = class {
     ));
     return includePinned ? this.prependPinnedTagItem(items, queryValue) : items;
   }
+  /**
+   * `比赛，` 要额外展示的标签集合。
+   *
+   * 先按基础条件找出命中的标签，再把每个命中标签所在的相似组整组并进来。
+   * 于是「比赛」命中后，与它同组的「秘境」「试炼」即便自己不匹配搜索词也会出现。
+   */
+  collectSimilarSearchTags(baseQuery) {
+    const result = /* @__PURE__ */ new Set();
+    for (const tag of this.getLogicalTagSet()) {
+      if (isNestedTag(tag) || !tagMatchesSearchText(tag, baseQuery)) continue;
+      for (const similarTag of this.getSimilarTags(tag)) result.add(similarTag);
+    }
+    return result;
+  }
   getIntersectionSearchItems(terms) {
     const tags = Array.from(this.tagFileIndex.keys()).filter((tag) => !isNestedTag(tag) && (this.tagFileIndex.get(tag) || []).length > 0).sort((a, b) => getTagDisplayName(a).localeCompare(getTagDisplayName(b), "zh-Hans-CN"));
     const items = [];
@@ -6050,7 +6476,10 @@ var TagPaneBehavior = class {
         displayName: selectedTags.map(getTagDisplayName).join(" & "),
         isVirtual: true,
         sourceTags: selectedTags,
-        files
+        files,
+        // 虚拟标签没有 browseData，指纹直接取交集结果本身，
+        // 使「成员换了人但数量不变」同样触发重建
+        browseSignature: `${combinationId}:${files.map((file) => file.path).join("|")}`
       });
     };
     if (terms.length === 1) {
@@ -6125,20 +6554,21 @@ var TagPaneBehavior = class {
     countEl.textContent = item.inheritedCount > 0 ? `${item.exactCount}+${item.inheritedCount}` : String(files.length);
     let scrollBottomButtonEl = null;
     let pinButtonEl = null;
-    if (isExpanded && files.length > 0) {
+    if (isExpanded && shouldShowScrollButtons(files.length, this.settings.scrollTopButtonThreshold)) {
       scrollBottomButtonEl = document.createElement("button");
       scrollBottomButtonEl.type = "button";
       scrollBottomButtonEl.className = "clickable-icon puffs-tag-scroll-bottom-button";
       scrollBottomButtonEl.dataset.puffsTag = tag;
+      scrollBottomButtonEl.dataset.puffsScrollAnchor = "true";
       (0, import_obsidian14.setIcon)(scrollBottomButtonEl, "arrow-down-to-line");
-      if (!isVirtual) {
-        pinButtonEl = document.createElement("button");
-        pinButtonEl.type = "button";
-        pinButtonEl.className = "clickable-icon puffs-tag-pin-button";
-        pinButtonEl.dataset.puffsTag = tag;
-        pinButtonEl.classList.toggle("is-active", this.settings.pinnedTag === tag);
-        (0, import_obsidian14.setIcon)(pinButtonEl, "pin");
-      }
+    }
+    if (isExpanded && files.length > 0 && !isVirtual) {
+      pinButtonEl = document.createElement("button");
+      pinButtonEl.type = "button";
+      pinButtonEl.className = "clickable-icon puffs-tag-pin-button";
+      pinButtonEl.dataset.puffsTag = tag;
+      pinButtonEl.classList.toggle("is-active", this.settings.pinnedTag === tag);
+      (0, import_obsidian14.setIcon)(pinButtonEl, "pin");
     }
     innerEl.appendChild(textEl);
     flairOuterEl.appendChild(countEl);
@@ -6174,7 +6604,7 @@ var TagPaneBehavior = class {
     tagEl.setAttribute("aria-expanded", String(isExpanded));
     (_a = tagEl.querySelector(".puffs-tag-list-toggle")) == null ? void 0 : _a.classList.toggle("is-collapsed", !isExpanded);
     const flairOuterEl = tagEl.querySelector(".tree-item-flair-outer");
-    const syncActionButton = (selector, icon, enabled) => {
+    const syncActionButton = (selector, icon, enabled, isScrollAnchor = false) => {
       let buttonEl = tagEl.querySelector(selector);
       if (!enabled) {
         buttonEl == null ? void 0 : buttonEl.remove();
@@ -6185,12 +6615,18 @@ var TagPaneBehavior = class {
         buttonEl.type = "button";
         buttonEl.className = `clickable-icon ${selector.slice(1)}`;
         buttonEl.dataset.puffsTag = tag;
+        if (isScrollAnchor) buttonEl.dataset.puffsScrollAnchor = "true";
         (0, import_obsidian14.setIcon)(buttonEl, icon);
         tagEl.insertBefore(buttonEl, flairOuterEl);
       }
     };
     const hasNotes = isExpanded && files.length > 0;
-    syncActionButton(".puffs-tag-scroll-bottom-button", "arrow-down-to-line", hasNotes);
+    syncActionButton(
+      ".puffs-tag-scroll-bottom-button",
+      "arrow-down-to-line",
+      isExpanded && shouldShowScrollButtons(files.length, this.settings.scrollTopButtonThreshold),
+      true
+    );
     syncActionButton(".puffs-tag-pin-button", "pin", hasNotes && !isVirtual);
     (_b = tagEl.querySelector(".puffs-tag-pin-button")) == null ? void 0 : _b.classList.toggle("is-active", this.settings.pinnedTag === tag);
     if (isExpanded) {
@@ -6272,6 +6708,19 @@ var TagPaneBehavior = class {
   }
   openRenameTagModal(tag) {
     new PuffsTagRenameModal(this.app, this, tag).open();
+  }
+  /**
+   * 虚拟交集标签的批量操作弹窗。
+   *
+   * 复用同一个弹窗，只是候选池由交集结果直接给出（虚拟标签不在 tagFileIndex 里），
+   * 增删的作用域标签取交集的第一个成员 —— 勾选路径已经把范围收窄到这批笔记。
+   */
+  openVirtualTagRenameModal(item) {
+    if (!item || !(item.files || []).length || !(item.sourceTags || []).length) return;
+    new PuffsTagRenameModal(this.app, this, item.tag, {
+      candidateFiles: item.files,
+      sourceTag: item.sourceTags[0]
+    }).open();
   }
 };
 
@@ -6441,8 +6890,74 @@ function cloneParentChildSettings(source) {
   ]));
 }
 
+// src/core/similar-tags.ts
+function compareTags(left, right) {
+  return getTagDisplayName(left).localeCompare(getTagDisplayName(right), "zh-Hans-CN");
+}
+function resolveSimilarTagGroup(groups, tagValue) {
+  const tag = normalizeTag(tagValue);
+  if (!tag) return [];
+  const visited = /* @__PURE__ */ new Set([tag]);
+  const queue = [tag];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const neighbor of groups[current] || []) {
+      if (visited.has(neighbor)) continue;
+      visited.add(neighbor);
+      queue.push(neighbor);
+    }
+  }
+  return Array.from(visited).sort(compareTags);
+}
+function linkSimilarTags(groups, leftValue, rightValue) {
+  const left = normalizeTag(leftValue);
+  const right = normalizeTag(rightValue);
+  if (!left || !right || left === right) return false;
+  if (isNestedTag(left) || isNestedTag(right)) return false;
+  let changed = false;
+  const connect = (from, to) => {
+    const neighbors = groups[from] || [];
+    if (neighbors.includes(to)) return;
+    groups[from] = neighbors.concat(to).sort(compareTags);
+    changed = true;
+  };
+  connect(left, right);
+  connect(right, left);
+  return changed;
+}
+function unlinkSimilarTags(groups, leftValue, rightValue) {
+  const left = normalizeTag(leftValue);
+  const right = normalizeTag(rightValue);
+  if (!left || !right) return false;
+  let changed = false;
+  const disconnect = (from, to) => {
+    const neighbors = groups[from];
+    if (!Array.isArray(neighbors) || !neighbors.includes(to)) return;
+    const remaining = neighbors.filter((tag) => tag !== to);
+    if (remaining.length > 0) groups[from] = remaining;
+    else delete groups[from];
+    changed = true;
+  };
+  disconnect(left, right);
+  disconnect(right, left);
+  return changed;
+}
+function normalizeSimilarTagSettings(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result = {};
+  for (const [rawTag, rawNeighbors] of Object.entries(value)) {
+    const tag = normalizeTag(rawTag);
+    if (!tag || isNestedTag(tag) || !Array.isArray(rawNeighbors)) continue;
+    for (const rawNeighbor of rawNeighbors) {
+      linkSimilarTags(result, tag, rawNeighbor);
+    }
+  }
+  return result;
+}
+
 // src/relations.ts
-var RELATIONS_VERSION = 7;
+var RELATIONS_VERSION = 8;
+var SELECTED_INHERITANCE_RETIRED_VERSION = 7;
 var createEmptyRelations = () => ({
   version: RELATIONS_VERSION,
   tagInheritance: {
@@ -6454,6 +6969,9 @@ var createEmptyRelations = () => ({
   noteHierarchy: {
     childrenByParentPath: {},
     displayNamesByParentPath: {}
+  },
+  similarTags: {
+    groupsByTag: {}
   }
 });
 var RelationsBehavior = class {
@@ -6497,7 +7015,7 @@ var RelationsBehavior = class {
       }
     };
     copyParentChildPaths("excludedPathsByParentChild", "excludedPathsByParentChild");
-    if (result.version < RELATIONS_VERSION) {
+    if (result.version < SELECTED_INHERITANCE_RETIRED_VERSION) {
       result.tagInheritance.includedPathsByParentChild = {};
       copyParentChildPaths("includedPathsByParentChild", "includedPathsByParentChild");
     }
@@ -6508,7 +7026,7 @@ var RelationsBehavior = class {
         if (!parent || !rawChildren2 || typeof rawChildren2 !== "object" || Array.isArray(rawChildren2)) continue;
         for (const [rawChild, rawMode] of Object.entries(rawChildren2)) {
           const child = normalizeTag(rawChild);
-          const keep = rawMode === "intersection" || rawMode === "selected" && result.version < RELATIONS_VERSION;
+          const keep = rawMode === "intersection" || rawMode === "selected" && result.version < SELECTED_INHERITANCE_RETIRED_VERSION;
           if (!keep || !(result.tagInheritance.childrenByParent[parent] || []).includes(child)) continue;
           if (!result.tagInheritance.modeByParentChild[parent]) result.tagInheritance.modeByParentChild[parent] = {};
           result.tagInheritance.modeByParentChild[parent][child] = rawMode;
@@ -6548,6 +7066,8 @@ var RelationsBehavior = class {
         }
       }
     }
+    const similar = source.similarTags && typeof source.similarTags === "object" ? source.similarTags : {};
+    result.similarTags.groupsByTag = normalizeSimilarTagSettings(similar.groupsByTag);
     this.settings.relations = result;
     this.reconcileIntersectionPairs();
     this.reconcileRelationCycles();
@@ -7051,6 +7571,53 @@ var RelationsBehavior = class {
   }
   getInheritanceChildren(tagValue) {
     return getInheritanceChildren(this.getTagInheritanceSettings(), tagValue);
+  }
+  /** 相似标签的邻接表。缺失时补齐，让旧数据无需迁移即可使用。 */
+  getSimilarTagSettings() {
+    if (!this.settings.relations) this.normalizeRelationSettings();
+    const relations = this.settings.relations;
+    if (!relations.similarTags || typeof relations.similarTags !== "object") {
+      relations.similarTags = { groupsByTag: {} };
+    }
+    if (!relations.similarTags.groupsByTag || typeof relations.similarTags.groupsByTag !== "object") {
+      relations.similarTags.groupsByTag = {};
+    }
+    return relations.similarTags;
+  }
+  /** tag 所在的完整相似组（含自身）。没有任何关系时只有它自己。 */
+  getSimilarTags(tagValue) {
+    return resolveSimilarTagGroup(this.getSimilarTagSettings().groupsByTag, tagValue);
+  }
+  /** 相似组里除自己以外的成员，供弹窗列表使用。 */
+  getSimilarTagPartners(tagValue) {
+    const tag = normalizeTag(tagValue);
+    return this.getSimilarTags(tag).filter((similarTag) => similarTag !== tag);
+  }
+  async addSimilarTag(tagValue, relatedValue) {
+    if (!linkSimilarTags(this.getSimilarTagSettings().groupsByTag, tagValue, relatedValue)) return false;
+    await this.saveSettings();
+    this.refreshAllTagViews();
+    return true;
+  }
+  async removeSimilarTag(tagValue, relatedValue) {
+    if (!unlinkSimilarTags(this.getSimilarTagSettings().groupsByTag, tagValue, relatedValue)) return false;
+    await this.saveSettings();
+    this.refreshAllTagViews();
+    return true;
+  }
+  /** 标签改名时把相似关系一并迁移，避免留下指向旧名的死边。 */
+  migrateSimilarTags(oldTagValue, newTagValue) {
+    const oldTag = normalizeTag(oldTagValue);
+    const newTag = normalizeTag(newTagValue);
+    if (!oldTag || !newTag || oldTag === newTag) return false;
+    const groups = this.getSimilarTagSettings().groupsByTag;
+    const partners = (groups[oldTag] || []).slice();
+    if (partners.length === 0) return false;
+    for (const partner of partners) {
+      unlinkSimilarTags(groups, oldTag, partner);
+      linkSimilarTags(groups, newTag, partner);
+    }
+    return true;
   }
   /**
    * 关系数据的版本化迁移。
@@ -7857,6 +8424,10 @@ var RelationsBehavior = class {
       // 不进签名的话，「某篇笔记新加了对方标签」时旧 DOM 会被原样复用、交集组显示陈旧内容。
       // 必须扫全树而不只是根标签 —— 深层节点（如 #爱情 > 升温）的交集组同样会变
       intersectionSignature: collectIntersectionSignature(inheritanceTree),
+      // 整棵展开树的内容指纹。标签行签名靠它察觉「笔记数没变但成员换了人」以及
+      // 「变化发生在子标签分组内部」两类情况 —— 这正是移除标签后不实时刷新的根因。
+      // 没有继承树时退回本标签自己的可见路径，同样能覆盖成员替换。
+      browseSignature: inheritanceTree ? collectBrowseSignature(inheritanceTree) : `${tag}:${exactPaths.join("|")}!${inheritedPaths.join("|")}`,
       fixedTags,
       fixedPaths
     };
@@ -7923,6 +8494,7 @@ var RelationsBehavior = class {
     inheritance.fixedParentByChild = migratedFixedParents;
     this.reconcileIntersectionPairs();
     this.reconcileRelationCycles();
+    this.migrateSimilarTags(oldTag, newTag);
     this.migrateInlineTagBranchState(oldTag, newTag);
     if (participatesInInheritance) {
       this.relationStructureVersion = (this.relationStructureVersion || 0) + 1;

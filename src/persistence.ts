@@ -17,7 +17,7 @@ import {
   normalizeTag
 } from "./models";
 import { normalizeSidebarToolbarButtons } from "./sidebar-toolbar";
-import { migrateSchema, readPreferredFiles } from "./data/schema";
+import { migrateSchema, normalizeDefaultFolders, readPreferredFiles } from "./data/schema";
 
 export class PersistenceBehavior {
   [key: string]: any;
@@ -43,6 +43,8 @@ export class PersistenceBehavior {
       DEFAULT_MOVE_NOTE_DOWN_HOTKEY
     );
     this.settings.tagSidebarPreferredFiles = Array.from(readPreferredFiles(this.settings.tagSidebarPreferredFiles));
+    this.settings.tagSidebarDefaultFolders = normalizeDefaultFolders(this.settings.tagSidebarDefaultFolders);
+    this.settings.tagSidebarExcludedFiles = Array.from(readPreferredFiles(this.settings.tagSidebarExcludedFiles));
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(
@@ -104,6 +106,8 @@ export class PersistenceBehavior {
       DEFAULT_MOVE_NOTE_DOWN_HOTKEY
     );
     this.settings.tagSidebarPreferredFiles = Array.from(readPreferredFiles(this.settings.tagSidebarPreferredFiles));
+    this.settings.tagSidebarDefaultFolders = normalizeDefaultFolders(this.settings.tagSidebarDefaultFolders);
+    this.settings.tagSidebarExcludedFiles = Array.from(readPreferredFiles(this.settings.tagSidebarExcludedFiles));
     this.settings.newNotePosition = normalizeNewNotePosition(this.settings.newNotePosition);
     this.settings.noteOrderByTag = this.normalizeNoteOrderByTag(this.settings.noteOrderByTag);
     this.settings.noteDisplayNameByTag = this.normalizeNoteDisplayNameByTag(

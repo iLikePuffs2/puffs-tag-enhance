@@ -12,6 +12,8 @@ import {
   getTagFilterQuery,
   parseCurrentNoteTagSearch,
   parseNoteCardSearch,
+  parseNoteTagLocateSearch,
+  parseSimilarTagSearch,
   splitIntersectionSearchTerms,
   splitUnionSearchTerms,
 } from "./syntax";
@@ -19,10 +21,12 @@ import {
 export type SearchModeId =
   | 'hierarchy'          // = / == 父子层级
   | 'current-note-tags'  // ：： / :: 当前笔记所属标签
+  | 'note-tag-locate'    // **笔记A 指定笔记所属标签
   | 'note-card'          // 标签*笔记名，两侧都有
   | 'tag-filter'         // 标签*，只有标签侧（已输入 * 的中间态）
   | 'intersection'       // &
   | 'union'              // |
+  | 'similar-tags'       // 尾随全角逗号，连同相似标签一起搜
   | 'plain';             // 普通模糊搜索
 
 /**
@@ -49,6 +53,14 @@ const SEARCH_MODE_SPECS: SearchModeSpec[] = [
     match: (query) => parseCurrentNoteTagSearch(query).matched,
   },
   {
+    // 必须用原始查询并排在 note-card 之前：用户要求本语法不受固定标签影响，
+    // 且若先经过置顶解析，`**笔记A` 会被改写成 `读书**笔记A`（含两个 *），
+    // note-card 的 isValid 不成立、最终落到 plain，定位结果就看不见了
+    id: 'note-tag-locate',
+    usesRawQuery: true,
+    match: (query) => parseNoteTagLocateSearch(query).matched,
+  },
+  {
     id: 'note-card',
     usesRawQuery: false,
     match: (query) => parseNoteCardSearch(query)?.isValid === true,
@@ -67,6 +79,13 @@ const SEARCH_MODE_SPECS: SearchModeSpec[] = [
     id: 'union',
     usesRawQuery: false,
     match: (query) => splitUnionSearchTerms(getTagFilterQuery(query)) !== null,
+  },
+  {
+    // 排在交集与并集之后：`比赛&秘境，` 这类混合输入优先按操作符处理，
+    // 否则两种语法会互相吞掉
+    id: 'similar-tags',
+    usesRawQuery: false,
+    match: (query) => parseSimilarTagSearch(getTagFilterQuery(query)).matched,
   },
 ];
 
@@ -117,18 +136,29 @@ export function resolveSearch(
 
 function buildResult(id: SearchModeId, rawQuery: string, effectiveQuery: string): ResolvedSearch {
   const noteCard = parseNoteCardSearch(effectiveQuery);
-  const tagQuery = id === 'hierarchy' || id === 'current-note-tags'
-    ? effectiveQuery
-    : getTagFilterQuery(effectiveQuery);
-  const unionTerms = splitUnionSearchTerms(tagQuery);
-  const intersectionTerms = splitIntersectionSearchTerms(tagQuery);
+  // 这三种模式整条查询就是它们自己的条件，不该被当作标签筛选串再切一刀
+  const usesWholeQueryAsCondition =
+    id === 'hierarchy' || id === 'current-note-tags' || id === 'note-tag-locate';
+  const rawTagQuery = usesWholeQueryAsCondition ? effectiveQuery : getTagFilterQuery(effectiveQuery);
+  // 相似标签模式下把末尾的全角逗号摘掉，下游按普通标签条件筛选后再展开相似组
+  const tagQuery = id === 'similar-tags'
+    ? parseSimilarTagSearch(rawTagQuery).baseQuery
+    : rawTagQuery;
+  const unionTerms = usesWholeQueryAsCondition ? null : splitUnionSearchTerms(tagQuery);
+  const intersectionTerms = usesWholeQueryAsCondition ? null : splitIntersectionSearchTerms(tagQuery);
+
+  const noteQuery = id === 'note-card'
+    ? (noteCard?.noteQuery ?? '')
+    : id === 'note-tag-locate'
+      ? parseNoteTagLocateSearch(effectiveQuery).noteQuery
+      : '';
 
   return {
     id,
     rawQuery,
     effectiveQuery,
     tagQuery,
-    noteQuery: id === 'note-card' ? (noteCard?.noteQuery ?? '') : '',
+    noteQuery,
     unionTerms,
     intersectionTerms,
     isMultiTag: id === 'union' || id === 'intersection',
@@ -137,7 +167,7 @@ function buildResult(id: SearchModeId, rawQuery: string, effectiveQuery: string)
 
 /** 该模式下是否需要清空笔记卡片定位状态（层级与普通搜索不参与卡片定位循环）。 */
 export function clearsNoteCardSearchState(id: SearchModeId): boolean {
-  return id !== 'note-card' && id !== 'current-note-tags';
+  return id !== 'note-card' && id !== 'current-note-tags' && id !== 'note-tag-locate';
 }
 
 /** 该模式下标签列表是否由插件自绘（而非交回原生标签面板渲染）。 */

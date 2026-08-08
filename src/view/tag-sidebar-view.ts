@@ -426,6 +426,11 @@ class PuffsTagSidebarView extends ItemView {
       const matching = plugin.getCurrentNoteTagItems();
       return { matching, display: matching };
     }
+    // `**笔记A` 与 `：：` 一样不套置顶标签 —— 用户明确要求本语法不受固定标签影响
+    if (resolved.id === 'note-tag-locate') {
+      const matching = plugin.getNoteTagLocateItems(resolved.noteQuery);
+      return { matching, display: matching };
+    }
 
     const matching = plugin.getListModeItems(this, resolved.effectiveQuery, false);
     return { matching, display: plugin.prependPinnedTagItem(matching, resolved.rawQuery) };
@@ -437,6 +442,11 @@ class PuffsTagSidebarView extends ItemView {
     if (resolved.id === 'current-note-tags') {
       this.clearAutoExpandedTag();
       plugin.syncCurrentNoteTagSearchState(this.noteCardSearchState, items.matching);
+      return;
+    }
+    if (resolved.id === 'note-tag-locate') {
+      this.clearAutoExpandedTag();
+      plugin.syncNoteTagLocateSearchState(this.noteCardSearchState, items.matching, resolved.noteQuery);
       return;
     }
     if (resolved.id === 'note-card') {
@@ -484,6 +494,9 @@ class PuffsTagSidebarView extends ItemView {
 
   emptyMessageFor(resolved: any) {
     if (resolved.id === 'current-note-tags') return this.plugin.getCurrentNoteTagEmptyMessage();
+    if (resolved.id === 'note-tag-locate') {
+      return this.plugin.getNoteTagLocateEmptyMessage(resolved.noteQuery);
+    }
     return this.searchQuery.trim() ? '没有匹配的标签。' : '暂无可展示的标签。';
   }
 
@@ -555,12 +568,9 @@ class PuffsTagSidebarView extends ItemView {
   toggleAllTags() {
     const plugin = this.plugin;
     const resolved = resolveSearch(this.searchQuery, (query) => plugin.resolvePinnedSearchQuery(query));
-    const matching = resolved.id === 'current-note-tags'
-      ? plugin.getCurrentNoteTagItems()
-      : plugin.getListModeItems(this, resolved.effectiveQuery, false);
-    const display = resolved.id === 'current-note-tags'
-      ? matching
-      : plugin.prependPinnedTagItem(matching, resolved.rawQuery);
+    // 复用 collectItems，避免这里再抄一遍各模式的分支 —— 漏一个模式就会出现
+    // 「列表按新语法渲染、顶栏的全部展开却按旧口径取标签」
+    const { matching, display } = this.collectItems(resolved);
     if (display.length === 0) return;
 
     // 唯一命中标签自动展开时，顶栏按钮改为递归控制它内部的继承分组
@@ -692,17 +702,18 @@ class PuffsTagSidebarView extends ItemView {
       return;
     }
 
+    // 传入按钮本身，让滚动就近在该按钮所属的子树内定位（见 resolveTagScrollScope）
     const scrollBottomEl = target.closest('.puffs-tag-scroll-bottom-button');
     if (scrollBottomEl) {
       stop();
-      plugin.scheduleLastNoteCardScroll(this.listEl, scrollBottomEl.dataset.puffsTag);
+      plugin.scheduleLastNoteCardScroll(this.listEl, scrollBottomEl.dataset.puffsTag, scrollBottomEl);
       return;
     }
 
     const scrollTopEl = target.closest('.puffs-tag-scroll-top-button');
     if (scrollTopEl) {
       stop();
-      plugin.scheduleTagTopScroll(this.listEl, scrollTopEl.dataset.puffsTag);
+      plugin.scheduleTagTopScroll(this.listEl, scrollTopEl.dataset.puffsTag, scrollTopEl);
       return;
     }
 
@@ -749,14 +760,32 @@ class PuffsTagSidebarView extends ItemView {
     }
 
     const tagEl = target.closest('.tag-pane-tag');
-    if (!tagEl || tagEl.dataset.puffsVirtualTag === 'true') return;
+    // 父子层级页那行也带 puffsVirtualTag，但它不是标签、没有可操作的对象
+    if (!tagEl || tagEl.dataset.puffsHierarchyGroup === 'true') return;
 
-    const tag = this.plugin.findTagForElement(this, tagEl);
+    // 虚拟交集标签要把 item 一并传下去：它不在 tagFileIndex 里，
+    // 候选笔记池只能从当前这轮渲染的 item.files 拿
+    const virtualTag = tagEl.dataset.puffsVirtualTag === 'true'
+      ? tagEl.dataset.puffsTag
+      : null;
+    const tag = virtualTag || this.plugin.findTagForElement(this, tagEl);
     if (!tag) return;
+
+    const item = virtualTag ? this.findDisplayItemByTag(virtualTag) : null;
+    if (virtualTag && !item) return;
+
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    this.plugin.showTagContextMenu(event, tag);
+    this.plugin.showTagContextMenu(event, tag, item);
+  }
+
+  /** 取当前这轮渲染里某个标签对应的 item（虚拟标签的笔记列表只存在于此）。 */
+  findDisplayItemByTag(tag: any) {
+    const resolved = resolveSearch(this.searchQuery, (query) =>
+      this.plugin.resolvePinnedSearchQuery(query)
+    );
+    return this.collectItems(resolved).display.find((item: any) => item.tag === tag) || null;
   }
 }
 

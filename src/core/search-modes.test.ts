@@ -125,14 +125,85 @@ describe('模式派生的行为开关', () => {
   it('只有笔记定位与当前笔记模式参与卡片定位循环', () => {
     expect(clearsNoteCardSearchState('note-card')).toBe(false);
     expect(clearsNoteCardSearchState('current-note-tags')).toBe(false);
+    expect(clearsNoteCardSearchState('note-tag-locate')).toBe(false);
     expect(clearsNoteCardSearchState('plain')).toBe(true);
     expect(clearsNoteCardSearchState('hierarchy')).toBe(true);
   });
 
   it('普通搜索之外的模式都由插件自绘标签列表', () => {
     expect(rendersOwnTagList('plain')).toBe(false);
-    for (const id of ['hierarchy', 'current-note-tags', 'note-card', 'tag-filter', 'intersection', 'union'] as const) {
+    for (const id of [
+      'hierarchy', 'current-note-tags', 'note-tag-locate',
+      'note-card', 'tag-filter', 'intersection', 'union',
+    ] as const) {
       expect(rendersOwnTagList(id)).toBe(true);
     }
+  });
+});
+
+// `**笔记A` 定位指定笔记所处的全部标签。它与 `：：` 同族，
+// 但用户明确要求「不受固定标签的影响」，因此必须走 usesRawQuery 那一列。
+describe('** 指定笔记定位模式', () => {
+  const resolvePinned = (query: string) =>
+    ['*', '&', '|'].includes(query.charAt(0)) ? `读书${query}` : query;
+
+  it('识别为 note-tag-locate 并取出笔记名', () => {
+    const resolved = resolveSearch('**笔记A');
+    expect(resolved.id).toBe('note-tag-locate');
+    expect(resolved.noteQuery).toBe('笔记A');
+  });
+
+  it('不经过置顶解析 —— 置顶标签不得改写它的条件', () => {
+    const resolved = resolveSearch('**笔记A', resolvePinned);
+    expect(resolved.id).toBe('note-tag-locate');
+    expect(resolved.effectiveQuery).toBe('**笔记A');
+    expect(resolved.noteQuery).toBe('笔记A');
+  });
+
+  it('优先级高于 note-card —— 有置顶标签时 `**笔记A` 不能被改写成 `读书**笔记A`', () => {
+    // 若排在 note-card 之后并经过置顶解析，`读书**笔记A` 会含两个 *，
+    // isValid 不成立而落到 plain，用户就看不到定位结果
+    expect(resolveSearch('**笔记A', resolvePinned).id).not.toBe('note-card');
+    expect(resolveSearch('**笔记A', resolvePinned).id).not.toBe('plain');
+  });
+
+  it('单个 * 仍归 note-card / tag-filter，未被新语法吃掉', () => {
+    expect(resolveSearch('读书*笔记').id).toBe('note-card');
+    expect(resolveSearch('读书*').id).toBe('tag-filter');
+    expect(resolveSearch('*笔记', resolvePinned).id).toBe('note-card');
+  });
+
+  it('只有 ** 时不成立，退回普通搜索', () => {
+    expect(resolveSearch('**').id).toBe('plain');
+  });
+
+  it('层级语法优先级仍高于它', () => {
+    expect(resolveSearch('=父笔记').id).toBe('hierarchy');
+  });
+});
+
+describe('相似标签模式', () => {
+  it('尾随全角逗号识别为 similar-tags 并取出基础条件', () => {
+    const resolved = resolveSearch('比赛，');
+    expect(resolved.id).toBe('similar-tags');
+    expect(resolved.tagQuery).toBe('比赛');
+  });
+
+  it('交集与并集优先级更高 —— 混合输入先按操作符处理', () => {
+    expect(resolveSearch('比赛&秘境，').id).toBe('intersection');
+    expect(resolveSearch('比赛|秘境，').id).toBe('union');
+  });
+
+  it('笔记定位优先级也更高', () => {
+    expect(resolveSearch('比赛*笔记，').id).toBe('note-card');
+  });
+
+  it('半角逗号仍是普通搜索', () => {
+    expect(resolveSearch('比赛,').id).toBe('plain');
+  });
+
+  it('由插件自绘标签列表，且不参与卡片定位循环', () => {
+    expect(rendersOwnTagList('similar-tags')).toBe(true);
+    expect(clearsNoteCardSearchState('similar-tags')).toBe(true);
   });
 });

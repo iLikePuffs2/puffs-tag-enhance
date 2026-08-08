@@ -160,6 +160,11 @@ export function tagRowSignature(
     // 交集组的内容取决于对方标签的笔记集合，而那不改变本行的 files 与计数。
     // 少了这一项，「某篇笔记新加了对方标签」时旧 DOM 会被复用、交集组显示陈旧内容。
     String(item.intersectionSignature ?? ''),
+    // 整棵展开树的内容指纹（由 computeTagBrowseData 预先算好并随 browseData 缓存）。
+    // 它覆盖两类 files.length 察觉不到的变化：笔记数不变但成员换了人；
+    // 变化发生在子标签分组内部而父标签计数没动。移除笔记标签后不实时刷新即源于此。
+    // 因为是预算好的短串，折叠态也带上它不会重新付出拼接代价。
+    String(item.browseSignature ?? ''),
     ((item.fixedSearchTags as string[] | undefined) || []).join(','),
     context.pinned ? '1' : '0',
     context.expanded ? '1' : '0',

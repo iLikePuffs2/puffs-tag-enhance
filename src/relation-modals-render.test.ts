@@ -6,7 +6,7 @@
 // 涉及真实 DOM 结构（行名、按钮出现条件、选中态）的用例放这里。
 
 import { describe, expect, it, vi } from 'vitest';
-import { ManageParentTagModal, TagInheritanceModal } from './relation-modals';
+import { ManageParentTagModal, SimilarTagModal, TagInheritanceModal } from './relation-modals';
 import { getRelativeChildDisplayName } from './core/inheritance';
 
 function createRenderModal(overrides: Record<string, unknown> = {}) {
@@ -277,5 +277,83 @@ describe('继承笔记勾选面板', () => {
     modal.renderInheritanceSelection();
 
     expect(modal.selectionSectionEl.classList.contains('is-hidden')).toBe(true);
+  });
+});
+
+// 相似标签弹窗复用同一套骨架，但相似关系是对称无向的：
+// 没有继承笔记、没有继承/交集模式、没有固定子标签，也不需要手工排序。
+describe('相似标签弹窗的差异化', () => {
+  function createSimilarModal(overrides: Record<string, unknown> = {}) {
+    const modal = Object.create(SimilarTagModal.prototype) as any;
+    modal.relationMode = 'similar';
+    modal.parentTag = '#比赛';
+    modal.children = ['#秘境', '#试炼'];
+    modal.activeChild = '#秘境';
+    modal.isSubmitting = false;
+    modal.childrenListEl = document.createElement('div');
+    modal.selectionSectionEl = null;
+    modal.selectionInputEl = null;
+    modal.inputEl = null;
+    modal.plugin = {
+      getTagVisibleNoteCount: () => 3,
+      sortTagsByVisibleCount: (tags: string[]) => [...tags],
+    };
+    Object.assign(modal, overrides);
+    return modal;
+  }
+
+  it('行内不渲染继承/交集模式切换按钮', () => {
+    const modal = createSimilarModal();
+    modal.renderChildren();
+
+    expect(modal.childrenListEl.querySelector('.puffs-inheritance-edge-mode')).toBeNull();
+  });
+
+  it('行内不渲染固定子标签开关', () => {
+    const modal = createSimilarModal();
+    modal.renderChildren();
+
+    expect(modal.childrenListEl.querySelector('.puffs-relation-fixed-toggle')).toBeNull();
+  });
+
+  it('不提供排序抓手 —— 相似组无序', () => {
+    const modal = createSimilarModal();
+    modal.renderChildren();
+
+    expect(modal.canReorderChildren()).toBe(false);
+    expect(modal.childrenListEl.querySelector('.puffs-relation-child-order-button')).toBeNull();
+  });
+
+  it('显示完整标签名，不套用「父标签-子名称」简称', () => {
+    const modal = createSimilarModal({ parentTag: '#爱情', children: ['#爱情-追求'] });
+    modal.renderChildren();
+
+    expect(getRowNames(modal)).toEqual(['爱情-追求']);
+  });
+
+  it('仍保留移除按钮 —— 解绑是这个弹窗的核心操作', () => {
+    const modal = createSimilarModal();
+    modal.renderChildren();
+
+    expect(modal.childrenListEl.querySelectorAll('.puffs-relation-child-remove')).toHaveLength(2);
+  });
+
+  it('空组给出相似标签专属文案', () => {
+    const modal = createSimilarModal({ children: [], activeChild: null });
+    modal.renderChildren();
+
+    expect(modal.childrenListEl.querySelector('.puffs-relation-empty')?.textContent)
+      .toBe('暂无相似标签');
+  });
+
+  it('标题点明是相似标签', () => {
+    expect(createSimilarModal().getModalTitle()).toBe('管理 比赛 的相似标签');
+  });
+
+  it('候选池排除自己与已在组内的标签', () => {
+    const modal = createSimilarModal();
+    expect(modal.isCandidateEligible('#比赛')).toBe(false);
+    expect(modal.isCandidateEligible('#秘境')).toBe(false);
+    expect(modal.isCandidateEligible('#闯关')).toBe(true);
   });
 });

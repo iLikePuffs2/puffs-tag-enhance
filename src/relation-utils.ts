@@ -256,6 +256,31 @@ export function collectIntersectionSignature(tree: TagInheritanceGroupNode | nul
   return parts.join(';');
 }
 
+/**
+ * 整棵展开树的内容指纹，供标签行签名判断能否复用旧 DOM。
+ *
+ * 与 collectIntersectionSignature 只记交集节点不同，这里**每个节点都记**。
+ * 起因是「移除笔记标签后侧边栏不实时刷新」：标签行签名在折叠态刻意丢弃路径列表
+ * （性能优化），展开态也只带根标签的 files，于是两种变化会被漏掉 ——
+ * 一是笔记总数不变但成员换了人，二是变化发生在子标签分组内部而父标签的计数没动。
+ *
+ * 本函数由 computeTagBrowseData 调用一次、结果随 browseData 缓存，因此即使折叠态
+ * 也能参与签名而不重新付出拼接代价。刻意不用 JSON.stringify —— 它在 150 标签 ×
+ * 每行上千字符的规模下本身就是开销来源（见 view/reconcile.ts 的说明）。
+ */
+export function collectBrowseSignature(tree: TagInheritanceGroupNode | null): string {
+  if (!tree) return '';
+  const parts: string[] = [];
+  const visit = (node: TagInheritanceGroupNode, lineage: string[]) => {
+    const path = lineage.join('>');
+    // 交集组与同名普通分组的成员算法不同，前缀区分开，避免二者互相冒充
+    parts.push(`${node.isIntersection ? '&' : ''}${path}:${node.paths.join('|')}`);
+    for (const child of node.children) visit(child, [...lineage, child.tag]);
+  };
+  visit(tree, [tree.tag]);
+  return parts.join(';');
+}
+
 export function compareHierarchyParentItems(
   left: { directCount: number; name: string },
   right: { directCount: number; name: string }

@@ -13,6 +13,7 @@ import {
   compareHierarchyParentItems,
 } from "../relation-utils";
 import { NoteRelationModal } from "../relation-modals";
+import { shouldShowScrollButtons } from "../sidebar-toolbar";
 
 export class TagTreeRendererBehavior {
   [key: string]: any;
@@ -76,10 +77,34 @@ export class TagTreeRendererBehavior {
       rowEl.createDiv({ text: label, cls: 'tree-item-inner' });
       const flairOuterEl = rowEl.createDiv({ cls: 'tree-item-flair-outer' });
       flairOuterEl.createSpan({ text: String(count), cls: 'tree-item-flair tag-pane-tag-count' });
+      // 回底按钮只在展开且笔记数达阈值时存在，与顶层标签行一致 ——
+      // 折叠的行没有可滚动的内容，留着按钮既无意义又与顶层行为不一致。
+      // 因此建/删都放进 syncExpansion，随展开态增删。
+      const syncScrollBottomButton = (expanded: any) => {
+        const existingEl = rowEl.querySelector('.puffs-tag-scroll-bottom-button');
+        const shouldShow = expanded &&
+          shouldShowScrollButtons(count, this.settings?.scrollTopButtonThreshold);
+        if (!shouldShow) {
+          existingEl?.remove();
+          return;
+        }
+        if (existingEl) return;
+        const scrollBottomButtonEl = rowEl.createEl('button', {
+          cls: 'clickable-icon puffs-tag-scroll-bottom-button',
+          attr: { type: 'button', 'aria-label': '回底' },
+        });
+        if (tagValue) scrollBottomButtonEl.dataset.puffsTag = tagValue;
+        // 锚点让点击时就近在本子树内定位，避免同名标签出现在多棵继承树时跳错位置
+        scrollBottomButtonEl.dataset.puffsScrollAnchor = 'true';
+        setIcon(scrollBottomButtonEl, 'arrow-down-to-line');
+        // 计数容器先建，按钮要插到它前面才与顶层标签行的元素顺序一致
+        rowEl.insertBefore(scrollBottomButtonEl, flairOuterEl);
+      };
       const syncExpansion = () => {
         const expanded = (!!targetPath && containsTarget) || !collapsed.has(key);
         rowEl.setAttribute('aria-expanded', String(expanded));
         toggleEl.classList.toggle('is-collapsed', !expanded);
+        syncScrollBottomButton(expanded);
         let contentEl = Array.from<any>(itemEl.children).find((el: any) =>
           el.classList.contains('puffs-inheritance-tag-group-content')
         );
@@ -308,19 +333,19 @@ export class TagTreeRendererBehavior {
     for (const rootPath of roots) renderNode(hostEl, rootPath);
 
     if (
-      this.settings.scrollTopButtonThreshold > 0 &&
-      orderedFiles.length >= this.settings.scrollTopButtonThreshold &&
+      shouldShowScrollButtons(orderedFiles.length, this.settings?.scrollTopButtonThreshold) &&
       renderedCards.length
     ) {
       const scrollTopButtonEl = renderedCards[renderedCards.length - 1].createEl('button', {
         cls: 'clickable-icon puffs-tag-scroll-top-button',
       });
-      scrollTopButtonEl.dataset.puffsTag = tagValue;
+      if (tagValue) scrollTopButtonEl.dataset.puffsTag = tagValue;
+      scrollTopButtonEl.dataset.puffsScrollAnchor = 'true';
       setIcon(scrollTopButtonEl, 'arrow-up-to-line');
       scrollTopButtonEl.addEventListener('click', (event: any) => {
         event.preventDefault();
         event.stopPropagation();
-        this.scheduleTagTopScroll(options.scrollContainer || hostEl, tagValue);
+        this.scheduleTagTopScroll(options.scrollContainer || hostEl, tagValue, scrollTopButtonEl);
       });
     }
   }

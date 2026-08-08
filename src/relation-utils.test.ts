@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectDirectedDescendants,
+  collectBrowseSignature,
   compareHierarchyParentItems,
   compareTagItemsByCount,
   createHierarchyNavigationHistory,
@@ -15,6 +16,70 @@ import {
   sanitizeAcyclicAdjacency,
   wouldCreateDirectedCycle,
 } from "./relation-utils";
+
+// 供标签行签名使用：整棵展开树的内容指纹。
+// 与 collectIntersectionSignature 的区别是它扫的是**全部节点**而不只交集节点，
+// 因此子标签分组里少一篇笔记也能被察觉 —— 这正是「移除标签不实时刷新」的根因。
+describe('标签浏览内容签名', () => {
+  const leaf = (tag: string, paths: string[]) => ({ tag, paths, subtreePaths: paths, children: [] });
+
+  it('空树返回空串，不抛错', () => {
+    expect(collectBrowseSignature(null)).toBe('');
+  });
+
+  it('根标签的原生笔记进签名', () => {
+    expect(collectBrowseSignature({ ...leaf('#读书', ['a.md', 'b.md']) }))
+      .not.toBe(collectBrowseSignature({ ...leaf('#读书', ['a.md']) }));
+  });
+
+  it('子标签分组里少一篇笔记会改变签名（根标签自身不变）', () => {
+    const before = {
+      tag: '#爱情', paths: [], subtreePaths: ['x.md', 'y.md'],
+      children: [leaf('#升温', ['x.md', 'y.md'])],
+    };
+    const after = {
+      tag: '#爱情', paths: [], subtreePaths: ['x.md'],
+      children: [leaf('#升温', ['x.md'])],
+    };
+    expect(collectBrowseSignature(after)).not.toBe(collectBrowseSignature(before));
+  });
+
+  it('深层节点的变化同样被覆盖', () => {
+    const build = (deepPaths: string[]) => ({
+      tag: '#甲', paths: [], subtreePaths: deepPaths,
+      children: [{
+        tag: '#乙', paths: [], subtreePaths: deepPaths,
+        children: [leaf('#丙', deepPaths)],
+      }],
+    });
+    expect(collectBrowseSignature(build(['p.md'])))
+      .not.toBe(collectBrowseSignature(build(['p.md', 'q.md'])));
+  });
+
+  it('交集组也进签名，且与同名的普通分组可区分', () => {
+    const intersection = {
+      tag: '#爱情', paths: [], subtreePaths: [],
+      children: [{ ...leaf('#升温', ['x.md']), isIntersection: true }],
+    };
+    const normal = {
+      tag: '#爱情', paths: [], subtreePaths: ['x.md'],
+      children: [leaf('#升温', ['x.md'])],
+    };
+    expect(collectBrowseSignature(intersection)).not.toBe(collectBrowseSignature(normal));
+  });
+
+  it('内容不变时签名稳定', () => {
+    const tree = { tag: '#爱情', paths: ['r.md'], subtreePaths: ['r.md', 'x.md'], children: [leaf('#升温', ['x.md'])] };
+    expect(collectBrowseSignature(tree)).toBe(collectBrowseSignature({ ...tree }));
+  });
+
+  it('不使用 JSON 序列化', () => {
+    const tree = { tag: '#爱情', paths: ['r.md'], subtreePaths: ['r.md'], children: [] };
+    const signature = collectBrowseSignature(tree);
+    expect(signature).not.toContain('{');
+    expect(signature).not.toContain('"');
+  });
+});
 
 describe('关系 DAG', () => {
   it('递归后代按分支顺序去重并支持多父级', () => {

@@ -22,6 +22,9 @@ function makeModal(overrides: AnyRecord = {}) {
   modal.selectionQuery = '';
   modal.noteCandidates = [];
   modal.sourceTagValue = '#读书';
+  // 实体标签下 scopeTag 就是右键的那个标签；虚拟标签场景由构造函数改写成成员标签
+  modal.scopeTag = '#读书';
+  modal.candidateFiles = null;
   modal.targetTagValue = '';
   modal.close = vi.fn();
   modal.renderNoteSelection = vi.fn();
@@ -192,5 +195,70 @@ describe('提交时的作用域与标签分发', () => {
     await modal.submit();
 
     expect(modal.plugin.addTagToTaggedNotes).not.toHaveBeenCalled();
+  });
+});
+
+// `&` 交集搜索出的虚拟标签卡片也要能右键改标签。
+// 虚拟标签不存在于 tagFileIndex，候选池必须由调用方直接传入。
+describe('虚拟交集标签的批量操作', () => {
+  const files = [new TFile('a.md'), new TFile('b.md')];
+
+  // 与 makeModal 同样直接铺字段：Modal 基类要求 new，而这里只测构造后的行为
+  function makeVirtualModal(overrides: AnyRecord = {}) {
+    const modal = makeModal({
+      tag: 'intersection:#读书&#科幻',
+      candidateFiles: files,
+      scopeTag: '#读书',
+      sourceTagValue: '#读书',
+    });
+    modal.plugin.tagFileIndex = new Map([['#读书', [new TFile('索引里的.md')]]]);
+    modal.plugin.getOrderedFilesForTag = (_tag: string, list: any) => list;
+    Object.assign(modal, overrides);
+    return modal;
+  }
+
+  it('候选池直接取传入的文件列表，而不是去 tagFileIndex 里查虚拟标签', () => {
+    expect(makeVirtualModal().collectNoteCandidates().map((c: any) => c.path))
+      .toEqual(['a.md', 'b.md']);
+  });
+
+  it('源标签默认取交集的第一个成员标签，而不是虚拟标签本身', () => {
+    expect(makeVirtualModal().sourceTagValue).toBe('#读书');
+  });
+
+  it('新增走成员标签作为作用域 —— 虚拟标签名传给业务层会查不到笔记', async () => {
+    const modal = makeVirtualModal({
+      mode: 'add',
+      targetTagValue: '#新标签',
+      selectedPaths: new Set(['a.md']),
+    });
+
+    await modal.submit();
+
+    expect(modal.plugin.addTagToTaggedNotes).toHaveBeenCalledWith(
+      '#读书', '#新标签', modal.selectedPaths,
+    );
+  });
+
+  it('删除同样走成员标签', async () => {
+    const modal = makeVirtualModal({
+      mode: 'delete',
+      targetTagValue: '#科幻',
+      selectedPaths: new Set(['b.md']),
+    });
+
+    await modal.submit();
+
+    expect(modal.plugin.deleteTagFromTaggedNotes).toHaveBeenCalledWith(
+      '#读书', '#科幻', modal.selectedPaths,
+    );
+  });
+
+  it('没有 candidateFiles 时仍走 tagFileIndex（实体标签路径未受影响）', () => {
+    const modal = makeModal({ tag: '#读书', candidateFiles: null, scopeTag: '#读书' });
+    modal.plugin.tagFileIndex = new Map([['#读书', [new TFile('索引里的.md')]]]);
+    modal.plugin.getOrderedFilesForTag = (_tag: string, list: any) => list;
+
+    expect(modal.collectNoteCandidates().map((c: any) => c.path)).toEqual(['索引里的.md']);
   });
 });

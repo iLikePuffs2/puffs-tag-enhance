@@ -161,6 +161,105 @@ describe('当前笔记标签定位', () => {
   });
 });
 
+// `**笔记A`：把「当前笔记」换成「按名字模糊匹配到的笔记」，其余复用 `：：` 的链路。
+describe('指定笔记标签定位', () => {
+  const 读书笔记 = new (TFile as any)('读书笔记.md');
+  const 读书笔记二 = new (TFile as any)('读书笔记二.md');
+  const 无关 = new (TFile as any)('无关.md');
+  const 图片 = new (TFile as any)('图片.png');
+
+  const createBehavior = () => {
+    const behavior = createMixedBehavior();
+    behavior.clearInlineHierarchyBranchState = () => {};
+    behavior.expandedTags = new Set();
+    behavior.app = {
+      vault: { getMarkdownFiles: () => [读书笔记, 读书笔记二, 无关, 图片] },
+    };
+    behavior.getNoteAliases = () => [];
+    behavior.getLogicalTagSet = () => new Set(['#读书', '#科幻', '#无关标签']);
+    behavior.getTagBrowseData = (tag: string) => {
+      const exactFiles = {
+        '#读书': [读书笔记, 读书笔记二],
+        '#科幻': [读书笔记二],
+        '#无关标签': [无关],
+      }[tag] || [];
+      return {
+        exactFiles,
+        inheritedFiles: [],
+        files: exactFiles,
+        exactCount: exactFiles.length,
+        inheritedCount: 0,
+        hasInheritance: false,
+        sourcesByPath: new Map(),
+      };
+    };
+    return behavior;
+  };
+
+  it('模糊匹配到的多篇笔记，其所属标签全部列出', () => {
+    // 「读书笔记」与「读书笔记二」都命中 → #读书（两篇）与 #科幻（一篇）都要出现
+    expect(createBehavior().getNoteTagLocateItems('读书笔记').map((item: any) => item.tag))
+      .toEqual(['#读书', '#科幻']);
+  });
+
+  it('只命中一篇时只列它的标签', () => {
+    expect(createBehavior().getNoteTagLocateItems('无关').map((item: any) => item.tag))
+      .toEqual(['#无关标签']);
+  });
+
+  it('没有匹配的笔记时返回空列表', () => {
+    expect(createBehavior().getNoteTagLocateItems('查无此篇')).toEqual([]);
+  });
+
+  it('空关键字返回空列表 —— 不退化成列出全部标签', () => {
+    expect(createBehavior().getNoteTagLocateItems('')).toEqual([]);
+  });
+
+  it('每个「标签 × 命中笔记」组合生成一条定位记录，供 Enter 循环', () => {
+    const behavior = createBehavior();
+    const items = behavior.getNoteTagLocateItems('读书笔记');
+    expect(behavior.getNoteTagLocateMatches(items, '读书笔记')).toEqual([
+      { tag: '#读书', path: '读书笔记.md', key: '#读书\u0000读书笔记.md' },
+      { tag: '#读书', path: '读书笔记二.md', key: '#读书\u0000读书笔记二.md' },
+      { tag: '#科幻', path: '读书笔记二.md', key: '#科幻\u0000读书笔记二.md' },
+    ]);
+  });
+
+  it('换关键字时把定位重置到第一条', () => {
+    const behavior = createBehavior();
+    const state = createNoteCardSearchState() as any;
+
+    behavior.syncNoteTagLocateSearchState(state, behavior.getNoteTagLocateItems('读书笔记'), '读书笔记');
+    behavior.advanceNoteCardSearchState(state, behavior.expandedTags);
+    expect(state.activeIndex).toBe(1);
+
+    behavior.syncNoteTagLocateSearchState(state, behavior.getNoteTagLocateItems('无关'), '无关');
+    expect(state.activeIndex).toBe(0);
+    expect(state.target?.path).toBe('无关.md');
+  });
+
+  it('同一关键字重绘时保持当前定位不跳回开头', () => {
+    const behavior = createBehavior();
+    const state = createNoteCardSearchState() as any;
+    const items = behavior.getNoteTagLocateItems('读书笔记');
+
+    behavior.syncNoteTagLocateSearchState(state, items, '读书笔记');
+    behavior.advanceNoteCardSearchState(state, behavior.expandedTags);
+    behavior.syncNoteTagLocateSearchState(state, items, '读书笔记');
+
+    expect(state.activeIndex).toBe(1);
+    expect(state.target?.path).toBe('读书笔记二.md');
+  });
+
+  it('没有匹配时清空定位状态', () => {
+    const behavior = createBehavior();
+    const state = createNoteCardSearchState() as any;
+    expect(behavior.syncNoteTagLocateSearchState(state, [], '查无此篇')).toBeNull();
+    expect(state.matches).toEqual([]);
+    expect(state.activeIndex).toBe(-1);
+  });
+});
+
 describe('固定标签与父笔记排序', () => {
   it('搜索框为空时只返回已固定的真实标签', () => {
     const behavior = createMixedBehavior();

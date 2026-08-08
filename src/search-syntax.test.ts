@@ -17,11 +17,74 @@ import {
   normalizeSearchTerm,
   normalizeTag,
   parseNoteCardSearch,
+  parseNoteTagLocateSearch,
+  parseSimilarTagSearch,
   splitIntersectionSearchTerms,
   splitUnionSearchTerms,
   tagMatchesAnySearchTerm,
   tagMatchesSearchText,
 } from './models';
+
+// `**笔记A`：定位指定笔记所处的全部标签。
+// 与 `：：` 同族，区别是后者跟随当前笔记、前者按名字模糊匹配。
+describe('** 指定笔记定位语法', () => {
+  it('以 ** 开头且后面有内容时命中，笔记名去掉两端空白', () => {
+    expect(parseNoteTagLocateSearch('**笔记A')).toEqual({ matched: true, noteQuery: '笔记A' });
+    expect(parseNoteTagLocateSearch('  **笔记A  ')).toEqual({ matched: true, noteQuery: '笔记A' });
+    expect(parseNoteTagLocateSearch('** 笔记A')).toEqual({ matched: true, noteQuery: '笔记A' });
+  });
+
+  it('只有 ** 而没有笔记名时不命中 —— 那会列出全部标签，无意义', () => {
+    expect(parseNoteTagLocateSearch('**')).toEqual({ matched: false, noteQuery: '' });
+    expect(parseNoteTagLocateSearch('**   ')).toEqual({ matched: false, noteQuery: '' });
+  });
+
+  it('单个 * 不命中，交给既有的 `标签*笔记名` 语法', () => {
+    expect(parseNoteTagLocateSearch('*笔记A').matched).toBe(false);
+    expect(parseNoteTagLocateSearch('读书*笔记').matched).toBe(false);
+  });
+
+  it('** 不在开头时不命中', () => {
+    expect(parseNoteTagLocateSearch('读书**笔记').matched).toBe(false);
+  });
+
+  it('空值与非字符串安全返回', () => {
+    expect(parseNoteTagLocateSearch('').matched).toBe(false);
+    expect(parseNoteTagLocateSearch(null).matched).toBe(false);
+    expect(parseNoteTagLocateSearch(undefined).matched).toBe(false);
+  });
+
+  it('笔记名里含 * 时原样保留（模糊匹配交给 fileMatchesNoteSearch）', () => {
+    expect(parseNoteTagLocateSearch('**笔记*A')).toEqual({ matched: true, noteQuery: '笔记*A' });
+  });
+});
+
+// `比赛，`：把「比赛」和它的相似标签一并搜出来。
+// 刻意只认全角逗号 —— 半角逗号在标签名里更常见，认它会误伤普通搜索。
+describe('相似标签的中文逗号语法', () => {
+  it('以全角逗号结尾且左侧非空时命中', () => {
+    expect(parseSimilarTagSearch('比赛，')).toEqual({ matched: true, baseQuery: '比赛' });
+    expect(parseSimilarTagSearch('  比赛，  ')).toEqual({ matched: true, baseQuery: '比赛' });
+  });
+
+  it('半角逗号不命中', () => {
+    expect(parseSimilarTagSearch('比赛,').matched).toBe(false);
+  });
+
+  it('只有逗号、没有左侧条件时不命中', () => {
+    expect(parseSimilarTagSearch('，').matched).toBe(false);
+    expect(parseSimilarTagSearch('   ，').matched).toBe(false);
+  });
+
+  it('逗号不在末尾时不命中', () => {
+    expect(parseSimilarTagSearch('比赛，秘境').matched).toBe(false);
+  });
+
+  it('空值安全返回', () => {
+    expect(parseSimilarTagSearch('').matched).toBe(false);
+    expect(parseSimilarTagSearch(null).matched).toBe(false);
+  });
+});
 
 describe('* 笔记名分隔语法', () => {
   it('没有 * 时返回 null', () => {

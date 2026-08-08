@@ -266,3 +266,67 @@ describe('标签行签名', () => {
     expect(signature.includes('\x1f')).toBe(true);
   });
 });
+
+// 移除笔记标签后侧边栏不实时反馈的回归网。
+//
+// 症状：删掉某篇笔记的标签后，必须把标签折叠再展开才看到卡片消失。
+// 根因是签名覆盖不全 —— 折叠态刻意丢弃路径列表（性能优化），
+// 而继承分组内部的结构变化又只有交集组进签名。browseSignature 由
+// computeTagBrowseData 预先算好，长度可控，因此折叠时也能参与。
+describe('标签行签名 · 移除笔记的实时反馈', () => {
+  const base = {
+    tag: '#读书',
+    displayName: '读书',
+    isVirtual: false,
+    files: [{ path: 'a.md' }, { path: 'b.md' }],
+    exactCount: 2,
+    inheritedCount: 0,
+    hasInheritance: false,
+    hasActiveInheritance: false,
+    fixedSearchTags: [],
+    browseSignature: '#读书:a.md|b.md',
+  };
+  const collapsed = { expanded: false, pinned: false, targetPath: '', relationVersion: 0 };
+  const expanded = { ...collapsed, expanded: true };
+
+  it('展开态下移除一篇笔记会改变签名', () => {
+    const after = { ...base, files: [{ path: 'a.md' }], exactCount: 1, browseSignature: '#读书:a.md' };
+    expect(tagRowSignature(after, expanded)).not.toBe(tagRowSignature(base, expanded));
+  });
+
+  it('折叠态下移除一篇笔记同样改变签名 —— 此前只有展开时才带路径，折叠行会被原样复用', () => {
+    const after = { ...base, files: [{ path: 'a.md' }], exactCount: 1, browseSignature: '#读书:a.md' };
+    expect(tagRowSignature(after, collapsed)).not.toBe(tagRowSignature(base, collapsed));
+  });
+
+  it('笔记总数不变但成员换了人，折叠态也能识别', () => {
+    // 例如一篇笔记被移出该标签、同时另一篇被移入：length 与各项计数都不变
+    const after = { ...base, browseSignature: '#读书:a.md|c.md' };
+    expect(tagRowSignature(after, collapsed)).not.toBe(tagRowSignature(base, collapsed));
+  });
+
+  it('继承来源的分组内容变化会改变父标签的签名', () => {
+    // 父标签自身的 files/计数不变，只是子标签分组里少了一篇
+    const parent = {
+      ...base,
+      hasActiveInheritance: true,
+      browseSignature: '#爱情>#升温:x.md|y.md',
+    };
+    const after = { ...parent, browseSignature: '#爱情>#升温:x.md' };
+    expect(tagRowSignature(after, expanded)).not.toBe(tagRowSignature(parent, expanded));
+    expect(tagRowSignature(after, collapsed)).not.toBe(tagRowSignature(parent, collapsed));
+  });
+
+  it('browseSignature 缺失时不报错，退回原有判据', () => {
+    const withoutSignature = { ...base, browseSignature: undefined };
+    expect(() => tagRowSignature(withoutSignature, collapsed)).not.toThrow();
+    expect(tagRowSignature(withoutSignature, collapsed))
+      .toBe(tagRowSignature({ ...withoutSignature }, collapsed));
+  });
+
+  it('仍不使用 JSON 序列化', () => {
+    const signature = tagRowSignature(base, expanded);
+    expect(signature).not.toContain('{');
+    expect(signature).not.toContain('"');
+  });
+});

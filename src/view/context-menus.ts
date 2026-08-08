@@ -8,6 +8,7 @@ import { getTagDisplayName, isNestedTag, normalizeTag } from "../models";
 import {
   ManageParentTagModal,
   NoteRelationModal,
+  SimilarTagModal,
   TagInheritanceModal,
   TagNoteBindingModal,
 } from "../relation-modals";
@@ -99,11 +100,34 @@ export class ContextMenusBehavior {
     return true;
   }
 
-  showTagContextMenu(event: any, tagValue: any) {
+  /**
+   * 标签行右键菜单。
+   *
+   * item 只在虚拟标签（`&` 交集搜索结果）时必须传：那种标签不在 tagFileIndex 里，
+   * 候选笔记池只能从 item.files 拿。拿不到就不弹菜单，避免打开一个空弹窗。
+   */
+  showTagContextMenu(event: any, tagValue: any, item: any = null) {
+    if (String(tagValue || '').startsWith('intersection:')) {
+      if (!item || !(item.files || []).length || !(item.sourceTags || []).length) return false;
+      const virtualMenu = new Menu();
+      // 管理父/子标签、绑定笔记都是实体标签才成立的概念，虚拟标签只留改标签
+      virtualMenu.addItem((menuItem) => menuItem
+        .setTitle('修改标签')
+        .setIcon('pencil')
+        .onClick(() => this.openVirtualTagRenameModal(item)));
+      virtualMenu.showAtMouseEvent(event);
+      return true;
+    }
+
     const tag = normalizeTag(tagValue);
     if (!tag) return false;
     const menu = new Menu();
     menu.addItem((item) => item.setTitle('修改标签').setIcon('pencil').onClick(() => this.openRenameTagModal(tag)));
+    // 用 group（虚线框住多个对象）表达「归成一组」。不用 blend / link / tags ——
+    // 前两个分别是交集模式与绑定笔记的图标，tags 与侧边栏页签图标同源
+    menu.addItem((item) => item.setTitle('相似标签').setIcon('group').onClick(() => {
+      new SimilarTagModal(this.app, this, tag).open();
+    }));
     menu.addItem((item) => item.setTitle('管理父标签').setIcon('corner-left-up').onClick(() => {
       new ManageParentTagModal(this.app, this, tag).open();
     }));

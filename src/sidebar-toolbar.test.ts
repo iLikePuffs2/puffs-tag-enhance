@@ -4,7 +4,31 @@ import {
   getAvailableSidebarToolbarButtons,
   moveSidebarToolbarButton,
   normalizeSidebarToolbarButtons,
+  shouldShowScrollButtons,
 } from "./sidebar-toolbar";
+
+describe('回顶/回底按钮的显示阈值', () => {
+  it('阈值为 0 时一律不显示（设置面板里 0 表示关闭）', () => {
+    expect(shouldShowScrollButtons(0, 0)).toBe(false);
+    expect(shouldShowScrollButtons(999, 0)).toBe(false);
+  });
+
+  it('笔记数达到阈值才显示，边界值本身算达到', () => {
+    expect(shouldShowScrollButtons(2, 3)).toBe(false);
+    expect(shouldShowScrollButtons(3, 3)).toBe(true);
+    expect(shouldShowScrollButtons(4, 3)).toBe(true);
+  });
+
+  it('没有笔记时不显示，即使阈值是 1', () => {
+    expect(shouldShowScrollButtons(0, 1)).toBe(false);
+  });
+
+  it('阈值非法（负数、NaN、undefined）时按关闭处理', () => {
+    expect(shouldShowScrollButtons(10, -1)).toBe(false);
+    expect(shouldShowScrollButtons(10, Number.NaN)).toBe(false);
+    expect(shouldShowScrollButtons(10, undefined)).toBe(false);
+  });
+});
 
 describe('侧边栏顶栏按钮配置', () => {
   it('缺失或非法配置恢复为默认按钮及可见状态', () => {

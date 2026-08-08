@@ -4,9 +4,73 @@ import { describe, expect, it } from 'vitest';
 import {
   CURRENT_SCHEMA_VERSION,
   isDefaultNoteOrder,
+  isPathInDefaultFolders,
   migrateSchema,
+  normalizeDefaultFolders,
   readPreferredFiles,
 } from './schema';
+
+describe('默认打开标签面板的文件夹匹配', () => {
+  it('文件夹内的直属笔记命中', () => {
+    expect(isPathInDefaultFolders('日记/今天.md', ['日记'])).toBe(true);
+  });
+
+  it('子文件夹里的笔记同样命中（用户确认要包含子文件夹）', () => {
+    expect(isPathInDefaultFolders('日记/2026/08/今天.md', ['日记'])).toBe(true);
+  });
+
+  it('同前缀但不同名的文件夹不误命中', () => {
+    // 「日记本」不是「日记」的子文件夹，仅仅是字符串前缀相同
+    expect(isPathInDefaultFolders('日记本/今天.md', ['日记'])).toBe(false);
+  });
+
+  it('与文件夹同名的笔记不命中 —— 它是文件不是目录下的内容', () => {
+    expect(isPathInDefaultFolders('日记.md', ['日记'])).toBe(false);
+  });
+
+  it('多个文件夹里命中任意一个即可', () => {
+    expect(isPathInDefaultFolders('随笔/散记.md', ['日记', '随笔'])).toBe(true);
+    expect(isPathInDefaultFolders('别处/散记.md', ['日记', '随笔'])).toBe(false);
+  });
+
+  it('没有配置文件夹时一律不命中', () => {
+    expect(isPathInDefaultFolders('日记/今天.md', [])).toBe(false);
+    expect(isPathInDefaultFolders('日记/今天.md', null)).toBe(false);
+  });
+
+  it('空路径不命中', () => {
+    expect(isPathInDefaultFolders('', ['日记'])).toBe(false);
+    expect(isPathInDefaultFolders(null, ['日记'])).toBe(false);
+  });
+
+  it('反斜杠输入的文件夹也能匹配（Windows 用户习惯）', () => {
+    expect(isPathInDefaultFolders('日记/2026/今天.md', ['日记\\2026'])).toBe(true);
+  });
+});
+
+describe('默认文件夹配置的归一化', () => {
+  it('按行拆分，去掉空行与首尾空白', () => {
+    expect(normalizeDefaultFolders('日记\n\n  随笔  \n')).toEqual(['日记', '随笔']);
+  });
+
+  it('反斜杠统一成正斜杠，并去掉末尾斜杠', () => {
+    expect(normalizeDefaultFolders('日记\\2026\\\n随笔/')).toEqual(['日记/2026', '随笔']);
+  });
+
+  it('去重且保持首次出现的顺序', () => {
+    expect(normalizeDefaultFolders('随笔\n日记\n随笔')).toEqual(['随笔', '日记']);
+  });
+
+  it('数组输入同样接受（读取 data.json 时就是数组）', () => {
+    expect(normalizeDefaultFolders(['日记', ' 随笔 '])).toEqual(['日记', '随笔']);
+  });
+
+  it('非法输入回落到空数组', () => {
+    expect(normalizeDefaultFolders(null)).toEqual([]);
+    expect(normalizeDefaultFolders(123)).toEqual([]);
+    expect(normalizeDefaultFolders('   ')).toEqual([]);
+  });
+});
 
 const file = (path: string) => ({ path, basename: path.replace(/\.[^.]+$/, '') });
 

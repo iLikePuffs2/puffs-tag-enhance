@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Notice, TFile } from "obsidian";
-import { RelationsBehavior } from "./relations";
+import { RELATIONS_VERSION, RelationsBehavior } from "./relations";
 import { TagPaneBehavior } from "./tag-pane";
 import { PuffsTagSidebarView } from "./view/tag-sidebar-view";
 import { TagTreeRendererBehavior } from "./view/tag-tree-renderer";
@@ -186,7 +186,8 @@ describe('子标签手动排序', () => {
     ]);
 
     expect(behavior.initializeTagInheritanceOrder()).toBe(true);
-    expect(behavior.settings.relations.version).toBe(7);
+    // 迁移的语义是「推进到最新版」，跟着常量走，避免每次加新特性都要改断言
+    expect(behavior.settings.relations.version).toBe(RELATIONS_VERSION);
     expect(behavior.settings.relations.tagInheritance.childrenByParent).toEqual({
       '#父': ['#多', '#少'],
       '#另一父': ['#多', '#少'],
@@ -960,7 +961,8 @@ describe('固定子标签', () => {
       '#秘境-开始': '#秘境',
     });
     expect(behavior.initializeTagInheritanceOrder()).toBe(true);
-    expect(behavior.settings.relations.version).toBe(7);
+    // 迁移的语义是「推进到最新版」，跟着常量走，避免每次加新特性都要改断言
+    expect(behavior.settings.relations.version).toBe(RELATIONS_VERSION);
   });
 
   it('固定边豁免排除名单，自由边照常受排除', () => {
@@ -1218,7 +1220,8 @@ describe('v6 -> v7 迁移：选择继承改写成排除名单', () => {
     expect(inheritance.modeByParentChild).toEqual({});
     expect([...inheritance.excludedPathsByParentChild['#父']['#子']].sort())
       .toEqual(['子2.md', '子3.md', '孙2.md']);
-    expect(behavior.settings.relations.version).toBe(7);
+    // 迁移的语义是「推进到最新版」，跟着常量走，避免每次加新特性都要改断言
+    expect(behavior.settings.relations.version).toBe(RELATIONS_VERSION);
   });
 
   it('白名单为空的边视为误设，直接转成普通继承而不是全部排除', () => {
