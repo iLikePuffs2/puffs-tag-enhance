@@ -1,7 +1,7 @@
 {
 	"id": "puffs-tag-enhance",
 	"name": "puffs-tag-enhance",
-	"version": "3.4.0",
+	"version": "3.4.1",
 	"minAppVersion": "1.12.7",
 	"description": "独立的标签侧边栏：扁平标签列表、父子标签继承、父子笔记关系与多种搜索语法。",
 	"author": "Puffs",

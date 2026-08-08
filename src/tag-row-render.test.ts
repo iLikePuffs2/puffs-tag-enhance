@@ -534,6 +534,42 @@ describe('内层继承标签 · 原地展开', () => {
     expect(hostEl.querySelector('.puffs-inheritance-tag-group')).toBe(group);
     expect(group.querySelector('.puffs-inheritance-tag-group-content')).not.toBeNull();
   });
+
+  it('交集根按普通分组展开原生笔记与递归继承子标签，并沿用交集键命名空间', () => {
+    const behavior = createTreeRendererBehavior();
+    const files = new Map([
+      ['帮助.md', makeTFile('帮助.md')],
+      ['保护.md', makeTFile('保护.md')],
+    ]);
+    behavior.app = { vault: { getAbstractFileByPath: (path: string) => files.get(path) } };
+    const hostEl = document.createElement('div') as any;
+
+    behavior.renderTagInheritanceBrowseTree(hostEl, {
+      tag: '#爱情', paths: [], subtreePaths: ['帮助.md', '保护.md'],
+      children: [{
+        tag: '#帮助',
+        paths: ['帮助.md'],
+        subtreePaths: ['帮助.md', '保护.md'],
+        isIntersection: true,
+        noteTag: '#爱情',
+        children: [{ tag: '#保护', paths: ['保护.md'], subtreePaths: ['保护.md'], children: [] }],
+      }],
+    });
+
+    const rows = Array.from<HTMLElement>(hostEl.querySelectorAll('.puffs-inheritance-tag-group-row'));
+    const helpRow = rows.find((row) => row.dataset.puffsInheritanceTag === '#帮助')!;
+    const protectionRow = rows.find((row) => row.dataset.puffsInheritanceTag === '#保护')!;
+    const originalRow = rows.find((row) => row.dataset.puffsInheritanceGroup?.endsWith('\u0000original'))!;
+
+    expect(helpRow.dataset.puffsInheritanceGroup)
+      .toBe(`#爱情\u0000tag-intersection\u0000#帮助`);
+    expect(helpRow.querySelector('.tag-pane-tag-count')?.textContent).toBe('2');
+    expect(originalRow.textContent).toContain('原生');
+    expect(protectionRow.dataset.puffsInheritanceGroup)
+      .toBe(`#爱情\u0000tag-intersection\u0000#帮助\u0001#保护`);
+    expect(hostEl.textContent).toContain('帮助');
+    expect(hostEl.textContent).toContain('保护');
+  });
 });
 
 function createInlineNoteBehavior() {

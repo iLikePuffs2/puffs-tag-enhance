@@ -1091,17 +1091,14 @@ export class RelationsBehavior {
     if (tree.paths.length) keys.push(`${prefix}original`);
     // 交集组可能挂在任意深度的节点上，key 必须带完整血缘 ——
     // 只写伙伴标签的话，`#爱情 > 升温 > 欣赏` 会与假想的 `#爱情 > 欣赏` 撞车
-    const visitChildren = (children: any, lineage: any) => {
+    const visitChildren = (children: any, lineage: any, inIntersectionProjection = false) => {
       for (const child of children) {
         const childLineage = [...lineage, child.tag];
-        if (child.isIntersection) {
-          keys.push(`${intersectionPrefix}${childLineage.join('\u0001')}`);
-          continue;
-        }
-        const key = `${prefix}${childLineage.join('\u0001')}`;
+        const projected = inIntersectionProjection || !!child.isIntersection;
+        const key = `${projected ? intersectionPrefix : prefix}${childLineage.join('\u0001')}`;
         keys.push(key);
         if (child.children.length && child.paths.length) keys.push(`${key}\u0000original`);
-        visitChildren(child.children, childLineage);
+        visitChildren(child.children, childLineage, projected);
       }
     };
     visitChildren(tree.children, []);
@@ -1708,10 +1705,11 @@ export class RelationsBehavior {
     const inheritedFiles = inheritedPaths
       .map((path) => this.app?.vault?.getAbstractFileByPath(path) || indexedFilesByPath?.get(path))
       .filter((file) => file instanceof TFile && file.extension === 'md');
-    // 交集分组：成员是 root 的原生笔记，对 inheritedFiles 与计数零贡献，只影响分组展示
+    // 交集投影只影响分组展示，对 inheritedFiles 与顶层计数零贡献。
     const intersectionGroups = this.getIntersectionGroups(tag);
-    const hasActiveInheritance = !!(adjacency[tag] || []).length || intersectionGroups.length > 0;
-    const inheritanceTree = hasActiveInheritance
+    const intersectionPartners = this.getIntersectionPartners(tag);
+    const hasPotentialInheritance = !!(adjacency[tag] || []).length || intersectionPartners.length > 0;
+    const inheritanceTree = hasPotentialInheritance
       ? buildTagInheritanceGroupTree(
         tag,
         adjacency,
@@ -1722,11 +1720,23 @@ export class RelationsBehavior {
           this.createInheritanceEdgesFromLineage(lineage),
           path
         ),
-        // 交集组按标签实时取，任意深度的节点都能挂出自己的交集分组
-        (nodeTag: string) => this.getIntersectionGroups(nodeTag),
-        (nodeTag: string) => this.getInheritanceChildren(nodeTag)
+        // 空的直属交集也要交给树构建器：伙伴后代仍可能在当前标签上下文中命中。
+        (nodeTag: string) => this.getIntersectionPartners(nodeTag)
+          .map((partner: string) => ({
+            tag: partner,
+            paths: this.getIntersectionGroupPaths(nodeTag, partner),
+          })),
+        (nodeTag: string) => this.getInheritanceChildren(nodeTag),
+        (nodeTag: string) => {
+          const directFiles = this.tagFileIndex?.get(nodeTag) || [];
+          const orderedFiles = typeof this.getOrderedFilesForTag === 'function'
+            ? this.getOrderedFilesForTag(nodeTag, directFiles)
+            : directFiles;
+          return orderedFiles.map((file: any) => file.path);
+        }
       )
       : null;
+    const hasActiveInheritance = !!(adjacency[tag] || []).length || !!inheritanceTree?.children.length;
     return {
       tag,
       exactFiles,

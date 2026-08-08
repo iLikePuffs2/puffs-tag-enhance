@@ -132,34 +132,29 @@ export class TagTreeRendererBehavior {
       }
       syncExpansion();
     };
-    const renderNode = (containerEl: any, node: any, lineage: any, directParentTag: any) => {
-      // 交集组是叶子：不再往下递归对方的子标签，笔记也不算继承来的
-      if (node.isIntersection) {
-        renderGroup(
-          containerEl,
-          this.getRelativeChildDisplayName(directParentTag, node.tag),
-          node.paths.length,
-          // key 带完整血缘，与 getTagInheritanceGroupKeys 一致 ——
-          // 交集组可能挂在任意深度，只写伙伴标签会让不同层级的同名组撞车
-          `${rootTag}\u0000tag-intersection\u0000${lineage.join('\u0001')}`,
-          node.paths.includes(targetPath),
-          (contentEl: any) => renderNotes(contentEl, node, false),
-          node.tag
-        );
-        return;
-      }
-      const key = `${rootTag}\u0000tag-group\u0000${lineage.join('\u0001')}`;
+    const renderNode = (
+      containerEl: any,
+      node: any,
+      lineage: any,
+      directParentTag: any,
+      inIntersectionProjection = false
+    ) => {
+      // 交集根及其投影后代共用独立命名空间，避免与普通继承树的同血缘分组撞键。
+      const projected = inIntersectionProjection || !!node.isIntersection;
+      const namespace = projected ? 'tag-intersection' : 'tag-group';
+      const key = `${rootTag}\u0000${namespace}\u0000${lineage.join('\u0001')}`;
       const renderNodeContent = (contentEl: any) => {
           if (!node.children.length) {
-            renderNotes(contentEl, node, true);
+            renderNotes(contentEl, node, !node.isIntersection);
             return;
           }
           if (node.paths.length) {
             renderGroup(contentEl, '原生', node.paths.length, `${key}\u0000original`,
-              node.paths.includes(targetPath), (originalEl: any) => renderNotes(originalEl, node, true));
+              node.paths.includes(targetPath),
+              (originalEl: any) => renderNotes(originalEl, node, !node.isIntersection));
           }
           for (const child of node.children) {
-            renderNode(contentEl, child, [...lineage, child.tag], node.tag);
+            renderNode(contentEl, child, [...lineage, child.tag], node.tag, projected);
           }
         };
       // 名字符合「父标签-子名称」就只显示后缀，与是否锁定为固定子标签无关

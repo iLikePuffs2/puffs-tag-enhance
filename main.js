@@ -267,30 +267,50 @@ function buildVisibleHierarchyForest(orderedPaths, adjacency) {
     parentsByChild
   };
 }
-function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByTag, excludedPaths = [], fixedTags = /* @__PURE__ */ new Set(), isPathVisible, getIntersectionGroups, getChildOrder) {
+function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByTag, excludedPaths = [], fixedTags = /* @__PURE__ */ new Set(), isPathVisible, getIntersectionGroups, getChildOrder, getOrderedPaths) {
   if (!rootTag) return null;
   const excluded = new Set(excludedPaths || []);
+  const pathsForTag = (tag) => orderedPathsByTag[tag] || (getOrderedPaths == null ? void 0 : getOrderedPaths(tag)) || [];
+  const visitIntersectionProjection = (tag, contextPaths, branch, lineage, rootPaths) => {
+    if (!tag || branch.has(tag)) return null;
+    const nextBranch = new Set(branch);
+    nextBranch.add(tag);
+    const isProjectionRoot = rootPaths !== void 0;
+    const paths = Array.from(new Set(rootPaths || pathsForTag(tag))).filter((path) => path && contextPaths.has(path) && (isProjectionRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || !excluded.has(path))));
+    const children = (childrenByParent[tag] || []).map((child) => visitIntersectionProjection(
+      child,
+      contextPaths,
+      nextBranch,
+      [...lineage, child]
+    )).filter((child) => !!child && child.subtreePaths.length > 0);
+    const subtreePaths = Array.from(/* @__PURE__ */ new Set([
+      ...paths,
+      ...children.flatMap((child) => child.subtreePaths)
+    ]));
+    if (!subtreePaths.length) return null;
+    return { tag, paths, children, subtreePaths };
+  };
   const visit = (tag, branch, lineage, isRoot = false) => {
     if (!tag || branch.has(tag)) return null;
     const nextBranch = new Set(branch);
     nextBranch.add(tag);
-    let paths = Array.from(new Set(orderedPathsByTag[tag] || [])).filter((path) => path && (isRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || !excluded.has(path))));
+    let paths = Array.from(new Set(pathsForTag(tag))).filter((path) => path && (isRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || !excluded.has(path))));
     let children = (childrenByParent[tag] || []).map((child) => visit(child, nextBranch, [...lineage, child], false)).filter((child) => !!child && child.subtreePaths.length > 0);
-    const groups = ((getIntersectionGroups == null ? void 0 : getIntersectionGroups(tag)) || []).filter((group) => {
-      var _a;
-      return group.tag && ((_a = group.paths) == null ? void 0 : _a.length);
-    });
+    const groups = ((getIntersectionGroups == null ? void 0 : getIntersectionGroups(tag)) || []).filter((group) => group.tag);
     if (groups.length) {
+      const contextPaths = new Set(paths);
       const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
       paths = paths.filter((path) => !intersectionPaths.has(path));
-      const intersectionNodes = groups.map((group) => ({
-        tag: group.tag,
-        paths: [...group.paths],
-        children: [],
-        subtreePaths: [...group.paths],
-        isIntersection: true,
-        noteTag: tag
-      }));
+      const intersectionNodes = groups.flatMap((group) => {
+        const projected = visitIntersectionProjection(
+          group.tag,
+          contextPaths,
+          /* @__PURE__ */ new Set(),
+          [group.tag],
+          [...group.paths || []]
+        );
+        return projected ? [{ ...projected, isIntersection: true, noteTag: tag }] : [];
+      });
       const childOrder = (getChildOrder == null ? void 0 : getChildOrder(tag)) || [];
       const orderOf = (node) => {
         const index = childOrder.indexOf(node.tag);
@@ -310,8 +330,9 @@ function collectIntersectionSignature(tree) {
   const parts = [];
   const visit = (node, lineage) => {
     for (const child of node.children) {
-      if (child.isIntersection) parts.push(`${lineage.join(">")}>${child.tag}:${child.paths.join("|")}`);
-      else visit(child, [...lineage, child.tag]);
+      const childLineage = [...lineage, child.tag];
+      if (child.isIntersection) parts.push(`${childLineage.join(">")}:${child.subtreePaths.join("|")}`);
+      visit(child, childLineage);
     }
   };
   if (tree) visit(tree, [tree.tag]);
@@ -3219,25 +3240,13 @@ var TagTreeRendererBehavior = class {
       }
       syncExpansion();
     };
-    const renderNode = (containerEl, node, lineage, directParentTag) => {
-      if (node.isIntersection) {
-        renderGroup(
-          containerEl,
-          this.getRelativeChildDisplayName(directParentTag, node.tag),
-          node.paths.length,
-          // key 带完整血缘，与 getTagInheritanceGroupKeys 一致 ——
-          // 交集组可能挂在任意深度，只写伙伴标签会让不同层级的同名组撞车
-          `${rootTag}\0tag-intersection\0${lineage.join("")}`,
-          node.paths.includes(targetPath),
-          (contentEl) => renderNotes(contentEl, node, false),
-          node.tag
-        );
-        return;
-      }
-      const key = `${rootTag}\0tag-group\0${lineage.join("")}`;
+    const renderNode = (containerEl, node, lineage, directParentTag, inIntersectionProjection = false) => {
+      const projected = inIntersectionProjection || !!node.isIntersection;
+      const namespace = projected ? "tag-intersection" : "tag-group";
+      const key = `${rootTag}\0${namespace}\0${lineage.join("")}`;
       const renderNodeContent = (contentEl) => {
         if (!node.children.length) {
-          renderNotes(contentEl, node, true);
+          renderNotes(contentEl, node, !node.isIntersection);
           return;
         }
         if (node.paths.length) {
@@ -3247,11 +3256,11 @@ var TagTreeRendererBehavior = class {
             node.paths.length,
             `${key}\0original`,
             node.paths.includes(targetPath),
-            (originalEl) => renderNotes(originalEl, node, true)
+            (originalEl) => renderNotes(originalEl, node, !node.isIntersection)
           );
         }
         for (const child of node.children) {
-          renderNode(contentEl, child, [...lineage, child.tag], node.tag);
+          renderNode(contentEl, child, [...lineage, child.tag], node.tag, projected);
         }
       };
       const label = this.getRelativeChildDisplayName(directParentTag, node.tag);
@@ -7844,17 +7853,14 @@ var RelationsBehavior = class {
     const prefix = `${tag}\0tag-group\0`;
     const intersectionPrefix = `${tag}\0tag-intersection\0`;
     if (tree.paths.length) keys.push(`${prefix}original`);
-    const visitChildren = (children, lineage) => {
+    const visitChildren = (children, lineage, inIntersectionProjection = false) => {
       for (const child of children) {
         const childLineage = [...lineage, child.tag];
-        if (child.isIntersection) {
-          keys.push(`${intersectionPrefix}${childLineage.join("")}`);
-          continue;
-        }
-        const key = `${prefix}${childLineage.join("")}`;
+        const projected = inIntersectionProjection || !!child.isIntersection;
+        const key = `${projected ? intersectionPrefix : prefix}${childLineage.join("")}`;
         keys.push(key);
         if (child.children.length && child.paths.length) keys.push(`${key}\0original`);
-        visitChildren(child.children, childLineage);
+        visitChildren(child.children, childLineage, projected);
       }
     };
     visitChildren(tree.children, []);
@@ -8393,8 +8399,9 @@ var RelationsBehavior = class {
       return ((_b = (_a2 = this.app) == null ? void 0 : _a2.vault) == null ? void 0 : _b.getAbstractFileByPath(path)) || (indexedFilesByPath == null ? void 0 : indexedFilesByPath.get(path));
     }).filter((file) => file instanceof import_obsidian15.TFile && file.extension === "md");
     const intersectionGroups = this.getIntersectionGroups(tag);
-    const hasActiveInheritance = !!(adjacency[tag] || []).length || intersectionGroups.length > 0;
-    const inheritanceTree = hasActiveInheritance ? buildTagInheritanceGroupTree(
+    const intersectionPartners = this.getIntersectionPartners(tag);
+    const hasPotentialInheritance = !!(adjacency[tag] || []).length || intersectionPartners.length > 0;
+    const inheritanceTree = hasPotentialInheritance ? buildTagInheritanceGroupTree(
       tag,
       adjacency,
       orderedPathsByTag,
@@ -8404,10 +8411,20 @@ var RelationsBehavior = class {
         this.createInheritanceEdgesFromLineage(lineage),
         path
       ),
-      // 交集组按标签实时取，任意深度的节点都能挂出自己的交集分组
-      (nodeTag) => this.getIntersectionGroups(nodeTag),
-      (nodeTag) => this.getInheritanceChildren(nodeTag)
+      // 空的直属交集也要交给树构建器：伙伴后代仍可能在当前标签上下文中命中。
+      (nodeTag) => this.getIntersectionPartners(nodeTag).map((partner) => ({
+        tag: partner,
+        paths: this.getIntersectionGroupPaths(nodeTag, partner)
+      })),
+      (nodeTag) => this.getInheritanceChildren(nodeTag),
+      (nodeTag) => {
+        var _a2;
+        const directFiles = ((_a2 = this.tagFileIndex) == null ? void 0 : _a2.get(nodeTag)) || [];
+        const orderedFiles = typeof this.getOrderedFilesForTag === "function" ? this.getOrderedFilesForTag(nodeTag, directFiles) : directFiles;
+        return orderedFiles.map((file) => file.path);
+      }
     ) : null;
+    const hasActiveInheritance = !!(adjacency[tag] || []).length || !!(inheritanceTree == null ? void 0 : inheritanceTree.children.length);
     return {
       tag,
       exactFiles,
