@@ -6192,13 +6192,19 @@ var PuffsTagRenameModal = class extends import_obsidian13.Modal {
       this.selectionQuery = this.selectionInputEl.value;
       this.renderNoteSelection();
     });
-    const selectAllButton = toolbarEl.createEl("button", { text: "\u5168\u9009\u7ED3\u679C", attr: { type: "button" } });
+    const selectAllButton = toolbarEl.createEl("button", { text: "\u5168\u9009", attr: { type: "button" } });
     selectAllButton.dataset.puffsSelectionAction = "select";
     selectAllButton.addEventListener("click", () => {
       this.applyNoteSelectionBatch(true);
       this.renderNoteSelection();
     });
-    const clearButton = toolbarEl.createEl("button", { text: "\u6E05\u7A7A\u7ED3\u679C", attr: { type: "button" } });
+    const invertButton = toolbarEl.createEl("button", { text: "\u53CD\u9009", attr: { type: "button" } });
+    invertButton.dataset.puffsSelectionAction = "invert";
+    invertButton.addEventListener("click", () => {
+      this.invertNoteSelection();
+      this.renderNoteSelection();
+    });
+    const clearButton = toolbarEl.createEl("button", { text: "\u6E05\u7A7A", attr: { type: "button" } });
     clearButton.dataset.puffsSelectionAction = "clear";
     clearButton.addEventListener("click", () => {
       this.applyNoteSelectionBatch(false);
@@ -6288,6 +6294,12 @@ var PuffsTagRenameModal = class extends import_obsidian13.Modal {
   applyNoteSelectionBatch(selected) {
     for (const candidate of this.getFilteredNoteCandidates()) {
       this.toggleNoteCandidate(candidate.path, selected);
+    }
+  }
+  /** 反选同样限定在当前筛选结果内，逐项翻转已有勾选态。 */
+  invertNoteSelection() {
+    for (const candidate of this.getFilteredNoteCandidates()) {
+      this.toggleNoteCandidate(candidate.path, !this.selectedPaths.has(candidate.path));
     }
   }
   /** 增量对账：复用未变化的行，保留滚动位置，避免打断用户操作。 */

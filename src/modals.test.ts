@@ -98,6 +98,20 @@ describe('批量勾选只作用于当前筛选结果', () => {
     modal.applyNoteSelectionBatch(true);
     expect(Array.from(modal.selectedPaths).sort()).toEqual(['a.md', 'b.md', 'c.md']);
   });
+
+  it('反选只翻转筛选命中的笔记，筛选外的勾选保持不变', () => {
+    const modal = makeModal({
+      noteCandidates: candidates,
+      selectionQuery: 'a',
+      selectedPaths: new Set(['a.md', 'b.md']),
+    });
+    modal.invertNoteSelection();
+    expect(Array.from(modal.selectedPaths)).toEqual(['b.md']);
+
+    modal.selectionQuery = 'c';
+    modal.invertNoteSelection();
+    expect(Array.from(modal.selectedPaths).sort()).toEqual(['b.md', 'c.md']);
+  });
 });
 
 describe('单篇勾选', () => {

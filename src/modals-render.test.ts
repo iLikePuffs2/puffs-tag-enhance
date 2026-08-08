@@ -38,6 +38,16 @@ const rowPaths = (modal: any): string[] =>
     .map((row: any) => row.dataset.puffsPath);
 
 describe('勾选区渲染', () => {
+  it('批量操作按钮依次显示全选、反选、清空', () => {
+    const modal = makeRenderModal();
+    modal.contentEl = document.createElement('div');
+    modal.buildNoteSelectionSection();
+
+    const buttonTexts = Array.from(modal.contentEl.querySelectorAll('button'))
+      .map((button: any) => button.textContent);
+    expect(buttonTexts).toEqual(['全选', '反选', '清空']);
+  });
+
   it('列出全部候选笔记，显示文件名并把完整路径放进 title', () => {
     const modal = makeRenderModal({ noteCandidates: [candidateOf('读书/三体.md')] });
     modal.renderNoteSelection();

@@ -155,13 +155,19 @@ class PuffsTagRenameModal extends Modal {
       this.selectionQuery = this.selectionInputEl.value;
       this.renderNoteSelection();
     });
-    const selectAllButton = toolbarEl.createEl('button', { text: '全选结果', attr: { type: 'button' } });
+    const selectAllButton = toolbarEl.createEl('button', { text: '全选', attr: { type: 'button' } });
     selectAllButton.dataset.puffsSelectionAction = 'select';
     selectAllButton.addEventListener('click', () => {
       this.applyNoteSelectionBatch(true);
       this.renderNoteSelection();
     });
-    const clearButton = toolbarEl.createEl('button', { text: '清空结果', attr: { type: 'button' } });
+    const invertButton = toolbarEl.createEl('button', { text: '反选', attr: { type: 'button' } });
+    invertButton.dataset.puffsSelectionAction = 'invert';
+    invertButton.addEventListener('click', () => {
+      this.invertNoteSelection();
+      this.renderNoteSelection();
+    });
+    const clearButton = toolbarEl.createEl('button', { text: '清空', attr: { type: 'button' } });
     clearButton.dataset.puffsSelectionAction = 'clear';
     clearButton.addEventListener('click', () => {
       this.applyNoteSelectionBatch(false);
@@ -266,6 +272,13 @@ class PuffsTagRenameModal extends Modal {
   applyNoteSelectionBatch(selected: any) {
     for (const candidate of this.getFilteredNoteCandidates()) {
       this.toggleNoteCandidate(candidate.path, selected);
+    }
+  }
+
+  /** 反选同样限定在当前筛选结果内，逐项翻转已有勾选态。 */
+  invertNoteSelection() {
+    for (const candidate of this.getFilteredNoteCandidates()) {
+      this.toggleNoteCandidate(candidate.path, !this.selectedPaths.has(candidate.path));
     }
   }
 
