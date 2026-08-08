@@ -188,3 +188,97 @@ describe('文件夹默认面板偏好', () => {
     expect(behavior.settings.tagSidebarExcludedFiles).toEqual([]);
   });
 });
+
+describe('侧边栏偏好写入边界', () => {
+  const createBehavior = () => {
+    const behavior = Object.create(WorkspaceBehavior.prototype) as any;
+    const group: any = { type: 'tabs', children: [], currentTab: 0 };
+    behavior.settings = { autoSwitchToOutlineEnabled: true };
+    behavior.currentMainFilePath = '小说/情节/情节-总结.md';
+    behavior.selectedSidebarViewType = 'puffs-tag-sidebar';
+    behavior.sidebarSwitchRequestId = 0;
+    behavior.activeSidebarSelectionOperation = null;
+    behavior.isMainWorkspaceLeaf = vi.fn(() => false);
+    behavior.findManagedSidebarTabGroup = vi.fn(() => group);
+    behavior.setTagSidebarPreference = vi.fn(async () => undefined);
+
+    const createLeaf = (viewType: string) => ({
+      parent: group,
+      view: { getViewType: () => viewType },
+    });
+
+    return { behavior, group, createLeaf };
+  };
+
+  it('layout-change 只同步视图状态，不写入当前笔记偏好', () => {
+    const { behavior, createLeaf } = createBehavior();
+    const outlineLeaf = createLeaf('outline');
+    behavior.getSelectedManagedSidebarLeaf = vi.fn(() => outlineLeaf);
+
+    behavior.syncSelectedSidebarState();
+
+    expect(behavior.selectedSidebarViewType).toBe('outline');
+    expect(behavior.setTagSidebarPreference).not.toHaveBeenCalled();
+    expect(behavior.sidebarSwitchRequestId).toBe(0);
+  });
+
+  it('激活同组的第三方页不改变偏好', () => {
+    const { behavior, createLeaf } = createBehavior();
+
+    behavior.handleSidebarSelection(createLeaf('puffs-timer-view'));
+
+    expect(behavior.setTagSidebarPreference).not.toHaveBeenCalled();
+    expect(behavior.selectedSidebarViewType).toBe('puffs-tag-sidebar');
+    expect(behavior.sidebarSwitchRequestId).toBe(0);
+  });
+
+  it('用户激活大纲页时记录大纲偏好', () => {
+    const { behavior, createLeaf } = createBehavior();
+
+    behavior.handleSidebarSelection(createLeaf('outline'));
+
+    expect(behavior.setTagSidebarPreference).toHaveBeenCalledWith(
+      '小说/情节/情节-总结.md',
+      false
+    );
+  });
+
+  it('用户激活标签页时记录标签偏好', () => {
+    const { behavior, createLeaf } = createBehavior();
+    behavior.selectedSidebarViewType = 'outline';
+
+    behavior.handleSidebarSelection(createLeaf('puffs-tag-sidebar'));
+
+    expect(behavior.setTagSidebarPreference).toHaveBeenCalledWith(
+      '小说/情节/情节-总结.md',
+      true
+    );
+  });
+
+  it('插件自身的自动选页不反向写偏好', () => {
+    const { behavior, group, createLeaf } = createBehavior();
+    behavior.activeSidebarSelectionOperation = { group };
+
+    behavior.handleSidebarSelection(createLeaf('outline'));
+
+    expect(behavior.setTagSidebarPreference).not.toHaveBeenCalled();
+  });
+
+  it('快速切换笔记后忽略过期的自动选页请求', async () => {
+    const { behavior, group, createLeaf } = createBehavior();
+    const outlineLeaf = createLeaf('outline');
+    group.children = [outlineLeaf];
+    group.currentTab = 0;
+    group.selectTab = vi.fn();
+    behavior.sidebarSwitchRequestId = 2;
+    behavior.currentMainFilePath = '小说/情节/新笔记.md';
+    behavior.getOrCreateManagedSidebarLeaf = vi.fn(async () => outlineLeaf);
+    behavior.hasTagSidebarPreference = vi.fn(() => false);
+    behavior.isUnloaded = false;
+
+    await behavior.switchManagedSidebarTo(1, '小说/情节/旧笔记.md', 'outline');
+
+    expect(group.selectTab).not.toHaveBeenCalled();
+    expect(behavior.setTagSidebarPreference).not.toHaveBeenCalled();
+  });
+});

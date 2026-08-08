@@ -5162,26 +5162,35 @@ var WorkspaceBehavior = class {
   }
   syncSelectedSidebarState() {
     const leaf = this.getSelectedManagedSidebarLeaf();
-    if (!leaf || !leaf.view) return;
-    this.handleSidebarSelection(leaf);
+    this.selectedSidebarViewType = leaf && leaf.view ? leaf.view.getViewType() : null;
   }
   handleSidebarSelection(leaf) {
-    if (!this.isManagedSidebarLeaf(leaf)) return;
+    if (!this.isPreferenceSidebarLeaf(leaf)) return;
     const operation = this.activeSidebarSelectionOperation;
     if (operation && leaf.parent === operation.group) {
       return;
     }
     const viewType = leaf.view.getViewType();
     if (!viewType || viewType === this.selectedSidebarViewType) return;
-    const previousViewType = this.selectedSidebarViewType;
     this.selectedSidebarViewType = viewType;
     this.sidebarSwitchRequestId += 1;
     if (!this.settings.autoSwitchToOutlineEnabled) return;
     if (viewType === TAG_SIDEBAR_VIEW_TYPE) {
       this.setTagSidebarPreference(this.currentMainFilePath, true);
-    } else if (previousViewType === TAG_SIDEBAR_VIEW_TYPE) {
+    } else if (viewType === OUTLINE_VIEW_TYPE) {
       this.setTagSidebarPreference(this.currentMainFilePath, false);
     }
+  }
+  /**
+   * 只有插件管理的标签/大纲页能改变笔记偏好。
+   * 同组里可能还有计时器等第三方页，它们的激活不代表用户选了大纲。
+   */
+  isPreferenceSidebarLeaf(leaf) {
+    if (!this.isManagedSidebarLeaf(leaf)) return false;
+    const viewType = leaf.view.getViewType();
+    if (viewType !== TAG_SIDEBAR_VIEW_TYPE && viewType !== OUTLINE_VIEW_TYPE) return false;
+    const managedGroup = this.findManagedSidebarTabGroup();
+    return !!managedGroup && leaf.parent === managedGroup;
   }
   /** 偏好以路径数组保存；readPreferredFiles 同时兼容迁移前的对象形态。 */
   getPreferredFileSet() {
