@@ -202,7 +202,7 @@ export function buildTagInheritanceGroupTree(
     const nextBranch = new Set(branch);
     nextBranch.add(tag);
     const isProjectionRoot = rootPaths !== undefined;
-    const paths = Array.from(new Set(rootPaths || pathsForTag(tag)))
+    let paths = Array.from(new Set(rootPaths || pathsForTag(tag)))
       .filter((path) => path && contextPaths.has(path) && (
         isProjectionRoot ||
         (isPathVisible
@@ -217,6 +217,9 @@ export function buildTagInheritanceGroupTree(
         [...lineage, child]
       ))
       .filter((child): child is TagInheritanceGroupNode => !!child && child.subtreePaths.length > 0);
+    // 交集投影内部优先展示更具体的继承路径；只从当前节点原生组扣除，兄弟分组仍可重复。
+    const descendantPaths = new Set(children.flatMap((child) => child.subtreePaths));
+    paths = paths.filter((path) => !descendantPaths.has(path));
     const subtreePaths = Array.from(new Set([
       ...paths,
       ...children.flatMap((child) => child.subtreePaths),
@@ -245,9 +248,6 @@ export function buildTagInheritanceGroupTree(
     if (groups.length) {
       // 每个交集伙伴都从相同的原生路径集投影；不能在处理第一个伙伴后复用已扣减的 paths。
       const contextPaths = new Set(paths);
-      // 交集笔记从本节点的「原生」组挪进各自的交集组
-      const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
-      paths = paths.filter((path) => !intersectionPaths.has(path));
       const intersectionNodes: TagInheritanceGroupNode[] = groups
         .flatMap((group): TagInheritanceGroupNode[] => {
           const projected = visitIntersectionProjection(
@@ -261,6 +261,9 @@ export function buildTagInheritanceGroupTree(
             ? [{ ...projected, isIntersection: true, noteTag: tag }]
             : [];
         });
+      // 只有真正进入可见投影树的路径才从原生组扣除；多个交集伙伴仍各自保留同一篇笔记。
+      const intersectionPaths = new Set(intersectionNodes.flatMap((node) => node.subtreePaths));
+      paths = paths.filter((path) => !intersectionPaths.has(path));
       // 与继承子分组混排：都按各自标签在本节点子标签顺序里的位置排，未收录的排在最后
       const childOrder = getChildOrder?.(tag) || [];
       const orderOf = (node: TagInheritanceGroupNode) => {

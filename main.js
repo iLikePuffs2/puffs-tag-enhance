@@ -276,13 +276,15 @@ function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByT
     const nextBranch = new Set(branch);
     nextBranch.add(tag);
     const isProjectionRoot = rootPaths !== void 0;
-    const paths = Array.from(new Set(rootPaths || pathsForTag(tag))).filter((path) => path && contextPaths.has(path) && (isProjectionRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || !excluded.has(path))));
+    let paths = Array.from(new Set(rootPaths || pathsForTag(tag))).filter((path) => path && contextPaths.has(path) && (isProjectionRoot || (isPathVisible ? isPathVisible(tag, path, lineage) : fixedTags.has(tag) || !excluded.has(path))));
     const children = (childrenByParent[tag] || []).map((child) => visitIntersectionProjection(
       child,
       contextPaths,
       nextBranch,
       [...lineage, child]
     )).filter((child) => !!child && child.subtreePaths.length > 0);
+    const descendantPaths = new Set(children.flatMap((child) => child.subtreePaths));
+    paths = paths.filter((path) => !descendantPaths.has(path));
     const subtreePaths = Array.from(/* @__PURE__ */ new Set([
       ...paths,
       ...children.flatMap((child) => child.subtreePaths)
@@ -299,8 +301,6 @@ function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByT
     const groups = ((getIntersectionGroups == null ? void 0 : getIntersectionGroups(tag)) || []).filter((group) => group.tag);
     if (groups.length) {
       const contextPaths = new Set(paths);
-      const intersectionPaths = new Set(groups.flatMap((group) => group.paths));
-      paths = paths.filter((path) => !intersectionPaths.has(path));
       const intersectionNodes = groups.flatMap((group) => {
         const projected = visitIntersectionProjection(
           group.tag,
@@ -311,6 +311,8 @@ function buildTagInheritanceGroupTree(rootTag, childrenByParent, orderedPathsByT
         );
         return projected ? [{ ...projected, isIntersection: true, noteTag: tag }] : [];
       });
+      const intersectionPaths = new Set(intersectionNodes.flatMap((node) => node.subtreePaths));
+      paths = paths.filter((path) => !intersectionPaths.has(path));
       const childOrder = (getChildOrder == null ? void 0 : getChildOrder(tag)) || [];
       const orderOf = (node) => {
         const index = childOrder.indexOf(node.tag);

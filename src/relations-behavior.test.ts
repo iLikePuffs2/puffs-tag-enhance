@@ -1303,6 +1303,25 @@ describe('交集标签', () => {
       .toEqual([['#宗门', '交集', ['共有.md']]]);
   });
 
+  it('同一笔记命中多个具体交集分组时保留每个分组，只从原生组移除', () => {
+    const behavior = createIntersectionBehavior();
+    const sharedSpecificFile = behavior.app.vault.getAbstractFileByPath('宗门二.md');
+    behavior.tagFileIndex.get('#战争').push(sharedSpecificFile);
+    behavior.tagFileIndex.set('#牺牲', [sharedSpecificFile]);
+    behavior.settings.relations.tagInheritance.childrenByParent['#宗门'].push('#牺牲');
+    behavior.settings.relations.tagInheritance.childrenByParent['#牺牲'] = ['#宗门'];
+    behavior.settings.relations.tagInheritance.modeByParentChild['#宗门']['#牺牲'] = 'intersection';
+    behavior.settings.relations.tagInheritance.modeByParentChild['#牺牲'] = { '#宗门': 'intersection' };
+
+    const tree = behavior.getTagBrowseData('#宗门').inheritanceTree;
+    const warGroup = tree.children.find((child: any) => child.tag === '#战争');
+    const sacrificeGroup = tree.children.find((child: any) => child.tag === '#牺牲');
+
+    expect(tree.paths).not.toContain('宗门二.md');
+    expect(warGroup.paths).toContain('宗门二.md');
+    expect(sacrificeGroup.paths).toContain('宗门二.md');
+  });
+
   it('交集笔记从「原生」组扣掉，但顶层计数不变', () => {
     const behavior = createIntersectionBehavior();
     const browseData = behavior.getTagBrowseData('#宗门');
@@ -1350,6 +1369,8 @@ describe('交集标签', () => {
     expect(frontNode.paths).toEqual(['宗门一.md']);
     expect(intersectionNode.subtreePaths).toEqual(['共有.md', '宗门二.md', '宗门一.md']);
     expect(battleNode.paths).not.toContain('战争独有.md');
+    // 整棵交集投影接走了宗门的三篇直属笔记，原生组不再重复展示。
+    expect(browseData.inheritanceTree.paths).toEqual([]);
     // 投影只改变分组展示，宗门自己的文件集合与计数保持原样。
     expect(browseData.files.map((file: any) => file.path))
       .toEqual(['宗门一.md', '宗门二.md', '共有.md', '内门一.md', '内门战争.md']);
@@ -1364,11 +1385,14 @@ describe('交集标签', () => {
     };
     behavior.tagFileIndex.set('#战役', [behavior.app.vault.getAbstractFileByPath('宗门二.md')]);
 
-    const intersectionNode = behavior.getTagBrowseData('#宗门').inheritanceTree.children
+    const tree = behavior.getTagBrowseData('#宗门').inheritanceTree;
+    const intersectionNode = tree.children
       .find((child: any) => child.isIntersection);
 
     expect(intersectionNode.paths).toEqual(['共有.md']);
     expect(intersectionNode.children).toEqual([]);
+    // 被排除而没有进入投影的宗门二.md 必须继续留在宗门原生组。
+    expect(tree.paths).toEqual(['宗门一.md', '宗门二.md']);
   });
 
   it('交集伙伴没有直属交集笔记时，只要继承后代命中上下文仍显示分组', () => {
@@ -1377,12 +1401,33 @@ describe('交集标签', () => {
     behavior.tagFileIndex.set('#战争', [behavior.app.vault.getAbstractFileByPath('战争独有.md')]);
     behavior.tagFileIndex.set('#战役', [behavior.app.vault.getAbstractFileByPath('宗门二.md')]);
 
-    const intersectionNode = behavior.getTagBrowseData('#宗门').inheritanceTree.children
+    const tree = behavior.getTagBrowseData('#宗门').inheritanceTree;
+    const intersectionNode = tree.children
       .find((child: any) => child.isIntersection);
 
     expect(intersectionNode.paths).toEqual([]);
     expect(intersectionNode.children.map((child: any) => child.tag)).toEqual(['#战役']);
     expect(intersectionNode.subtreePaths).toEqual(['宗门二.md']);
+    expect(tree.paths).toEqual(['宗门一.md', '共有.md']);
+  });
+
+  it('交集投影内部由最深继承子标签逐层接走重复笔记', () => {
+    const behavior = createIntersectionBehavior();
+    behavior.settings.relations.tagInheritance.childrenByParent['#战争'].push('#战役');
+    behavior.settings.relations.tagInheritance.childrenByParent['#战役'] = ['#前线'];
+    const sharedFile = behavior.app.vault.getAbstractFileByPath('共有.md');
+    behavior.tagFileIndex.set('#战役', [sharedFile]);
+    behavior.tagFileIndex.set('#前线', [sharedFile]);
+
+    const intersectionNode = behavior.getTagBrowseData('#宗门').inheritanceTree.children
+      .find((child: any) => child.isIntersection);
+    const battleNode = intersectionNode.children.find((child: any) => child.tag === '#战役');
+    const frontNode = battleNode.children.find((child: any) => child.tag === '#前线');
+
+    expect(intersectionNode.paths).toEqual([]);
+    expect(battleNode.paths).toEqual([]);
+    expect(frontNode.paths).toEqual(['共有.md']);
+    expect(intersectionNode.subtreePaths).toEqual(['共有.md']);
   });
 
   it('交集组与继承子分组按弹窗里的排序混排', () => {
